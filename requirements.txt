@@ -1,0 +1,12 @@
+# Calibre Metadata Analyzer Requirements
+#
+# This tool uses only Python standard library modules:
+# - sqlite3 (included in Python)
+# - argparse (included in Python)
+# - pathlib (included in Python)
+# - collections (included in Python)
+# - json (included in Python)
+#
+# No external dependencies required!
+#
+# Python version: 3.6+
