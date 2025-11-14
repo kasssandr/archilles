@@ -217,16 +217,29 @@ def search_tab():
         help="Gib einen Suchbegriff ein"
     )
 
-    col1, col2, col3 = st.columns(3)
+    # Search mode selector
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+        search_mode = st.selectbox(
+            "🔎 Suchmodus",
+            options=['keyword', 'semantic', 'hybrid'],
+            format_func=lambda x: {
+                'keyword': '🔤 Keyword (exakt)',
+                'semantic': '🧠 Semantisch (intelligent)',
+                'hybrid': '🔀 Hybrid (beides)'
+            }[x],
+            help="Keyword: Findet exakte Begriffe | Semantisch: Findet konzeptionell Verwandtes | Hybrid: Kombiniert beide"
+        )
+
+    with col2:
         context_type = st.selectbox(
             "Kontext-Typ",
             options=['sentences', 'words'],
             format_func=lambda x: "Sätze" if x == 'sentences' else "Wörter"
         )
 
-    with col2:
+    with col3:
         context_size = st.number_input(
             "Kontext-Größe",
             min_value=1,
@@ -235,7 +248,7 @@ def search_tab():
             help="Anzahl Sätze/Wörter vor und nach dem Treffer"
         )
 
-    with col3:
+    with col4:
         max_results = st.number_input(
             "Max. Ergebnisse",
             min_value=1,
@@ -248,7 +261,7 @@ def search_tab():
         if not query:
             st.warning("⚠️ Bitte Suchbegriff eingeben!")
         else:
-            perform_search(query, context_type, context_size, max_results)
+            perform_search(query, search_mode, context_type, context_size, max_results)
             st.session_state.last_query = query
 
     # Display results
@@ -257,15 +270,31 @@ def search_tab():
         display_search_results(context_type, context_size)
 
 
-def perform_search(query, context_type, context_size, max_results):
+def perform_search(query, search_mode, context_type, context_size, max_results):
     """Perform search and store results"""
     try:
-        with SearchEngine(st.session_state.index_path) as engine:
-            results = engine.search(query, limit=max_results)
+        from search_engine import HybridSearchEngine
+
+        with HybridSearchEngine(
+            fts_db_path=st.session_state.index_path,
+            chroma_db_path="./chroma_db"
+        ) as engine:
+            # Execute search based on mode
+            if search_mode == 'keyword':
+                results = engine.search_keyword(query, limit=max_results)
+            elif search_mode == 'semantic':
+                results = engine.search_semantic(query, limit=max_results)
+            else:  # hybrid
+                results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5)
+
             st.session_state.search_results = results
 
             if not results:
                 st.info("ℹ️ Keine Ergebnisse gefunden.")
+            else:
+                # Show search mode info
+                if search_mode == 'semantic' and not engine._semantic_available:
+                    st.warning("⚠️ Semantische Suche nicht verfügbar, Keyword-Suche verwendet")
 
     except Exception as e:
         st.error(f"❌ Suchfehler: {e}")
@@ -279,37 +308,63 @@ def display_search_results(context_type, context_size):
     st.subheader(f"📋 {len(results)} Ergebnisse gefunden")
 
     for idx, result in enumerate(results, 1):
+        # Build title with relevance info
+        relevance_score = result.get('hybrid_score', abs(result.get('rank', 0)))
+        source_icon = {
+            'keyword': '🔤',
+            'semantic': '🧠',
+            'hybrid': '🔀'
+        }.get(result.get('source', 'keyword'), '🔎')
+
         with st.expander(
-            f"{idx}. **{result['title']}** von {result['author']} "
-            f"({result['format']}) - Relevanz: {abs(result['rank']):.2f}",
+            f"{idx}. {source_icon} **{result['title']}** von {result['author']} "
+            f"({result.get('format', 'UNKNOWN')}) - Relevanz: {relevance_score:.2f}",
             expanded=(idx <= 3)  # Auto-expand first 3 results
         ):
-            # Get detailed context
-            try:
-                with SearchEngine(st.session_state.index_path) as engine:
-                    contexts = engine.get_context_around_match(
-                        result['book_id'],
-                        st.session_state.last_query,
-                        context_type=context_type,
-                        context_size=context_size
-                    )
+            # Show snippet/text
+            if 'snippet' in result and result['snippet']:
+                st.markdown("**Textauszug:**")
+                st.markdown(result['snippet'], unsafe_allow_html=True)
+            elif 'text' in result:
+                st.markdown("**Textauszug:**")
+                st.markdown(result['text'][:500] + "...", unsafe_allow_html=True)
 
-                    if contexts:
-                        for ctx_idx, context in enumerate(contexts[:3], 1):  # Show max 3 contexts
-                            st.markdown(f"**Fundstelle {ctx_idx}:**")
-                            # Display context with HTML highlighting
-                            st.markdown(context['context'], unsafe_allow_html=True)
+            # Get detailed context for keyword search
+            if result.get('source') == 'keyword' or result.get('source') is None:
+                try:
+                    with SearchEngine(st.session_state.index_path) as engine:
+                        contexts = engine.get_context_around_match(
+                            result['book_id'],
+                            st.session_state.last_query,
+                            context_type=context_type,
+                            context_size=context_size
+                        )
+
+                        if contexts:
                             st.divider()
-                    else:
-                        # Fallback to snippet
-                        st.markdown("**Snippet:**")
-                        st.markdown(result['snippet'], unsafe_allow_html=True)
+                            for ctx_idx, context in enumerate(contexts[:3], 1):  # Show max 3 contexts
+                                st.markdown(f"**Fundstelle {ctx_idx}:**")
+                                st.markdown(context['context'], unsafe_allow_html=True)
+                                if ctx_idx < len(contexts[:3]):
+                                    st.divider()
 
-            except Exception as e:
-                st.error(f"Fehler beim Laden des Kontexts: {e}")
+                except Exception as e:
+                    st.warning(f"Kontext konnte nicht geladen werden: {e}")
 
             # Metadata
-            st.caption(f"Buch-ID: {result['book_id']} | Format: {result['format']}")
+            metadata_parts = [f"Buch-ID: {result['book_id']}"]
+
+            if 'format' in result and result['format']:
+                metadata_parts.append(f"Format: {result['format']}")
+
+            # Show scoring details for hybrid results
+            if result.get('source') == 'hybrid':
+                metadata_parts.append(
+                    f"Keyword: {result.get('keyword_score', 0):.2f} | "
+                    f"Semantisch: {result.get('semantic_score', 0):.2f}"
+                )
+
+            st.caption(" | ".join(metadata_parts))
 
 
 def statistics_tab():

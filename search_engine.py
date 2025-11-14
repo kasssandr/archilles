@@ -307,6 +307,210 @@ class SearchEngine:
         self.close()
 
 
+class HybridSearchEngine:
+    """
+    Hybrid search engine combining keyword (FTS5) and semantic (ChromaDB) search
+    """
+
+    def __init__(self, fts_db_path="quote_search_index.db", chroma_db_path="./chroma_db"):
+        """
+        Initialize hybrid search engine
+
+        Args:
+            fts_db_path: Path to FTS5 database
+            chroma_db_path: Path to ChromaDB storage
+        """
+        self.keyword_engine = SearchEngine(fts_db_path)
+
+        # Lazy load semantic engine (only when needed)
+        self.semantic_engine = None
+        self.chroma_db_path = chroma_db_path
+        self._semantic_available = False
+
+    def _init_semantic(self):
+        """Initialize semantic search engine (lazy loading)"""
+        if self.semantic_engine is None:
+            try:
+                from semantic_search import SemanticSearchEngine
+                self.semantic_engine = SemanticSearchEngine(chroma_db_path=self.chroma_db_path)
+                self._semantic_available = True
+                logger.info("Semantic search initialized")
+            except Exception as e:
+                logger.warning(f"Semantic search not available: {e}")
+                self._semantic_available = False
+
+    def search_keyword(self, query: str, limit: int = 50) -> List[Dict]:
+        """
+        Keyword-based search using FTS5
+
+        Args:
+            query: Search query
+            limit: Maximum results
+
+        Returns:
+            List of results
+        """
+        return self.keyword_engine.search(query, limit)
+
+    def search_semantic(self, query: str, limit: int = 50) -> List[Dict]:
+        """
+        Semantic search using embeddings
+
+        Args:
+            query: Search query
+            limit: Maximum results
+
+        Returns:
+            List of results
+        """
+        self._init_semantic()
+
+        if not self._semantic_available:
+            logger.warning("Semantic search not available, falling back to keyword")
+            return self.search_keyword(query, limit)
+
+        return self.semantic_engine.search(query, limit)
+
+    def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5) -> List[Dict]:
+        """
+        Hybrid search combining keyword and semantic results
+
+        Args:
+            query: Search query
+            limit: Maximum results
+            keyword_weight: Weight for keyword results (0-1), semantic gets (1-weight)
+
+        Returns:
+            Combined and ranked results
+        """
+        self._init_semantic()
+
+        # Get keyword results
+        keyword_results = self.search_keyword(query, limit=limit * 2)
+
+        # Get semantic results (if available)
+        if self._semantic_available:
+            semantic_results = self.search_semantic(query, limit=limit * 2)
+        else:
+            semantic_results = []
+
+        # Combine results
+        combined = self._combine_results(
+            keyword_results,
+            semantic_results,
+            keyword_weight,
+            limit
+        )
+
+        return combined
+
+    def _combine_results(
+        self,
+        keyword_results: List[Dict],
+        semantic_results: List[Dict],
+        keyword_weight: float,
+        limit: int
+    ) -> List[Dict]:
+        """
+        Combine and rank keyword + semantic results
+
+        Args:
+            keyword_results: Results from FTS5
+            semantic_results: Results from semantic search
+            keyword_weight: Weight for keyword (0-1)
+            limit: Maximum results
+
+        Returns:
+            Combined results sorted by hybrid score
+        """
+        semantic_weight = 1.0 - keyword_weight
+
+        # Create lookup by book_id
+        combined_map = {}
+
+        # Add keyword results
+        for idx, result in enumerate(keyword_results):
+            book_id = result['book_id']
+            # Normalize keyword rank (inverse, smaller rank = better)
+            keyword_score = 1.0 / (idx + 1)
+
+            combined_map[book_id] = {
+                **result,
+                'keyword_score': keyword_score,
+                'semantic_score': 0.0,
+                'hybrid_score': keyword_score * keyword_weight,
+                'source': 'keyword'
+            }
+
+        # Add/merge semantic results
+        for idx, result in enumerate(semantic_results):
+            book_id = result['book_id']
+            # Use similarity score from semantic search
+            semantic_score = result.get('similarity', 1.0 / (idx + 1))
+
+            if book_id in combined_map:
+                # Merge with existing keyword result
+                combined_map[book_id]['semantic_score'] = semantic_score
+                combined_map[book_id]['hybrid_score'] = (
+                    combined_map[book_id]['keyword_score'] * keyword_weight +
+                    semantic_score * semantic_weight
+                )
+                combined_map[book_id]['source'] = 'hybrid'
+                # Prefer semantic text if available (often has better context)
+                if 'text' in result:
+                    combined_map[book_id]['snippet'] = result['text']
+            else:
+                # New result from semantic only
+                combined_map[book_id] = {
+                    'book_id': book_id,
+                    'author': result.get('author', ''),
+                    'title': result.get('title', ''),
+                    'format': result.get('metadata', {}).get('format', ''),
+                    'snippet': result.get('text', ''),
+                    'keyword_score': 0.0,
+                    'semantic_score': semantic_score,
+                    'hybrid_score': semantic_score * semantic_weight,
+                    'source': 'semantic',
+                    'rank': 0
+                }
+
+        # Sort by hybrid score (descending)
+        sorted_results = sorted(
+            combined_map.values(),
+            key=lambda x: x['hybrid_score'],
+            reverse=True
+        )
+
+        return sorted_results[:limit]
+
+    def get_stats(self) -> Dict:
+        """Get statistics from both engines"""
+        keyword_stats = self.keyword_engine.get_stats()
+
+        semantic_stats = {}
+        if self._semantic_available and self.semantic_engine:
+            semantic_stats = self.semantic_engine.get_stats()
+
+        return {
+            'keyword': keyword_stats,
+            'semantic': semantic_stats,
+            'semantic_available': self._semantic_available
+        }
+
+    def close(self):
+        """Close both engines"""
+        self.keyword_engine.close()
+        if self.semantic_engine:
+            # ChromaDB doesn't need explicit closing
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
 if __name__ == '__main__':
     # Simple test
     print("Testing SearchEngine...")

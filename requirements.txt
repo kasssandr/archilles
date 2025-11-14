@@ -21,3 +21,7 @@ streamlit>=1.29.0    # Interactive web interface
 
 # Natural Language Processing
 nltk>=3.8.0          # Sentence tokenization for context extraction
+
+# Semantic Search (RAG Integration)
+chromadb>=0.4.22     # Vector database for semantic search
+sentence-transformers>=2.3.0  # Text embeddings for semantic similarity
