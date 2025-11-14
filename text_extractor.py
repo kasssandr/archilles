@@ -121,48 +121,54 @@ class CalibreTextExtractor:
         if not self.library_path.exists():
             raise FileNotFoundError(f"Calibre library not found: {calibre_library_path}")
 
-    def get_book_file_path(self, book_id, author, title, format='pdf'):
-        """
-        Get the file path for a book in Calibre's directory structure
+        # Connect to Calibre metadata database
+        import sqlite3
+        self.metadata_db = self.library_path / "metadata.db"
+        if not self.metadata_db.exists():
+            raise FileNotFoundError(f"Calibre metadata.db not found: {self.metadata_db}")
 
-        Calibre stores books as: Author/Title (ID)/Title - Author.format
+        self.conn = sqlite3.connect(str(self.metadata_db))
+        self.conn.row_factory = sqlite3.Row
+
+    def get_book_file_path(self, book_id, format='pdf'):
+        """
+        Get the file path for a book using Calibre's database
 
         Args:
             book_id: Calibre book ID
-            author: Book author
-            title: Book title
             format: File format (pdf, epub, etc.)
 
         Returns:
             Path: Full path to book file or None if not found
         """
-        # Calibre directory structure: Author/Title (ID)/
-        # Clean author and title for filesystem
-        import re
+        format_upper = format.upper()
 
-        def clean_filename(name):
-            # Remove characters that might cause issues
-            name = re.sub(r'[<>:"/\\|?*]', '_', name)
-            return name.strip()
+        # Query Calibre database for actual path
+        query = """
+            SELECT books.path, data.name, data.format
+            FROM books
+            JOIN data ON books.id = data.book
+            WHERE books.id = ? AND data.format = ?
+        """
 
-        author_clean = clean_filename(author)
-        title_clean = clean_filename(title)
+        cursor = self.conn.execute(query, (book_id, format_upper))
+        row = cursor.fetchone()
 
-        # Try to find the book directory
-        book_dir = self.library_path / author_clean / f"{title_clean} ({book_id})"
-
-        if not book_dir.exists():
-            logger.warning(f"Book directory not found: {book_dir}")
+        if not row:
             return None
 
-        # Look for the file with the specified format
-        format_upper = format.upper()
-        for file in book_dir.iterdir():
-            if file.suffix.upper() == f'.{format_upper}':
-                return file
+        # Construct full path: library_path / book_path / filename.format
+        book_relative_path = row['path']
+        filename = row['name']
+        file_format = row['format']
 
-        logger.warning(f"Format {format} not found for book {book_id}")
-        return None
+        full_path = self.library_path / book_relative_path / f"{filename}.{file_format.lower()}"
+
+        if full_path.exists():
+            return full_path
+        else:
+            logger.warning(f"File not found: {full_path}")
+            return None
 
     def extract_book_text(self, book_id, author, title, preferred_formats=None):
         """
@@ -170,8 +176,8 @@ class CalibreTextExtractor:
 
         Args:
             book_id: Calibre book ID
-            author: Book author
-            title: Book title
+            author: Book author (unused, kept for compatibility)
+            title: Book title (unused, kept for compatibility)
             preferred_formats: List of formats to try (default: ['epub', 'pdf'])
 
         Returns:
@@ -181,7 +187,7 @@ class CalibreTextExtractor:
             preferred_formats = ['epub', 'pdf']
 
         for fmt in preferred_formats:
-            file_path = self.get_book_file_path(book_id, author, title, fmt)
+            file_path = self.get_book_file_path(book_id, fmt)
             if file_path:
                 logger.info(f"Extracting text from {file_path}")
                 text = TextExtractor.extract_text(file_path)
@@ -190,6 +196,17 @@ class CalibreTextExtractor:
 
         logger.error(f"Could not extract text for book {book_id}: {title}")
         return None, None
+
+    def close(self):
+        """Close database connection"""
+        if hasattr(self, 'conn'):
+            self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
 
 
 if __name__ == '__main__':
