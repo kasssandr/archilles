@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""
+Text Extractor for Calibre Quote Tracker
+Extracts full text from PDF and EPUB files.
+"""
+
+import fitz  # PyMuPDF
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+from pathlib import Path
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class TextExtractor:
+    """Extracts text from various ebook formats"""
+
+    @staticmethod
+    def extract_from_pdf(file_path):
+        """
+        Extract text from PDF file
+
+        Args:
+            file_path: Path to PDF file
+
+        Returns:
+            str: Extracted text
+        """
+        try:
+            doc = fitz.open(file_path)
+            text_parts = []
+
+            for page_num, page in enumerate(doc, 1):
+                text = page.get_text()
+                if text.strip():
+                    text_parts.append(text)
+
+            doc.close()
+            return "\n".join(text_parts)
+
+        except Exception as e:
+            logger.error(f"Error extracting PDF {file_path}: {e}")
+            return ""
+
+    @staticmethod
+    def extract_from_epub(file_path):
+        """
+        Extract text from EPUB file
+
+        Args:
+            file_path: Path to EPUB file
+
+        Returns:
+            str: Extracted text
+        """
+        try:
+            book = epub.read_epub(file_path)
+            text_parts = []
+
+            for item in book.get_items():
+                if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                    # Parse HTML content
+                    soup = BeautifulSoup(item.get_content(), 'html.parser')
+
+                    # Extract text from HTML
+                    text = soup.get_text(separator='\n', strip=True)
+                    if text:
+                        text_parts.append(text)
+
+            return "\n".join(text_parts)
+
+        except Exception as e:
+            logger.error(f"Error extracting EPUB {file_path}: {e}")
+            return ""
+
+    @staticmethod
+    def extract_text(file_path):
+        """
+        Extract text from file based on extension
+
+        Args:
+            file_path: Path to file (PDF or EPUB)
+
+        Returns:
+            str: Extracted text or empty string on failure
+        """
+        file_path = Path(file_path)
+
+        if not file_path.exists():
+            logger.error(f"File not found: {file_path}")
+            return ""
+
+        extension = file_path.suffix.lower()
+
+        if extension == '.pdf':
+            return TextExtractor.extract_from_pdf(str(file_path))
+        elif extension == '.epub':
+            return TextExtractor.extract_from_epub(str(file_path))
+        else:
+            logger.warning(f"Unsupported format: {extension}")
+            return ""
+
+
+class CalibreTextExtractor:
+    """
+    Extracts text from Calibre library books
+    Integrates with Calibre metadata database
+    """
+
+    def __init__(self, calibre_library_path):
+        """
+        Initialize with Calibre library path
+
+        Args:
+            calibre_library_path: Path to Calibre library directory
+        """
+        self.library_path = Path(calibre_library_path)
+        if not self.library_path.exists():
+            raise FileNotFoundError(f"Calibre library not found: {calibre_library_path}")
+
+    def get_book_file_path(self, book_id, author, title, format='pdf'):
+        """
+        Get the file path for a book in Calibre's directory structure
+
+        Calibre stores books as: Author/Title (ID)/Title - Author.format
+
+        Args:
+            book_id: Calibre book ID
+            author: Book author
+            title: Book title
+            format: File format (pdf, epub, etc.)
+
+        Returns:
+            Path: Full path to book file or None if not found
+        """
+        # Calibre directory structure: Author/Title (ID)/
+        # Clean author and title for filesystem
+        import re
+
+        def clean_filename(name):
+            # Remove characters that might cause issues
+            name = re.sub(r'[<>:"/\\|?*]', '_', name)
+            return name.strip()
+
+        author_clean = clean_filename(author)
+        title_clean = clean_filename(title)
+
+        # Try to find the book directory
+        book_dir = self.library_path / author_clean / f"{title_clean} ({book_id})"
+
+        if not book_dir.exists():
+            logger.warning(f"Book directory not found: {book_dir}")
+            return None
+
+        # Look for the file with the specified format
+        format_upper = format.upper()
+        for file in book_dir.iterdir():
+            if file.suffix.upper() == f'.{format_upper}':
+                return file
+
+        logger.warning(f"Format {format} not found for book {book_id}")
+        return None
+
+    def extract_book_text(self, book_id, author, title, preferred_formats=None):
+        """
+        Extract text from a book, trying multiple formats
+
+        Args:
+            book_id: Calibre book ID
+            author: Book author
+            title: Book title
+            preferred_formats: List of formats to try (default: ['epub', 'pdf'])
+
+        Returns:
+            tuple: (extracted_text, format_used) or (None, None) on failure
+        """
+        if preferred_formats is None:
+            preferred_formats = ['epub', 'pdf']
+
+        for fmt in preferred_formats:
+            file_path = self.get_book_file_path(book_id, author, title, fmt)
+            if file_path:
+                logger.info(f"Extracting text from {file_path}")
+                text = TextExtractor.extract_text(file_path)
+                if text:
+                    return text, fmt.upper()
+
+        logger.error(f"Could not extract text for book {book_id}: {title}")
+        return None, None
+
+
+if __name__ == '__main__':
+    # Simple test
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python text_extractor.py <file_path>")
+        sys.exit(1)
+
+    file_path = sys.argv[1]
+    text = TextExtractor.extract_text(file_path)
+
+    if text:
+        print(f"Extracted {len(text)} characters")
+        print("First 500 characters:")
+        print(text[:500])
+    else:
+        print("Failed to extract text")

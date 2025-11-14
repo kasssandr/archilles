@@ -1,12 +1,23 @@
-# Calibre Metadata Analyzer Requirements
-#
-# This tool uses only Python standard library modules:
+# Achilles - Calibre Quote Tracker Requirements
+# Python version: 3.6+
+
+# === Core Metadata Analyzer (no dependencies) ===
 # - sqlite3 (included in Python)
 # - argparse (included in Python)
 # - pathlib (included in Python)
 # - collections (included in Python)
 # - json (included in Python)
-#
-# No external dependencies required!
-#
-# Python version: 3.6+
+
+# === Quote Tracker Extensions ===
+
+# Text Extraction
+PyMuPDF>=1.23.0      # PDF text extraction
+ebooklib>=0.18       # EPUB reading
+beautifulsoup4>=4.12.0  # HTML/XML parsing
+lxml>=4.9.0          # XML handling
+
+# Web UI
+streamlit>=1.29.0    # Interactive web interface
+
+# Natural Language Processing
+nltk>=3.8.0          # Sentence tokenization for context extraction
