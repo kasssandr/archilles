@@ -120,17 +120,25 @@ def indexing_tab():
             help="Für Tests: Nur die ersten N Bücher indizieren"
         )
 
+    # Semantic indexing option
+    enable_semantic = st.checkbox(
+        "🧠 Semantische Indizierung aktivieren",
+        value=True,
+        help="Erstellt zusätzlich einen semantischen Index für intelligente Suche. Dauert länger, ermöglicht aber konzeptionelle Suche."
+    )
+
     # Start indexing button
     if st.button("🚀 Indizierung starten", type="primary"):
-        start_indexing(tag_filter if tag_filter else None, limit)
+        start_indexing(tag_filter if tag_filter else None, limit, enable_semantic)
 
 
-def start_indexing(tag_filter, limit):
+def start_indexing(tag_filter, limit, enable_semantic=True):
     """Start the indexing process"""
     progress_container = st.container()
 
     with progress_container:
-        st.info("⏳ Indizierung läuft...")
+        mode_text = "Keyword + Semantic" if enable_semantic else "Nur Keyword"
+        st.info(f"⏳ Indizierung läuft... ({mode_text})")
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -170,12 +178,28 @@ def start_indexing(tag_filter, limit):
 
             status_text.text(f"Gefunden: {len(books)} Bücher")
 
+            # Initialize engines
+            keyword_engine = SearchEngine(st.session_state.index_path)
+
+            if enable_semantic:
+                try:
+                    from semantic_search import SemanticSearchEngine, chunk_text
+                    semantic_engine = SemanticSearchEngine(chroma_db_path="./chroma_db")
+                    status_text.text("✓ Semantische Suchmaschine initialisiert")
+                except Exception as e:
+                    st.warning(f"⚠ Semantische Suche nicht verfügbar: {e}")
+                    st.info("Fallback auf nur Keyword-Indizierung")
+                    semantic_engine = None
+                    enable_semantic = False
+            else:
+                semantic_engine = None
+
             # Index books
             text_extractor = CalibreTextExtractor(st.session_state.library_path)
             indexed_count = 0
             failed_count = 0
 
-            with SearchEngine(st.session_state.index_path) as engine:
+            try:
                 for idx, book in enumerate(books):
                     progress = (idx + 1) / len(books)
                     progress_bar.progress(progress)
@@ -184,21 +208,41 @@ def start_indexing(tag_filter, limit):
                     title = book['title']
                     author = book['author']
 
-                    status_text.text(f"[{idx + 1}/{len(books)}] Verarbeite: '{title[:40]}...'")
+                    status_text.text(f"[{idx + 1}/{len(books)}] {title[:40]}...")
 
                     # Extract text
                     text, format_used = text_extractor.extract_book_text(book_id, author, title)
 
                     if text:
-                        engine.index_book(book_id, author, title, format_used, text)
+                        # Index in keyword engine
+                        keyword_engine.index_book(book_id, author, title, format_used, text)
+
+                        # Index in semantic engine
+                        if enable_semantic and semantic_engine:
+                            chunks = chunk_text(text, chunk_size=1000, overlap=200)
+                            semantic_engine.index_text_chunks(book_id, author, title, chunks)
+
                         indexed_count += 1
                     else:
                         failed_count += 1
 
+            finally:
+                keyword_engine.close()
+
             # Show results
             progress_bar.progress(1.0)
             st.success(f"✅ Indizierung abgeschlossen!")
-            st.info(f"Erfolgreich: {indexed_count} | Fehlgeschlagen: {failed_count}")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Erfolgreich", indexed_count)
+            with col2:
+                st.metric("Fehlgeschlagen", failed_count)
+
+            # Show stats
+            if enable_semantic and semantic_engine:
+                sem_stats = semantic_engine.get_stats()
+                st.info(f"📊 Semantischer Index: {sem_stats['total_chunks']} Chunks aus {sem_stats['unique_books']} Büchern")
 
         except Exception as e:
             st.error(f"❌ Fehler bei der Indizierung: {e}")

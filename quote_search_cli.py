@@ -41,16 +41,21 @@ class QuoteSearchCLI:
         self.search_index_path = search_index_path
         self.text_extractor = CalibreTextExtractor(calibre_library_path)
 
-    def index_library(self, tag_filter=None, limit=None):
+    def index_library(self, tag_filter=None, limit=None, enable_semantic=True):
         """
         Index books from Calibre library
 
         Args:
             tag_filter: Optional tag to filter books
             limit: Optional limit on number of books to index
+            enable_semantic: Enable semantic (ChromaDB) indexing alongside keyword indexing
         """
         print("=" * 70)
         print("INDEXING CALIBRE LIBRARY")
+        if enable_semantic:
+            print("Mode: Keyword + Semantic (Hybrid)")
+        else:
+            print("Mode: Keyword only")
         print("=" * 70)
 
         with CalibreAnalyzer(str(self.metadata_db)) as analyzer:
@@ -86,11 +91,27 @@ class QuoteSearchCLI:
                 print("No books found!")
                 return
 
-        # Index books
-        with SearchEngine(self.search_index_path) as engine:
-            indexed_count = 0
-            failed_count = 0
+        # Initialize engines
+        keyword_engine = SearchEngine(self.search_index_path)
 
+        if enable_semantic:
+            try:
+                from semantic_search import SemanticSearchEngine, chunk_text
+                semantic_engine = SemanticSearchEngine(chroma_db_path="./chroma_db")
+                print("✓ Semantic search engine initialized")
+            except Exception as e:
+                print(f"⚠ Semantic search not available: {e}")
+                print("  Falling back to keyword-only indexing")
+                semantic_engine = None
+                enable_semantic = False
+        else:
+            semantic_engine = None
+
+        # Index books
+        indexed_count = 0
+        failed_count = 0
+
+        try:
             for book in books:
                 book_id = book['id']
                 title = book['title']
@@ -102,31 +123,56 @@ class QuoteSearchCLI:
                 text, format_used = self.text_extractor.extract_book_text(book_id, author, title)
 
                 if text:
-                    # Index the text
-                    engine.index_book(book_id, author, title, format_used, text)
+                    # Index in keyword engine (FTS5)
+                    keyword_engine.index_book(book_id, author, title, format_used, text)
+
+                    # Index in semantic engine (ChromaDB)
+                    if enable_semantic and semantic_engine:
+                        # Chunk text for semantic indexing
+                        chunks = chunk_text(text, chunk_size=1000, overlap=200)
+                        semantic_engine.index_text_chunks(book_id, author, title, chunks)
+                        print(f"  ✓ Indexed ({format_used}, {len(text):,} chars, {len(chunks)} chunks)")
+                    else:
+                        print(f"  ✓ Indexed ({format_used}, {len(text):,} chars)")
+
                     indexed_count += 1
-                    print(f"  ✓ Indexed ({format_used}, {len(text):,} chars)")
                 else:
                     failed_count += 1
                     print(f"  ✗ Failed to extract text")
 
-            # Show summary
-            print("\n" + "=" * 70)
-            print("INDEXING COMPLETE")
-            print("=" * 70)
-            print(f"Successfully indexed: {indexed_count} books")
-            print(f"Failed: {failed_count} books")
-            print()
+        finally:
+            # Close engines
+            keyword_engine.close()
+            if semantic_engine:
+                # ChromaDB doesn't need explicit closing
+                pass
 
-            # Show index stats
+        # Show summary
+        print("\n" + "=" * 70)
+        print("INDEXING COMPLETE")
+        print("=" * 70)
+        print(f"Successfully indexed: {indexed_count} books")
+        print(f"Failed: {failed_count} books")
+        print()
+
+        # Show index stats
+        with SearchEngine(self.search_index_path) as engine:
             stats = engine.get_stats()
-            print("Index Statistics:")
+            print("Keyword Index Statistics:")
             print(f"  Total books: {stats['total_books']}")
             print(f"  Total characters: {stats['total_characters']:,}")
             print(f"  Formats:")
             for fmt in stats['formats']:
                 print(f"    - {fmt['format']}: {fmt['count']} books")
-            print()
+
+        if enable_semantic and semantic_engine:
+            sem_stats = semantic_engine.get_stats()
+            print("\nSemantic Index Statistics:")
+            print(f"  Total chunks: {sem_stats['total_chunks']}")
+            print(f"  Unique books: {sem_stats['unique_books']}")
+            print(f"  Model: {sem_stats['model']}")
+
+        print()
 
     def search(self, query, context_type='sentences', context_size=3, max_results=20):
         """
