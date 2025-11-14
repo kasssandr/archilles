@@ -61,16 +61,30 @@ class TextExtractor:
             text_parts = []
 
             for item in book.get_items():
-                if item.get_type() == ebooklib.ITEM_DOCUMENT:
-                    # Parse HTML content
-                    soup = BeautifulSoup(item.get_content(), 'html.parser')
+                try:
+                    if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                        # Parse HTML content
+                        content = item.get_content()
+                        if content:
+                            soup = BeautifulSoup(content, 'html.parser')
 
-                    # Extract text from HTML
-                    text = soup.get_text(separator='\n', strip=True)
-                    if text:
-                        text_parts.append(text)
+                            # Extract text from HTML
+                            text = soup.get_text(separator='\n', strip=True)
+                            if text:
+                                text_parts.append(text)
+                except Exception as item_error:
+                    # Skip corrupted items, continue with others
+                    logger.warning(f"Skipping corrupted EPUB item in {file_path}: {item_error}")
+                    continue
 
-            return "\n".join(text_parts)
+            extracted_text = "\n".join(text_parts)
+
+            # Only return if we got substantial text
+            if len(extracted_text) > 100:
+                return extracted_text
+            else:
+                logger.warning(f"EPUB {file_path} extracted text too short, might be corrupted")
+                return ""
 
         except Exception as e:
             logger.error(f"Error extracting EPUB {file_path}: {e}")
