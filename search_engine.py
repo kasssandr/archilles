@@ -109,6 +109,14 @@ class SearchEngine:
         """
         cursor = self.conn.cursor()
 
+        # Escape query for FTS5 to avoid syntax errors
+        # Split into terms and quote each one to prevent column name interpretation
+        terms = query.split()
+        # Quote each term to make it safe for FTS5
+        quoted_terms = [f'"{term}"' for term in terms]
+        # Join with OR to find any of the terms (more results)
+        fts5_query = ' OR '.join(quoted_terms)
+
         # Use FTS5 MATCH for full-text search
         # snippet() function extracts relevant context
         cursor.execute("""
@@ -123,7 +131,7 @@ class SearchEngine:
             WHERE book_texts MATCH ?
             ORDER BY rank
             LIMIT ?
-        """, (query, limit))
+        """, (fts5_query, limit))
 
         results = []
         for row in cursor.fetchall():
