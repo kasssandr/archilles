@@ -233,7 +233,7 @@ class SemanticSearchEngine:
             logger.error(f"Error clearing index: {e}")
 
 
-def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200, max_chunks: int = 2000) -> List[str]:
     """
     Split text into overlapping chunks
 
@@ -241,6 +241,7 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
         text: Full text to chunk
         chunk_size: Size of each chunk in characters
         overlap: Overlap between chunks in characters
+        max_chunks: Maximum number of chunks to create (prevents memory issues)
 
     Returns:
         List of text chunks
@@ -248,10 +249,17 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
     if not text or len(text) < chunk_size:
         return [text] if text else []
 
+    # Limit text size to prevent memory issues (5 MB max)
+    max_text_size = 5_000_000  # 5 MB
+    if len(text) > max_text_size:
+        logger.warning(f"Text too large ({len(text):,} chars), truncating to {max_text_size:,} chars")
+        text = text[:max_text_size]
+
     chunks = []
     start = 0
+    chunk_count = 0
 
-    while start < len(text):
+    while start < len(text) and chunk_count < max_chunks:
         end = start + chunk_size
         chunk = text[start:end]
 
@@ -265,9 +273,13 @@ def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[st
                     break
 
         chunks.append(chunk.strip())
+        chunk_count += 1
 
         # Move start forward, accounting for overlap
         start = start + len(chunk) - overlap
+
+    if chunk_count >= max_chunks:
+        logger.warning(f"Reached max chunk limit ({max_chunks}), some text not indexed")
 
     return chunks
 
