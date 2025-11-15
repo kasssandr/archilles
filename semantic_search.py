@@ -47,19 +47,34 @@ class SemanticSearchEngine:
 
         # Load sentence transformer model
         logger.info(f"Loading embedding model: {model_name}")
-        self.model = SentenceTransformer(model_name)
-        logger.info("Model loaded successfully")
+        try:
+            # Force device to CPU and avoid meta tensor issues
+            import torch
+            self.model = SentenceTransformer(model_name, device='cpu')
+            # Ensure model is fully loaded
+            self.model.eval()
+            logger.info("Model loaded successfully")
+        except Exception as e:
+            logger.error(f"Error loading model: {e}")
+            # Fallback: try loading without device specification
+            self.model = SentenceTransformer(model_name)
+            logger.info("Model loaded successfully (fallback mode)")
 
         # Get or create collection
         try:
             self.collection = self.client.get_collection(name=collection_name)
             logger.info(f"Using existing collection: {collection_name}")
-        except:
-            self.collection = self.client.create_collection(
-                name=collection_name,
-                metadata={"description": "Quote Tracker semantic search"}
-            )
-            logger.info(f"Created new collection: {collection_name}")
+        except Exception as e:
+            logger.info(f"Collection '{collection_name}' does not exist, creating...")
+            try:
+                self.collection = self.client.create_collection(
+                    name=collection_name,
+                    metadata={"description": "Quote Tracker semantic search"}
+                )
+                logger.info(f"Created new collection: {collection_name}")
+            except Exception as create_error:
+                logger.error(f"Failed to create collection: {create_error}")
+                raise
 
     def index_text_chunks(self, book_id: int, author: str, title: str, chunks: List[str]):
         """
