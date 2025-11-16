@@ -198,6 +198,7 @@ def start_indexing(tag_filter, limit, enable_semantic=True):
             text_extractor = CalibreTextExtractor(st.session_state.library_path)
             indexed_count = 0
             failed_count = 0
+            processed_book_ids = set()  # Track processed book IDs to avoid duplicates
 
             try:
                 for idx, book in enumerate(books):
@@ -207,6 +208,11 @@ def start_indexing(tag_filter, limit, enable_semantic=True):
                     book_id = book['id']
                     title = book['title']
                     author = book['author']
+
+                    # Skip if we've already processed this book ID (multi-author books)
+                    if book_id in processed_book_ids:
+                        continue
+                    processed_book_ids.add(book_id)
 
                     status_text.text(f"[{idx + 1}/{len(books)}] {title[:40]}...")
 

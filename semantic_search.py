@@ -90,6 +90,16 @@ class SemanticSearchEngine:
             logger.warning(f"No chunks to index for book {book_id}")
             return
 
+        # Check if book already indexed (to avoid duplicates from multi-author books)
+        test_id = f"book_{book_id}_chunk_0"
+        try:
+            existing = self.collection.get(ids=[test_id])
+            if existing and existing['ids']:
+                logger.info(f"Book {book_id} already semantically indexed, skipping")
+                return
+        except Exception:
+            pass  # Book not yet indexed, proceed
+
         # Generate unique IDs for each chunk
         ids = [f"book_{book_id}_chunk_{i}" for i in range(len(chunks))]
 
