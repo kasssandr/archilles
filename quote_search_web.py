@@ -35,6 +35,27 @@ def initialize_session_state():
         st.session_state.last_query = ""
     if 'index_path' not in st.session_state:
         st.session_state.index_path = "quote_search_index.db"
+    if 'collection_name' not in st.session_state:
+        st.session_state.collection_name = "quote_tracker"
+    if 'chroma_db_path' not in st.session_state:
+        st.session_state.chroma_db_path = "./chroma_db"
+
+
+def get_available_collections():
+    """Get list of available ChromaDB collections"""
+    try:
+        import chromadb
+        from chromadb.config import Settings
+
+        client = chromadb.PersistentClient(
+            path=st.session_state.chroma_db_path,
+            settings=Settings(anonymized_telemetry=False)
+        )
+        collections = client.list_collections()
+        return [col.name for col in collections]
+    except Exception as e:
+        logger.warning(f"Could not list collections: {e}")
+        return []
 
 
 def sidebar_config():
@@ -83,6 +104,49 @@ def sidebar_config():
                 st.sidebar.info(f"📊 {stats['total_books']} Bücher indiziert")
         except Exception as e:
             st.sidebar.warning(f"Index-Fehler: {e}")
+
+    st.sidebar.divider()
+
+    # ChromaDB Collection Selection
+    st.sidebar.subheader("🗂️ Semantic Collection")
+
+    available_collections = get_available_collections()
+
+    if available_collections:
+        # Show collection dropdown
+        selected_collection = st.sidebar.selectbox(
+            "Collection wählen",
+            options=available_collections,
+            index=available_collections.index(st.session_state.collection_name)
+                  if st.session_state.collection_name in available_collections else 0,
+            help="Wähle die ChromaDB Collection für semantische Suche"
+        )
+        st.session_state.collection_name = selected_collection
+
+        # Show collection stats
+        try:
+            from semantic_search import SemanticSearchEngine
+            engine = SemanticSearchEngine(
+                chroma_db_path=st.session_state.chroma_db_path,
+                collection_name=selected_collection
+            )
+            stats = engine.get_stats()
+            st.sidebar.success(
+                f"✓ Collection: **{selected_collection}**\n\n"
+                f"📚 {stats['unique_books']} Bücher\n\n"
+                f"🧩 {stats['total_chunks']:,} Chunks"
+            )
+        except Exception as e:
+            st.sidebar.warning(f"Collection-Info nicht verfügbar: {e}")
+    else:
+        st.sidebar.info("ℹ️ Keine Collections gefunden. Bitte erst indizieren!")
+        # Allow manual input
+        manual_collection = st.sidebar.text_input(
+            "Collection-Name (manuell)",
+            value=st.session_state.collection_name,
+            help="Gib den Namen einer existierenden Collection ein"
+        )
+        st.session_state.collection_name = manual_collection
 
     st.sidebar.divider()
 
@@ -184,8 +248,11 @@ def start_indexing(tag_filter, limit, enable_semantic=True):
             if enable_semantic:
                 try:
                     from semantic_search import SemanticSearchEngine, chunk_text
-                    semantic_engine = SemanticSearchEngine(chroma_db_path="./chroma_db")
-                    status_text.text("✓ Semantische Suchmaschine initialisiert")
+                    semantic_engine = SemanticSearchEngine(
+                        chroma_db_path=st.session_state.chroma_db_path,
+                        collection_name=st.session_state.collection_name
+                    )
+                    status_text.text(f"✓ Semantische Suchmaschine initialisiert (Collection: {st.session_state.collection_name})")
                 except Exception as e:
                     st.warning(f"⚠ Semantische Suche nicht verfügbar: {e}")
                     st.info("Fallback auf nur Keyword-Indizierung")
@@ -327,7 +394,8 @@ def perform_search(query, search_mode, context_type, context_size, max_results):
 
         with HybridSearchEngine(
             fts_db_path=st.session_state.index_path,
-            chroma_db_path="./chroma_db"
+            chroma_db_path=st.session_state.chroma_db_path,
+            collection_name=st.session_state.collection_name
         ) as engine:
             # Execute search based on mode
             if search_mode == 'keyword':

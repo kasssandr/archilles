@@ -320,19 +320,21 @@ class HybridSearchEngine:
     Hybrid search engine combining keyword (FTS5) and semantic (ChromaDB) search
     """
 
-    def __init__(self, fts_db_path="quote_search_index.db", chroma_db_path="./chroma_db"):
+    def __init__(self, fts_db_path="quote_search_index.db", chroma_db_path="./chroma_db", collection_name="quote_tracker"):
         """
         Initialize hybrid search engine
 
         Args:
             fts_db_path: Path to FTS5 database
             chroma_db_path: Path to ChromaDB storage
+            collection_name: Name of the ChromaDB collection to use
         """
         self.keyword_engine = SearchEngine(fts_db_path)
 
         # Lazy load semantic engine (only when needed)
         self.semantic_engine = None
         self.chroma_db_path = chroma_db_path
+        self.collection_name = collection_name
         self._semantic_available = False
 
     def _init_semantic(self):
@@ -340,9 +342,12 @@ class HybridSearchEngine:
         if self.semantic_engine is None:
             try:
                 from semantic_search import SemanticSearchEngine
-                self.semantic_engine = SemanticSearchEngine(chroma_db_path=self.chroma_db_path)
+                self.semantic_engine = SemanticSearchEngine(
+                    chroma_db_path=self.chroma_db_path,
+                    collection_name=self.collection_name
+                )
                 self._semantic_available = True
-                logger.info("Semantic search initialized")
+                logger.info(f"Semantic search initialized (collection: {self.collection_name})")
             except Exception as e:
                 logger.warning(f"Semantic search not available: {e}")
                 self._semantic_available = False
