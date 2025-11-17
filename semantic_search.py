@@ -190,27 +190,38 @@ class SemanticSearchEngine:
         except:
             return False
 
-    def get_stats(self) -> Dict:
+    def get_stats(self, sample_size: int = 1000) -> Dict:
         """
         Get statistics about the semantic index
+
+        Args:
+            sample_size: Number of chunks to sample for unique book estimation
 
         Returns:
             Dictionary with index statistics
         """
         total_chunks = self.collection.count()
 
-        # Get unique books
-        all_metadata = self.collection.get()
+        # Get unique books from a sample (much faster for large collections)
+        # Sample only a subset to avoid loading millions of metadata entries
+        sample_metadata = self.collection.get(limit=min(sample_size, total_chunks))
         unique_books = set()
 
-        if all_metadata and all_metadata['metadatas']:
-            for meta in all_metadata['metadatas']:
+        if sample_metadata and sample_metadata['metadatas']:
+            for meta in sample_metadata['metadatas']:
                 if 'book_id' in meta:
                     unique_books.add(meta['book_id'])
 
+        # Estimate unique books if we sampled
+        if total_chunks > sample_size:
+            # For large collections, show that it's an estimate
+            unique_books_count = f"~{len(unique_books)} (estimated)"
+        else:
+            unique_books_count = len(unique_books)
+
         return {
             'total_chunks': total_chunks,
-            'unique_books': len(unique_books),
+            'unique_books': unique_books_count,
             'collection_name': self.collection_name,
             'model': self.model_name
         }

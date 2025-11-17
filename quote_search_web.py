@@ -123,14 +123,15 @@ def sidebar_config():
         )
         st.session_state.collection_name = selected_collection
 
-        # Show collection stats
+        # Show collection stats (with error handling for large collections)
         try:
             from semantic_search import SemanticSearchEngine
             engine = SemanticSearchEngine(
                 chroma_db_path=st.session_state.chroma_db_path,
                 collection_name=selected_collection
             )
-            stats = engine.get_stats()
+            # Use small sample for stats to avoid RAM overload on large collections
+            stats = engine.get_stats(sample_size=500)
             st.sidebar.success(
                 f"✓ Collection: **{selected_collection}**\n\n"
                 f"📚 {stats['unique_books']} Bücher\n\n"
@@ -138,6 +139,7 @@ def sidebar_config():
             )
         except Exception as e:
             st.sidebar.warning(f"Collection-Info nicht verfügbar: {e}")
+            logger.exception("Collection stats error")
     else:
         st.sidebar.info("ℹ️ Keine Collections gefunden. Bitte erst indizieren!")
         # Allow manual input
@@ -314,7 +316,7 @@ def start_indexing(tag_filter, limit, enable_semantic=True):
 
             # Show stats
             if enable_semantic and semantic_engine:
-                sem_stats = semantic_engine.get_stats()
+                sem_stats = semantic_engine.get_stats(sample_size=500)
                 st.info(f"📊 Semantischer Index: {sem_stats['total_chunks']} Chunks aus {sem_stats['unique_books']} Büchern")
 
         except Exception as e:
