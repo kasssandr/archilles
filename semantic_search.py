@@ -199,16 +199,23 @@ class SemanticSearchEngine:
             return formatted_results
 
         for i in range(len(results['ids'][0])):
+            meta = results['metadatas'][0][i]
+
+            # Support both metadata field naming conventions
+            # Some collections use 'author'/'title', others use 'authors'/'book_title'
+            author = meta.get('author') or meta.get('authors', '')
+            title = meta.get('title') or meta.get('book_title', '')
+
             result = {
                 'id': results['ids'][0][i],
                 'text': results['documents'][0][i],
-                'metadata': results['metadatas'][0][i],
+                'metadata': meta,
                 'distance': results['distances'][0][i] if 'distances' in results else None,
                 'similarity': 1 - results['distances'][0][i] if 'distances' in results else None,
-                'book_id': int(results['metadatas'][0][i].get('book_id', 0)),
-                'author': results['metadatas'][0][i].get('author', ''),
-                'title': results['metadatas'][0][i].get('title', ''),
-                'chunk_index': results['metadatas'][0][i].get('chunk_index', 0)
+                'book_id': int(meta.get('book_id', 0)),
+                'author': author,
+                'title': title,
+                'chunk_index': int(meta.get('chunk_index', 0))
             }
             formatted_results.append(result)
 
@@ -252,8 +259,10 @@ class SemanticSearchEngine:
 
         if sample_metadata and sample_metadata['metadatas']:
             for meta in sample_metadata['metadatas']:
-                if 'book_id' in meta:
-                    unique_books.add(meta['book_id'])
+                # Support both 'book_id' field names
+                book_id = meta.get('book_id')
+                if book_id:
+                    unique_books.add(book_id)
 
         # Estimate unique books if we sampled
         if total_chunks > sample_size:
