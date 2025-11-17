@@ -34,6 +34,11 @@ class SemanticSearchEngine:
             chroma_db_path: Path to ChromaDB storage
             collection_name: Name of the collection to use
             model_name: Sentence transformer model name
+                NOTE: Must match the model used during indexing!
+                Recommended models for NEW collections:
+                - "intfloat/multilingual-e5-large" (BEST for cross-lingual DE↔EN)
+                - "paraphrase-multilingual-mpnet-base-v2" (default, good balance)
+                - "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2" (fastest)
         """
         self.chroma_db_path = Path(chroma_db_path)
         self.collection_name = collection_name
