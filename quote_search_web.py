@@ -429,16 +429,25 @@ def display_search_results(context_type, context_size):
 
     for idx, result in enumerate(results, 1):
         # Build title with relevance info
-        relevance_score = result.get('hybrid_score', abs(result.get('rank', 0)))
+        # Try different score fields depending on search mode
+        relevance_score = result.get('relevance_score',
+                                     result.get('hybrid_score',
+                                               result.get('similarity',
+                                                         abs(result.get('rank', 0)))))
         source_icon = {
             'keyword': '🔤',
             'semantic': '🧠',
             'hybrid': '🔀'
         }.get(result.get('source', 'keyword'), '🔎')
 
+        # Get title and author safely
+        title = result.get('title', 'Unbekannt')
+        author = result.get('author', 'Unbekannt')
+        format_str = result.get('format', 'UNKNOWN')
+
         with st.expander(
-            f"{idx}. {source_icon} **{result['title']}** von {result['author']} "
-            f"({result.get('format', 'UNKNOWN')}) - Relevanz: {relevance_score:.2f}",
+            f"{idx}. {source_icon} **{title}** von {author} "
+            f"({format_str}) - Relevanz: {relevance_score:.2f}",
             expanded=(idx <= 3)  # Auto-expand first 3 results
         ):
             # Show snippet/text

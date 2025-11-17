@@ -374,7 +374,7 @@ class HybridSearchEngine:
             limit: Maximum results
 
         Returns:
-            List of results
+            List of results with normalized format
         """
         self._init_semantic()
 
@@ -382,7 +382,19 @@ class HybridSearchEngine:
             logger.warning("Semantic search not available, falling back to keyword")
             return self.search_keyword(query, limit)
 
-        return self.semantic_engine.search(query, limit)
+        results = self.semantic_engine.search(query, limit)
+
+        # Normalize results format for UI consistency
+        for result in results:
+            result['source'] = 'semantic'
+            # Use similarity as the primary score
+            if 'similarity' in result:
+                result['relevance_score'] = result['similarity']
+            # Add format field if missing
+            if 'format' not in result:
+                result['format'] = 'SEMANTIC'
+
+        return results
 
     def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5) -> List[Dict]:
         """
