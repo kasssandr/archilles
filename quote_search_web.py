@@ -413,21 +413,54 @@ def search_tab():
 
 def perform_search(query, search_mode, context_type, context_size, max_results, max_per_book=None):
     """Perform search and store results"""
+    import random
+
+    # Witty academic thinking messages (inspired by Claude's thinking states)
+    thinking_messages = [
+        "🧠 Cerebrating through ancient texts...",
+        "📚 Mulling over manuscripts...",
+        "🔍 Frolicking through footnotes...",
+        "⚡ Pondering papyri...",
+        "🎯 Cogitating through codices...",
+        "✨ Ruminating over references...",
+        "🤔 Deliberating on documents...",
+        "💭 Meditating on metadata...",
+        "🧩 Puzzling through passages...",
+        "🔬 Scrutinizing sources...",
+        "📖 Perusing parchments...",
+        "🎓 Contemplating corpus...",
+        "⚙️ Processing profound passages...",
+        "🌟 Excavating erudite excerpts...",
+        "🏛️ Rummaging through rabbinic writings...",
+        "📜 Sifting through scrolls...",
+        "🕵️ Investigating inscriptions...",
+        "💡 Illuminating intellectual insights...",
+        "🗝️ Unlocking textual treasures...",
+        "⚗️ Distilling doctrinal discourse...",
+        "🎭 Deciphering dramatic dialogues...",
+        "🌍 Traversing theological treatises...",
+        "🔭 Exploring exegetical evidence...",
+        "📐 Analyzing argumentative apparatus...",
+    ]
+
+    spinner_text = random.choice(thinking_messages)
+
     try:
         from search_engine import HybridSearchEngine
 
-        with HybridSearchEngine(
-            fts_db_path=st.session_state.index_path,
-            chroma_db_path=st.session_state.chroma_db_path,
-            collection_name=st.session_state.collection_name
-        ) as engine:
-            # Execute search based on mode
-            if search_mode == 'keyword':
-                results = engine.search_keyword(query, limit=max_results)
-            elif search_mode == 'semantic':
-                results = engine.search_semantic(query, limit=max_results, max_per_book=max_per_book)
-            else:  # hybrid
-                results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5, max_per_book=max_per_book)
+        with st.spinner(spinner_text):
+            with HybridSearchEngine(
+                fts_db_path=st.session_state.index_path,
+                chroma_db_path=st.session_state.chroma_db_path,
+                collection_name=st.session_state.collection_name
+            ) as engine:
+                # Execute search based on mode
+                if search_mode == 'keyword':
+                    results = engine.search_keyword(query, limit=max_results)
+                elif search_mode == 'semantic':
+                    results = engine.search_semantic(query, limit=max_results, max_per_book=max_per_book)
+                else:  # hybrid
+                    results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5, max_per_book=max_per_book)
 
             st.session_state.search_results = results
 
