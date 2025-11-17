@@ -365,13 +365,14 @@ class HybridSearchEngine:
         """
         return self.keyword_engine.search(query, limit)
 
-    def search_semantic(self, query: str, limit: int = 50) -> List[Dict]:
+    def search_semantic(self, query: str, limit: int = 50, max_per_book: int = None) -> List[Dict]:
         """
         Semantic search using embeddings
 
         Args:
             query: Search query
             limit: Maximum results
+            max_per_book: Maximum results per book (for diversity). None = unlimited
 
         Returns:
             List of results with normalized format
@@ -382,7 +383,9 @@ class HybridSearchEngine:
             logger.warning("Semantic search not available, falling back to keyword")
             return self.search_keyword(query, limit)
 
-        results = self.semantic_engine.search(query, limit)
+        # Fetch more results than needed if we're limiting per book
+        fetch_limit = limit * 3 if max_per_book else limit
+        results = self.semantic_engine.search(query, fetch_limit)
 
         # Normalize results format for UI consistency
         for result in results:
@@ -394,9 +397,40 @@ class HybridSearchEngine:
             if 'format' not in result:
                 result['format'] = 'SEMANTIC'
 
-        return results
+        # Apply per-book limit if specified
+        if max_per_book:
+            results = self._diversify_by_book(results, max_per_book)
 
-    def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5) -> List[Dict]:
+        return results[:limit]
+
+    def _diversify_by_book(self, results: List[Dict], max_per_book: int) -> List[Dict]:
+        """
+        Limit number of results per book for diversity
+
+        Args:
+            results: List of search results
+            max_per_book: Maximum results per book
+
+        Returns:
+            Filtered results with at most max_per_book results per book
+        """
+        book_counts = {}
+        diversified = []
+
+        for result in results:
+            book_id = result.get('book_id')
+            if book_id is None:
+                diversified.append(result)
+                continue
+
+            count = book_counts.get(book_id, 0)
+            if count < max_per_book:
+                diversified.append(result)
+                book_counts[book_id] = count + 1
+
+        return diversified
+
+    def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5, max_per_book: int = None) -> List[Dict]:
         """
         Hybrid search combining keyword and semantic results
 
@@ -404,6 +438,7 @@ class HybridSearchEngine:
             query: Search query
             limit: Maximum results
             keyword_weight: Weight for keyword results (0-1), semantic gets (1-weight)
+            max_per_book: Maximum results per book (for diversity). None = unlimited
 
         Returns:
             Combined and ranked results
@@ -415,7 +450,7 @@ class HybridSearchEngine:
 
         # Get semantic results (if available)
         if self._semantic_available:
-            semantic_results = self.search_semantic(query, limit=limit * 2)
+            semantic_results = self.search_semantic(query, limit=limit * 2, max_per_book=None)
         else:
             semantic_results = []
 
@@ -424,10 +459,14 @@ class HybridSearchEngine:
             keyword_results,
             semantic_results,
             keyword_weight,
-            limit
+            limit * 2  # Get more results before diversity filtering
         )
 
-        return combined
+        # Apply per-book limit if specified
+        if max_per_book:
+            combined = self._diversify_by_book(combined, max_per_book)
+
+        return combined[:limit]
 
     def _combine_results(
         self,

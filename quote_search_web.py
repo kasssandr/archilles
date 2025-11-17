@@ -375,12 +375,34 @@ def search_tab():
             value=20
         )
 
+    # Advanced options (collapsible)
+    with st.expander("🎛️ Erweiterte Optionen", expanded=False):
+        col_adv1, col_adv2 = st.columns(2)
+
+        with col_adv1:
+            enable_diversity = st.checkbox(
+                "Ergebnis-Diversität aktivieren",
+                value=True,
+                help="Begrenzt Treffer pro Buch für vielfältigere Ergebnisse"
+            )
+
+        with col_adv2:
+            max_per_book = st.number_input(
+                "Max. Treffer pro Buch",
+                min_value=1,
+                max_value=10,
+                value=3,
+                disabled=not enable_diversity,
+                help="Maximale Anzahl Treffer aus demselben Buch (vermeidet Dominanz einzelner Bücher)"
+            )
+
     # Search button
     if st.button("🔎 Suchen", type="primary") or (query and query != st.session_state.last_query):
         if not query:
             st.warning("⚠️ Bitte Suchbegriff eingeben!")
         else:
-            perform_search(query, search_mode, context_type, context_size, max_results)
+            diversity_limit = max_per_book if enable_diversity else None
+            perform_search(query, search_mode, context_type, context_size, max_results, diversity_limit)
             st.session_state.last_query = query
 
     # Display results
@@ -389,7 +411,7 @@ def search_tab():
         display_search_results(context_type, context_size)
 
 
-def perform_search(query, search_mode, context_type, context_size, max_results):
+def perform_search(query, search_mode, context_type, context_size, max_results, max_per_book=None):
     """Perform search and store results"""
     try:
         from search_engine import HybridSearchEngine
@@ -403,9 +425,9 @@ def perform_search(query, search_mode, context_type, context_size, max_results):
             if search_mode == 'keyword':
                 results = engine.search_keyword(query, limit=max_results)
             elif search_mode == 'semantic':
-                results = engine.search_semantic(query, limit=max_results)
+                results = engine.search_semantic(query, limit=max_results, max_per_book=max_per_book)
             else:  # hybrid
-                results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5)
+                results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5, max_per_book=max_per_book)
 
             st.session_state.search_results = results
 
