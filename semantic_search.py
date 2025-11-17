@@ -48,17 +48,60 @@ class SemanticSearchEngine:
         # Load sentence transformer model
         logger.info(f"Loading embedding model: {model_name}")
         try:
-            # Force device to CPU and avoid meta tensor issues
             import torch
-            self.model = SentenceTransformer(model_name, device='cpu')
-            # Ensure model is fully loaded
-            self.model.eval()
-            logger.info("Model loaded successfully")
+            import os
+
+            # Disable meta device usage in transformers
+            os.environ['PYTORCH_ENABLE_MPS_FALLBACK'] = '1'
+
+            # Try multiple loading strategies
+            model_loaded = False
+
+            # Strategy 1: Force CPU with explicit dtype
+            try:
+                logger.info("Attempting to load model on CPU with float32...")
+                self.model = SentenceTransformer(
+                    model_name,
+                    device='cpu',
+                    model_kwargs={'torch_dtype': torch.float32}
+                )
+                self.model.eval()
+                model_loaded = True
+                logger.info("Model loaded successfully (Strategy 1: CPU + float32)")
+            except Exception as e1:
+                logger.warning(f"Strategy 1 failed: {e1}")
+
+                # Strategy 2: Load with auto device mapping disabled
+                try:
+                    logger.info("Attempting to load model without device specification...")
+                    self.model = SentenceTransformer(model_name)
+                    # Force move to CPU if needed
+                    if hasattr(self.model, 'to'):
+                        self.model = self.model.to('cpu')
+                    self.model.eval()
+                    model_loaded = True
+                    logger.info("Model loaded successfully (Strategy 2: Auto + CPU migration)")
+                except Exception as e2:
+                    logger.error(f"Strategy 2 failed: {e2}")
+
+                    # Strategy 3: Manual device specification
+                    try:
+                        logger.info("Attempting to load with manual device spec...")
+                        import torch
+                        torch.set_default_device('cpu')
+                        self.model = SentenceTransformer(model_name, device='cpu')
+                        model_loaded = True
+                        logger.info("Model loaded successfully (Strategy 3: Manual CPU)")
+                    except Exception as e3:
+                        logger.error(f"Strategy 3 failed: {e3}")
+                        raise RuntimeError(f"Failed to load model after 3 attempts: {e1}, {e2}, {e3}")
+
+            if not model_loaded:
+                raise RuntimeError("Model loading failed")
+
         except Exception as e:
-            logger.error(f"Error loading model: {e}")
-            # Fallback: try loading without device specification
-            self.model = SentenceTransformer(model_name)
-            logger.info("Model loaded successfully (fallback mode)")
+            logger.error(f"Critical error loading model: {e}")
+            raise
 
         # Get or create collection
         try:
