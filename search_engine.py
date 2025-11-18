@@ -365,7 +365,7 @@ class HybridSearchEngine:
         """
         return self.keyword_engine.search(query, limit)
 
-    def search_semantic(self, query: str, limit: int = 50, max_per_book: int = None) -> List[Dict]:
+    def search_semantic(self, query: str, limit: int = 50, max_per_book: int = None, min_similarity: float = 0.5) -> List[Dict]:
         """
         Semantic search using embeddings
 
@@ -373,6 +373,8 @@ class HybridSearchEngine:
             query: Search query
             limit: Maximum results
             max_per_book: Maximum results per book (for diversity). None = unlimited
+            min_similarity: Minimum similarity score (0-1). Results below this are filtered out.
+                           Default 0.5 = moderate confidence threshold
 
         Returns:
             List of results with normalized format
@@ -383,9 +385,14 @@ class HybridSearchEngine:
             logger.warning("Semantic search not available, falling back to keyword")
             return self.search_keyword(query, limit)
 
-        # Fetch more results than needed if we're limiting per book
-        fetch_limit = limit * 3 if max_per_book else limit
+        # Fetch more results than needed if we're limiting per book or filtering by similarity
+        fetch_limit = limit * 3 if (max_per_book or min_similarity > 0) else limit
         results = self.semantic_engine.search(query, fetch_limit)
+
+        # Filter by minimum similarity threshold
+        if min_similarity > 0:
+            results = [r for r in results if r.get('similarity', 0) >= min_similarity]
+            logger.info(f"Filtered semantic results: {len(results)} above similarity threshold {min_similarity}")
 
         # Normalize results format for UI consistency
         for result in results:
@@ -430,7 +437,7 @@ class HybridSearchEngine:
 
         return diversified
 
-    def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5, max_per_book: int = None) -> List[Dict]:
+    def search_hybrid(self, query: str, limit: int = 50, keyword_weight: float = 0.5, max_per_book: int = None, min_similarity: float = 0.5) -> List[Dict]:
         """
         Hybrid search combining keyword and semantic results
 
@@ -439,6 +446,7 @@ class HybridSearchEngine:
             limit: Maximum results
             keyword_weight: Weight for keyword results (0-1), semantic gets (1-weight)
             max_per_book: Maximum results per book (for diversity). None = unlimited
+            min_similarity: Minimum similarity for semantic results (0-1). Filters out low-confidence matches.
 
         Returns:
             Combined and ranked results
@@ -448,11 +456,17 @@ class HybridSearchEngine:
         # Get keyword results
         keyword_results = self.search_keyword(query, limit=limit * 2)
 
-        # Get semantic results (if available)
+        # Get semantic results (if available) with confidence threshold
         if self._semantic_available:
-            semantic_results = self.search_semantic(query, limit=limit * 2, max_per_book=None)
+            semantic_results = self.search_semantic(query, limit=limit * 2, max_per_book=None, min_similarity=min_similarity)
         else:
             semantic_results = []
+
+        # Smart hybrid: If keyword has strong results but semantic has none/few, favor keyword
+        if len(keyword_results) > 0 and len(semantic_results) < len(keyword_results) * 0.3:
+            logger.info(f"Smart hybrid: Keyword found {len(keyword_results)} results, semantic only {len(semantic_results)}. Increasing keyword weight.")
+            # Increase keyword weight when semantic has poor results
+            keyword_weight = min(0.8, keyword_weight + 0.3)
 
         # Combine results
         combined = self._combine_results(

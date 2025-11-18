@@ -396,13 +396,42 @@ def search_tab():
                 help="Maximale Anzahl Treffer aus demselben Buch (vermeidet Dominanz einzelner Bücher)"
             )
 
+        st.divider()
+
+        # Semantic confidence threshold
+        show_semantic_options = search_mode in ['semantic', 'hybrid']
+
+        if show_semantic_options:
+            st.markdown("**🎯 Semantische Suche - Konfidenz**")
+
+            min_similarity = st.slider(
+                "Minimale Ähnlichkeit (Confidence Threshold)",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                help="Filtert semantische Treffer unter diesem Schwellenwert. "
+                     "Höher = nur sehr relevante Treffer | Niedriger = mehr Treffer, aber evtl. weniger relevant. "
+                     "Empfohlen: 0.5-0.7 für gute Balance"
+            )
+
+            # Show interpretation
+            if min_similarity >= 0.7:
+                st.caption("🎯 Streng: Nur sehr relevante Treffer")
+            elif min_similarity >= 0.5:
+                st.caption("⚖️ Ausgewogen: Gute Balance zwischen Relevanz und Anzahl")
+            else:
+                st.caption("🔓 Tolerant: Viele Treffer, auch weniger relevante")
+        else:
+            min_similarity = 0.5  # Default for keyword-only
+
     # Search button
     if st.button("🔎 Suchen", type="primary") or (query and query != st.session_state.last_query):
         if not query:
             st.warning("⚠️ Bitte Suchbegriff eingeben!")
         else:
             diversity_limit = max_per_book if enable_diversity else None
-            perform_search(query, search_mode, context_type, context_size, max_results, diversity_limit)
+            perform_search(query, search_mode, context_type, context_size, max_results, diversity_limit, min_similarity)
             st.session_state.last_query = query
 
     # Display results
@@ -411,7 +440,7 @@ def search_tab():
         display_search_results(context_type, context_size)
 
 
-def perform_search(query, search_mode, context_type, context_size, max_results, max_per_book=None):
+def perform_search(query, search_mode, context_type, context_size, max_results, max_per_book=None, min_similarity=0.5):
     """Perform search and store results"""
     import random
 
@@ -458,9 +487,9 @@ def perform_search(query, search_mode, context_type, context_size, max_results, 
                 if search_mode == 'keyword':
                     results = engine.search_keyword(query, limit=max_results)
                 elif search_mode == 'semantic':
-                    results = engine.search_semantic(query, limit=max_results, max_per_book=max_per_book)
+                    results = engine.search_semantic(query, limit=max_results, max_per_book=max_per_book, min_similarity=min_similarity)
                 else:  # hybrid
-                    results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5, max_per_book=max_per_book)
+                    results = engine.search_hybrid(query, limit=max_results, keyword_weight=0.5, max_per_book=max_per_book, min_similarity=min_similarity)
 
             st.session_state.search_results = results
 
