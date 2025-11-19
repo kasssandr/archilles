@@ -183,6 +183,225 @@ class CalibreAnalyzer:
                 })
         return results
 
+    def get_book_details(self, book_id):
+        """Get detailed information about a specific book"""
+        # Get basic book info
+        query = """
+        SELECT id, title, pubdate, path, has_cover
+        FROM books WHERE id = ?
+        """
+        cursor = self.conn.execute(query, (book_id,))
+        book = cursor.fetchone()
+        if not book:
+            return None
+
+        book_dict = dict(book)
+
+        # Get authors
+        query = """
+        SELECT authors.name
+        FROM authors
+        JOIN books_authors_link ON authors.id = books_authors_link.author
+        WHERE books_authors_link.book = ?
+        ORDER BY books_authors_link.id
+        """
+        cursor = self.conn.execute(query, (book_id,))
+        book_dict['authors'] = [row['name'] for row in cursor.fetchall()]
+
+        # Get tags
+        query = """
+        SELECT tags.name
+        FROM tags
+        JOIN books_tags_link ON tags.id = books_tags_link.tag
+        WHERE books_tags_link.book = ?
+        """
+        cursor = self.conn.execute(query, (book_id,))
+        book_dict['tags'] = [row['name'] for row in cursor.fetchall()]
+
+        # Get identifiers (ISBN, etc.)
+        query = """
+        SELECT type, val
+        FROM identifiers
+        WHERE book = ?
+        """
+        cursor = self.conn.execute(query, (book_id,))
+        book_dict['identifiers'] = {row['type']: row['val'] for row in cursor.fetchall()}
+
+        # Get formats
+        query = """
+        SELECT format, name
+        FROM data
+        WHERE book = ?
+        """
+        cursor = self.conn.execute(query, (book_id,))
+        book_dict['formats'] = [row['format'] for row in cursor.fetchall()]
+
+        return book_dict
+
+    def normalize_title(self, title):
+        """Normalize title for comparison (remove articles, punctuation, lowercase)"""
+        if not title:
+            return ""
+
+        # Convert to lowercase
+        title = title.lower()
+
+        # Remove common articles in multiple languages
+        articles = ['the ', 'a ', 'an ', 'der ', 'die ', 'das ', 'ein ', 'eine ',
+                    'le ', 'la ', 'les ', 'un ', 'une ', 'el ', 'la ', 'los ', 'las ']
+        for article in articles:
+            if title.startswith(article):
+                title = title[len(article):]
+
+        # Remove punctuation and extra spaces
+        import re
+        title = re.sub(r'[^\w\s]', '', title)
+        title = re.sub(r'\s+', ' ', title).strip()
+
+        return title
+
+    def detect_duplicates(self, method='title_author', include_doublette_tag=True,
+                         similarity_threshold=0.9):
+        """
+        Detect duplicate books in the library.
+
+        Args:
+            method: Detection method - 'title_author', 'isbn', 'exact_title', or 'fuzzy'
+            include_doublette_tag: If True, also show books tagged with "Doublette"
+            similarity_threshold: Threshold for fuzzy matching (0.0-1.0)
+
+        Returns:
+            Dictionary with duplicate groups and statistics
+        """
+        duplicates = []
+
+        if method == 'isbn':
+            # Find duplicates by ISBN
+            query = """
+            SELECT i1.book as book1, i2.book as book2, i1.val as isbn
+            FROM identifiers i1
+            JOIN identifiers i2 ON i1.val = i2.val AND i1.type = i2.type
+            WHERE i1.book < i2.book
+            AND i1.type IN ('isbn', 'isbn13', 'isbn10')
+            """
+            cursor = self.conn.execute(query)
+            isbn_duplicates = defaultdict(list)
+            for row in cursor.fetchall():
+                isbn_duplicates[row['isbn']].extend([row['book1'], row['book2']])
+
+            for isbn, book_ids in isbn_duplicates.items():
+                book_ids = list(set(book_ids))  # Remove duplicates
+                if len(book_ids) > 1:
+                    books = [self.get_book_details(book_id) for book_id in book_ids]
+                    duplicates.append({
+                        'match_type': 'isbn',
+                        'match_value': isbn,
+                        'books': books,
+                        'count': len(books)
+                    })
+
+        elif method == 'exact_title':
+            # Find exact title matches
+            query = """
+            SELECT title, GROUP_CONCAT(id) as book_ids
+            FROM books
+            GROUP BY LOWER(title)
+            HAVING COUNT(*) > 1
+            """
+            cursor = self.conn.execute(query)
+            for row in cursor.fetchall():
+                book_ids = [int(x) for x in row['book_ids'].split(',')]
+                books = [self.get_book_details(book_id) for book_id in book_ids]
+                duplicates.append({
+                    'match_type': 'exact_title',
+                    'match_value': row['title'],
+                    'books': books,
+                    'count': len(books)
+                })
+
+        elif method == 'title_author':
+            # Find duplicates by normalized title + author
+            query = """
+            SELECT
+                b.id,
+                b.title,
+                GROUP_CONCAT(a.name, '|') as authors
+            FROM books b
+            LEFT JOIN books_authors_link bal ON b.id = bal.book
+            LEFT JOIN authors a ON bal.author = a.id
+            GROUP BY b.id
+            """
+            cursor = self.conn.execute(query)
+
+            # Group by normalized title and author
+            title_author_map = defaultdict(list)
+            for row in cursor.fetchall():
+                normalized_title = self.normalize_title(row['title'])
+                authors = row['authors'] if row['authors'] else ''
+                # Sort authors for consistent comparison
+                author_list = sorted([a.strip().lower() for a in authors.split('|')])
+                key = (normalized_title, tuple(author_list))
+                title_author_map[key].append(row['id'])
+
+            for (norm_title, authors), book_ids in title_author_map.items():
+                if len(book_ids) > 1:
+                    books = [self.get_book_details(book_id) for book_id in book_ids]
+                    duplicates.append({
+                        'match_type': 'title_author',
+                        'match_value': f"{norm_title} by {', '.join(authors)}",
+                        'books': books,
+                        'count': len(books)
+                    })
+
+        # Get books tagged with "Doublette"
+        doublette_books = []
+        if include_doublette_tag:
+            query = """
+            SELECT b.id
+            FROM books b
+            JOIN books_tags_link btl ON b.id = btl.book
+            JOIN tags t ON btl.tag = t.id
+            WHERE LOWER(t.name) = 'doublette'
+            """
+            cursor = self.conn.execute(query)
+            doublette_ids = [row['id'] for row in cursor.fetchall()]
+            doublette_books = [self.get_book_details(book_id) for book_id in doublette_ids]
+
+        return {
+            'method': method,
+            'duplicate_groups': duplicates,
+            'total_duplicate_groups': len(duplicates),
+            'total_duplicate_books': sum(d['count'] for d in duplicates),
+            'doublette_tagged_books': doublette_books,
+            'doublette_count': len(doublette_books)
+        }
+
+    def add_doublette_tag(self, book_id):
+        """
+        Add the 'Doublette' tag to a book.
+
+        Note: This is a read-only operation in this implementation.
+        To actually modify the database, use Calibre's calibredb command:
+        calibredb set_metadata <book_id> --field tags:+Doublette
+
+        Args:
+            book_id: ID of the book to tag
+
+        Returns:
+            Dictionary with instructions for manual tagging
+        """
+        book = self.get_book_details(book_id)
+        if not book:
+            return {'error': f'Book with ID {book_id} not found'}
+
+        return {
+            'book_id': book_id,
+            'title': book['title'],
+            'authors': book['authors'],
+            'current_tags': book['tags'],
+            'instruction': f'To add "Doublette" tag, run: calibredb set_metadata {book_id} --field tags:"+Doublette"'
+        }
+
     def get_complete_analysis(self):
         """Get complete analysis of the library"""
         return {
@@ -286,6 +505,52 @@ class CalibreAnalyzer:
 
         print("=" * 60)
 
+    def print_duplicates(self, method='title_author'):
+        """Print a human-readable summary of duplicates"""
+        result = self.detect_duplicates(method=method)
+
+        print("=" * 60)
+        print("DUPLICATE DETECTION RESULTS")
+        print("=" * 60)
+        print()
+        print(f"Detection method: {result['method']}")
+        print(f"Duplicate groups found: {result['total_duplicate_groups']}")
+        print(f"Total duplicate books: {result['total_duplicate_books']}")
+        print()
+
+        if result['duplicate_groups']:
+            print("Duplicate Groups:")
+            print("-" * 60)
+            for i, group in enumerate(result['duplicate_groups'], 1):
+                print(f"\nGroup {i}: {group['match_type']} - {group['match_value']}")
+                print(f"  {group['count']} books:")
+                for book in group['books']:
+                    authors = ', '.join(book['authors']) if book['authors'] else 'Unknown'
+                    tags = ', '.join(book['tags']) if book['tags'] else 'No tags'
+                    formats = ', '.join(book['formats']) if book['formats'] else 'No formats'
+                    print(f"    • ID {book['id']}: {book['title']}")
+                    print(f"      Authors: {authors}")
+                    print(f"      Tags: {tags}")
+                    print(f"      Formats: {formats}")
+                    print(f"      Path: {book['path']}")
+        else:
+            print("No duplicates found!")
+
+        # Show Doublette-tagged books
+        if result['doublette_count'] > 0:
+            print()
+            print("=" * 60)
+            print(f"Books tagged with 'Doublette': {result['doublette_count']}")
+            print("-" * 60)
+            for book in result['doublette_tagged_books']:
+                authors = ', '.join(book['authors']) if book['authors'] else 'Unknown'
+                print(f"  • ID {book['id']}: {book['title']}")
+                print(f"    Authors: {authors}")
+                print(f"    Path: {book['path']}")
+
+        print()
+        print("=" * 60)
+
 
 def main():
     """Main entry point for the CLI"""
@@ -315,15 +580,35 @@ Examples:
     parser.add_argument(
         '-f', '--filter',
         choices=['authors', 'publishers', 'tags', 'languages', 'series',
-                 'ratings', 'years', 'formats', 'incomplete'],
+                 'ratings', 'years', 'formats', 'incomplete', 'duplicates'],
         help='Show only specific statistics'
+    )
+
+    parser.add_argument(
+        '--duplicates',
+        action='store_true',
+        help='Find duplicate books in the library'
+    )
+
+    parser.add_argument(
+        '--duplicate-method',
+        choices=['title_author', 'isbn', 'exact_title'],
+        default='title_author',
+        help='Duplicate detection method (default: title_author)'
     )
 
     args = parser.parse_args()
 
     try:
         with CalibreAnalyzer(args.database) as analyzer:
-            if args.output == 'json':
+            # Handle duplicates detection
+            if args.duplicates or args.filter == 'duplicates':
+                if args.output == 'json':
+                    data = analyzer.detect_duplicates(method=args.duplicate_method)
+                    print(json.dumps(data, indent=2, ensure_ascii=False))
+                else:
+                    analyzer.print_duplicates(method=args.duplicate_method)
+            elif args.output == 'json':
                 if args.filter:
                     # Get only specific data
                     method_map = {

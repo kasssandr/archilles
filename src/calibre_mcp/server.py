@@ -8,8 +8,13 @@ Provides tools for searching, analyzing, and accessing Calibre library data.
 
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any, Optional
+
+# Add parent directory to path to import calibre_analyzer
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from calibre_analyzer import CalibreAnalyzer
 
 from .annotations import (
     compute_book_hash,
@@ -58,6 +63,17 @@ class CalibreMCPServer:
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
         self.enable_semantic_search = enable_semantic_search
+
+        # Initialize database path for metadata operations
+        self.db_path = None
+        if library_path:
+            db_candidate = Path(library_path) / "metadata.db"
+            if db_candidate.exists():
+                self.db_path = str(db_candidate)
+            else:
+                # Check if library_path is the metadata.db itself
+                if Path(library_path).name == "metadata.db" and Path(library_path).exists():
+                    self.db_path = library_path
 
         # Initialize semantic search if enabled
         self.indexer = None
@@ -256,6 +272,99 @@ class CalibreMCPServer:
             'statistics': stats
         }
 
+    def detect_duplicates_tool(
+        self,
+        method: str = 'title_author',
+        include_doublette_tag: bool = True
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: Detect duplicate books in the library.
+
+        Supports multiple detection methods:
+        - 'title_author': Match by normalized title and author (most thorough)
+        - 'isbn': Match by ISBN (most accurate)
+        - 'exact_title': Match by exact title only
+
+        Args:
+            method: Detection method - 'title_author', 'isbn', or 'exact_title'
+            include_doublette_tag: Also show books tagged with "Doublette"
+
+        Returns:
+            Dictionary with duplicate groups and statistics
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available',
+                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                result = analyzer.detect_duplicates(
+                    method=method,
+                    include_doublette_tag=include_doublette_tag
+                )
+                return result
+        except Exception as e:
+            return {
+                'error': f'Failed to detect duplicates: {str(e)}'
+            }
+
+    def get_book_details_tool(self, book_id: int) -> dict[str, Any]:
+        """
+        MCP Tool: Get detailed information about a specific book.
+
+        Args:
+            book_id: Calibre book ID
+
+        Returns:
+            Dictionary with book details
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available',
+                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                book = analyzer.get_book_details(book_id)
+                if not book:
+                    return {
+                        'error': f'Book with ID {book_id} not found'
+                    }
+                return book
+        except Exception as e:
+            return {
+                'error': f'Failed to get book details: {str(e)}'
+            }
+
+    def get_doublette_tag_instruction_tool(self, book_id: int) -> dict[str, Any]:
+        """
+        MCP Tool: Get instructions for adding the "Doublette" tag to a book.
+
+        Note: This server cannot modify the database directly.
+        Use Calibre's calibredb command to actually add tags.
+
+        Args:
+            book_id: Calibre book ID
+
+        Returns:
+            Dictionary with tagging instructions
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                return analyzer.add_doublette_tag(book_id)
+        except Exception as e:
+            return {
+                'error': f'Failed to get tag instruction: {str(e)}'
+            }
+
 
 def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
     """
@@ -383,6 +492,54 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
             'inputSchema': {
                 'type': 'object',
                 'properties': {}
+            }
+        },
+        {
+            'name': 'detect_duplicates',
+            'description': 'Detect duplicate books in the library using various methods (title+author, ISBN, or exact title). Also shows books tagged with "Doublette".',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'method': {
+                        'type': 'string',
+                        'enum': ['title_author', 'isbn', 'exact_title'],
+                        'description': 'Detection method: title_author (normalized title+author), isbn (by ISBN), or exact_title (exact title match)',
+                        'default': 'title_author'
+                    },
+                    'include_doublette_tag': {
+                        'type': 'boolean',
+                        'description': 'Also show books tagged with "Doublette"',
+                        'default': True
+                    }
+                }
+            }
+        },
+        {
+            'name': 'get_book_details',
+            'description': 'Get detailed information about a specific book by Calibre book ID',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'book_id': {
+                        'type': 'integer',
+                        'description': 'Calibre book ID'
+                    }
+                },
+                'required': ['book_id']
+            }
+        },
+        {
+            'name': 'get_doublette_tag_instruction',
+            'description': 'Get instructions for adding the "Doublette" tag to a book (for manual tagging)',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'book_id': {
+                        'type': 'integer',
+                        'description': 'Calibre book ID to tag'
+                    }
+                },
+                'required': ['book_id']
             }
         }
     ]
