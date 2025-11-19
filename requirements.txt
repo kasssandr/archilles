@@ -1,12 +1,18 @@
-# Calibre Metadata Analyzer Requirements
+# Calibre MCP Server & Tools Requirements
 #
-# This tool uses only Python standard library modules:
-# - sqlite3 (included in Python)
-# - argparse (included in Python)
-# - pathlib (included in Python)
-# - collections (included in Python)
-# - json (included in Python)
-#
-# No external dependencies required!
-#
-# Python version: 3.6+
+# Core dependencies (always required)
+# Python version: 3.7+
+
+# PDF annotation extraction (optional, but recommended)
+PyMuPDF>=1.23.0
+
+# Semantic search with embeddings (optional)
+# Required for semantic annotation search
+chromadb>=0.4.0
+
+# Additional semantic search dependencies
+# (usually installed automatically with chromadb)
+sentence-transformers>=2.2.0
+
+# Standard library modules (included in Python):
+# - sqlite3, argparse, pathlib, collections, json, hashlib, logging, re, datetime
