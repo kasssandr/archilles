@@ -402,6 +402,258 @@ class CalibreAnalyzer:
             'instruction': f'To add "Doublette" tag, run: calibredb set_metadata {book_id} --field tags:"+Doublette"'
         }
 
+    def export_bibliography(self, format='bibtex', author=None, tag=None,
+                           year_from=None, year_to=None, max_books=None):
+        """
+        Export bibliography in various formats.
+
+        Args:
+            format: Export format - 'bibtex', 'ris', 'endnote', 'json', 'csv'
+            author: Filter by author name (case-insensitive partial match)
+            tag: Filter by tag name (case-insensitive partial match)
+            year_from: Filter books published from this year
+            year_to: Filter books published up to this year
+            max_books: Maximum number of books to export
+
+        Returns:
+            Dictionary with exported data and metadata
+        """
+        # Build query with filters
+        query = """
+        SELECT DISTINCT
+            b.id,
+            b.title,
+            b.pubdate,
+            b.path,
+            b.isbn
+        FROM books b
+        """
+
+        conditions = []
+        params = []
+
+        # Add author filter
+        if author:
+            query += """
+            JOIN books_authors_link bal ON b.id = bal.book
+            JOIN authors a ON bal.author = a.id
+            """
+            conditions.append("LOWER(a.name) LIKE ?")
+            params.append(f"%{author.lower()}%")
+
+        # Add tag filter
+        if tag:
+            query += """
+            JOIN books_tags_link btl ON b.id = btl.book
+            JOIN tags t ON btl.tag = t.id
+            """
+            conditions.append("LOWER(t.name) LIKE ?")
+            params.append(f"%{tag.lower()}%")
+
+        # Add year filters
+        if year_from:
+            conditions.append("strftime('%Y', b.pubdate) >= ?")
+            params.append(str(year_from))
+
+        if year_to:
+            conditions.append("strftime('%Y', b.pubdate) <= ?")
+            params.append(str(year_to))
+
+        # Combine conditions
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+
+        # Add limit
+        if max_books:
+            query += f" LIMIT {int(max_books)}"
+
+        cursor = self.conn.execute(query, params)
+        book_ids = [row['id'] for row in cursor.fetchall()]
+
+        # Get full details for each book
+        books = [self.get_book_details(book_id) for book_id in book_ids]
+
+        # Export in requested format
+        if format == 'bibtex':
+            exported = self._export_bibtex(books)
+        elif format == 'ris':
+            exported = self._export_ris(books)
+        elif format == 'endnote':
+            exported = self._export_endnote(books)
+        elif format == 'json':
+            exported = json.dumps(books, indent=2, ensure_ascii=False)
+        elif format == 'csv':
+            exported = self._export_csv(books)
+        else:
+            return {'error': f'Unsupported format: {format}'}
+
+        return {
+            'format': format,
+            'book_count': len(books),
+            'filters': {
+                'author': author,
+                'tag': tag,
+                'year_from': year_from,
+                'year_to': year_to
+            },
+            'data': exported
+        }
+
+    def _export_bibtex(self, books):
+        """Export books in BibTeX format"""
+        entries = []
+
+        for book in books:
+            # Generate citation key (Author_Year_Title)
+            author_part = book['authors'][0].split()[-1] if book['authors'] else 'Unknown'
+            year_part = book['pubdate'][:4] if book['pubdate'] else 'NODATE'
+            title_part = ''.join(c for c in book['title'][:20] if c.isalnum())
+            cite_key = f"{author_part}{year_part}{title_part}"
+
+            entry = f"@book{{{cite_key},\n"
+            entry += f"  title = {{{book['title']}}},\n"
+
+            if book['authors']:
+                authors = ' and '.join(book['authors'])
+                entry += f"  author = {{{authors}}},\n"
+
+            if book['pubdate']:
+                entry += f"  year = {{{book['pubdate'][:4]}}},\n"
+
+            # Get publisher info
+            query = """
+            SELECT p.name
+            FROM publishers p
+            JOIN books_publishers_link bpl ON p.id = bpl.publisher
+            WHERE bpl.book = ?
+            """
+            cursor = self.conn.execute(query, (book['id'],))
+            publisher = cursor.fetchone()
+            if publisher:
+                entry += f"  publisher = {{{publisher['name']}}},\n"
+
+            if book['identifiers'].get('isbn'):
+                entry += f"  isbn = {{{book['identifiers']['isbn']}}},\n"
+
+            if book['tags']:
+                keywords = ', '.join(book['tags'])
+                entry += f"  keywords = {{{keywords}}},\n"
+
+            entry += "}\n"
+            entries.append(entry)
+
+        return '\n'.join(entries)
+
+    def _export_ris(self, books):
+        """Export books in RIS format"""
+        entries = []
+
+        for book in books:
+            entry = "TY  - BOOK\n"
+            entry += f"TI  - {book['title']}\n"
+
+            for author in book['authors']:
+                entry += f"AU  - {author}\n"
+
+            if book['pubdate']:
+                entry += f"PY  - {book['pubdate'][:4]}\n"
+
+            # Get publisher
+            query = """
+            SELECT p.name
+            FROM publishers p
+            JOIN books_publishers_link bpl ON p.id = bpl.publisher
+            WHERE bpl.book = ?
+            """
+            cursor = self.conn.execute(query, (book['id'],))
+            publisher = cursor.fetchone()
+            if publisher:
+                entry += f"PB  - {publisher['name']}\n"
+
+            if book['identifiers'].get('isbn'):
+                entry += f"SN  - {book['identifiers']['isbn']}\n"
+
+            for tag in book['tags']:
+                entry += f"KW  - {tag}\n"
+
+            entry += "ER  - \n"
+            entries.append(entry)
+
+        return '\n'.join(entries)
+
+    def _export_endnote(self, books):
+        """Export books in EndNote format"""
+        entries = []
+
+        for book in books:
+            entry = "%0 Book\n"
+            entry += f"%T {book['title']}\n"
+
+            for author in book['authors']:
+                entry += f"%A {author}\n"
+
+            if book['pubdate']:
+                entry += f"%D {book['pubdate'][:4]}\n"
+
+            # Get publisher
+            query = """
+            SELECT p.name
+            FROM publishers p
+            JOIN books_publishers_link bpl ON p.id = bpl.publisher
+            WHERE bpl.book = ?
+            """
+            cursor = self.conn.execute(query, (book['id'],))
+            publisher = cursor.fetchone()
+            if publisher:
+                entry += f"%I {publisher['name']}\n"
+
+            if book['identifiers'].get('isbn'):
+                entry += f"%@ {book['identifiers']['isbn']}\n"
+
+            for tag in book['tags']:
+                entry += f"%K {tag}\n"
+
+            entries.append(entry)
+
+        return '\n'.join(entries)
+
+    def _export_csv(self, books):
+        """Export books in CSV format"""
+        import csv
+        from io import StringIO
+
+        output = StringIO()
+        writer = csv.writer(output)
+
+        # Write header
+        writer.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
+
+        # Write data
+        for book in books:
+            # Get publisher
+            query = """
+            SELECT p.name
+            FROM publishers p
+            JOIN books_publishers_link bpl ON p.id = bpl.publisher
+            WHERE bpl.book = ?
+            """
+            cursor = self.conn.execute(query, (book['id'],))
+            publisher = cursor.fetchone()
+            publisher_name = publisher['name'] if publisher else ''
+
+            writer.writerow([
+                book['id'],
+                book['title'],
+                '; '.join(book['authors']),
+                book['pubdate'][:4] if book['pubdate'] else '',
+                publisher_name,
+                book['identifiers'].get('isbn', ''),
+                '; '.join(book['tags']),
+                '; '.join(book['formats'])
+            ])
+
+        return output.getvalue()
+
     def get_complete_analysis(self):
         """Get complete analysis of the library"""
         return {

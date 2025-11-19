@@ -365,6 +365,54 @@ class CalibreMCPServer:
                 'error': f'Failed to get tag instruction: {str(e)}'
             }
 
+    def export_bibliography_tool(
+        self,
+        format: str = 'bibtex',
+        author: Optional[str] = None,
+        tag: Optional[str] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        max_books: Optional[int] = None
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: Export bibliography in various formats.
+
+        Supports BibTeX, RIS, EndNote, JSON, and CSV formats.
+        Books can be filtered by author, tag, and publication year.
+
+        Args:
+            format: Export format - 'bibtex', 'ris', 'endnote', 'json', 'csv'
+            author: Filter by author name (case-insensitive partial match)
+            tag: Filter by tag name (case-insensitive partial match)
+            year_from: Filter books published from this year
+            year_to: Filter books published up to this year
+            max_books: Maximum number of books to export
+
+        Returns:
+            Dictionary with exported bibliography data
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available',
+                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                result = analyzer.export_bibliography(
+                    format=format,
+                    author=author,
+                    tag=tag,
+                    year_from=year_from,
+                    year_to=year_to,
+                    max_books=max_books
+                )
+                return result
+        except Exception as e:
+            return {
+                'error': f'Failed to export bibliography: {str(e)}'
+            }
+
 
 def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
     """
@@ -540,6 +588,41 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     }
                 },
                 'required': ['book_id']
+            }
+        },
+        {
+            'name': 'export_bibliography',
+            'description': 'Export bibliography in various formats (BibTeX, RIS, EndNote, JSON, CSV). Books can be filtered by author, tag, and publication year.',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'format': {
+                        'type': 'string',
+                        'enum': ['bibtex', 'ris', 'endnote', 'json', 'csv'],
+                        'description': 'Export format: bibtex (LaTeX), ris (Reference Manager), endnote, json, or csv',
+                        'default': 'bibtex'
+                    },
+                    'author': {
+                        'type': 'string',
+                        'description': 'Filter by author name (case-insensitive partial match)'
+                    },
+                    'tag': {
+                        'type': 'string',
+                        'description': 'Filter by tag name (case-insensitive partial match)'
+                    },
+                    'year_from': {
+                        'type': 'integer',
+                        'description': 'Filter books published from this year (e.g., 2000)'
+                    },
+                    'year_to': {
+                        'type': 'integer',
+                        'description': 'Filter books published up to this year (e.g., 2023)'
+                    },
+                    'max_books': {
+                        'type': 'integer',
+                        'description': 'Maximum number of books to export'
+                    }
+                }
             }
         }
     ]
