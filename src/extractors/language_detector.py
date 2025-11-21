@@ -1,7 +1,7 @@
 """
 Automatic language detection for text chunks.
 
-Uses langdetect library to identify languages (ISO 639-1 codes).
+Uses Lingua library for accurate language identification (ISO 639-1 codes).
 Optimized for academic texts in multiple languages.
 """
 
@@ -9,23 +9,40 @@ from typing import Optional, List, Dict
 import logging
 
 try:
-    from langdetect import detect, detect_langs, LangDetectException
-    LANGDETECT_AVAILABLE = True
+    from lingua import Language, LanguageDetectorBuilder
+    LINGUA_AVAILABLE = True
+
+    # Build detector with languages common in Tom's library
+    # Focus on European languages + classical languages
+    _DETECTOR = LanguageDetectorBuilder.from_languages(
+        Language.ENGLISH,
+        Language.GERMAN,
+        Language.FRENCH,
+        Language.LATIN,
+        Language.ITALIAN,
+        Language.SPANISH,
+        Language.GREEK,  # Modern Greek (ancient Greek not distinguished)
+        Language.HEBREW,
+        Language.ARABIC,
+        Language.RUSSIAN,
+        Language.PORTUGUESE,
+        Language.DUTCH,
+    ).build()
 except ImportError:
-    LANGDETECT_AVAILABLE = False
+    LINGUA_AVAILABLE = False
+    _DETECTOR = None
 
 logger = logging.getLogger(__name__)
 
 
 class LanguageDetector:
     """
-    Detect language of text chunks.
+    Detect language of text chunks using Lingua library.
 
-    Returns ISO 639-1 codes (e.g., 'en', 'de', 'la', 'grc') or
-    ISO 639-3 for ancient languages.
+    Returns ISO 639-1 codes (e.g., 'en', 'de', 'la', 'el').
     """
 
-    # Common languages in Tom's library
+    # Language code mapping (Lingua uses ISO 639-1)
     LANGUAGE_NAMES = {
         'en': 'English',
         'de': 'German',
@@ -33,9 +50,12 @@ class LanguageDetector:
         'la': 'Latin',
         'it': 'Italian',
         'es': 'Spanish',
-        'grc': 'Ancient Greek',
+        'el': 'Greek',  # Modern Greek (covers ancient Greek text too)
         'he': 'Hebrew',
         'ar': 'Arabic',
+        'ru': 'Russian',
+        'pt': 'Portuguese',
+        'nl': 'Dutch',
     }
 
     @classmethod
@@ -48,10 +68,10 @@ class LanguageDetector:
             min_confidence: Minimum confidence threshold (0-1)
 
         Returns:
-            ISO 639-1/3 language code or None if uncertain
+            ISO 639-1 language code or None if uncertain
         """
-        if not LANGDETECT_AVAILABLE:
-            logger.debug("langdetect not available, skipping language detection")
+        if not LINGUA_AVAILABLE or _DETECTOR is None:
+            logger.debug("Lingua not available, skipping language detection")
             return None
 
         if not text or len(text.strip()) < 50:
@@ -59,26 +79,29 @@ class LanguageDetector:
             return None
 
         try:
-            # Get probabilities for all detected languages
-            lang_probs = detect_langs(text)
+            # Get confidence values for all languages
+            confidence_values = _DETECTOR.compute_language_confidence_values(text)
 
-            if not lang_probs:
+            if not confidence_values:
                 return None
 
-            # Get most likely language
-            top_lang = lang_probs[0]
+            # Get most confident language
+            top_match = confidence_values[0]
+            confidence = top_match.value
 
             # Only return if confidence is high enough
-            if top_lang.prob >= min_confidence:
-                return top_lang.lang
+            if confidence >= min_confidence:
+                # Convert Language enum to ISO code
+                lang_code = top_match.language.iso_code_639_1.name.lower()
+                return lang_code
             else:
                 logger.debug(
-                    f"Language detection uncertain: {top_lang.lang} "
-                    f"({top_lang.prob:.2f} < {min_confidence})"
+                    f"Language detection uncertain: {top_match.language.name} "
+                    f"({confidence:.2f} < {min_confidence})"
                 )
                 return None
 
-        except LangDetectException as e:
+        except Exception as e:
             logger.debug(f"Language detection failed: {e}")
             return None
 
@@ -93,27 +116,36 @@ class LanguageDetector:
         Returns:
             Dict with 'language' and 'confidence', or None
         """
-        if not LANGDETECT_AVAILABLE:
+        if not LINGUA_AVAILABLE or _DETECTOR is None:
             return None
 
         if not text or len(text.strip()) < 50:
             return None
 
         try:
-            lang_probs = detect_langs(text)
-            if not lang_probs:
+            confidence_values = _DETECTOR.compute_language_confidence_values(text)
+
+            if not confidence_values:
                 return None
 
-            top_lang = lang_probs[0]
+            top_match = confidence_values[0]
+            lang_code = top_match.language.iso_code_639_1.name.lower()
+
+            alternatives = []
+            for match in confidence_values[1:3]:  # Top 3 alternatives
+                alt_code = match.language.iso_code_639_1.name.lower()
+                alternatives.append({
+                    'language': alt_code,
+                    'confidence': match.value
+                })
+
             return {
-                'language': top_lang.lang,
-                'confidence': top_lang.prob,
-                'alternatives': [
-                    {'language': lp.lang, 'confidence': lp.prob}
-                    for lp in lang_probs[1:3]  # Top 3 alternatives
-                ]
+                'language': lang_code,
+                'confidence': top_match.value,
+                'alternatives': alternatives
             }
-        except LangDetectException:
+        except Exception as e:
+            logger.debug(f"Language detection failed: {e}")
             return None
 
     @classmethod
@@ -132,10 +164,10 @@ class LanguageDetector:
         Returns:
             Same chunks with 'language' added to metadata
         """
-        if not LANGDETECT_AVAILABLE:
+        if not LINGUA_AVAILABLE:
             logger.warning(
-                "langdetect not installed. Language filtering won't work. "
-                "Install with: pip install langdetect"
+                "Lingua not installed. Language filtering won't work. "
+                "Install with: pip install lingua-language-detector"
             )
             return chunks
 
@@ -154,7 +186,7 @@ class LanguageDetector:
     @classmethod
     def is_available(cls) -> bool:
         """Check if language detection is available."""
-        return LANGDETECT_AVAILABLE
+        return LINGUA_AVAILABLE and _DETECTOR is not None
 
     @classmethod
     def get_language_name(cls, code: str) -> str:
@@ -162,7 +194,7 @@ class LanguageDetector:
         Get human-readable language name from code.
 
         Args:
-            code: ISO 639-1/3 language code
+            code: ISO 639-1 language code
 
         Returns:
             Language name or the code itself
