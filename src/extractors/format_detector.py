@@ -1,9 +1,15 @@
 """Detect e-book format from file content (not just extension)."""
 
-import magic
 from pathlib import Path
 from typing import Optional, Tuple
 import mimetypes
+
+# Try to import python-magic (optional dependency)
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except ImportError:
+    MAGIC_AVAILABLE = False
 
 
 class FormatDetector:
@@ -106,14 +112,20 @@ class FormatDetector:
     @classmethod
     def _detect_by_mime(cls, file_path: Path) -> Optional[str]:
         """Detect format by MIME type."""
+        # Try python-magic if available
+        if MAGIC_AVAILABLE:
+            try:
+                mime = magic.from_file(str(file_path), mime=True)
+                return cls.MIME_TO_FORMAT.get(mime)
+            except Exception:
+                pass
+
+        # Fallback to mimetypes module (always available)
         try:
-            # Try python-magic if available
-            mime = magic.from_file(str(file_path), mime=True)
-            return cls.MIME_TO_FORMAT.get(mime)
-        except (ImportError, AttributeError):
-            # Fallback to mimetypes module
             mime, _ = mimetypes.guess_type(str(file_path))
             return cls.MIME_TO_FORMAT.get(mime) if mime else None
+        except Exception:
+            return None
 
     @classmethod
     def is_supported(cls, file_path: Path) -> bool:

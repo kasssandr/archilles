@@ -10,8 +10,11 @@ ebooklib==0.18  # EPUB extraction
 beautifulsoup4==4.12.2  # HTML/XML parsing
 lxml==5.1.0  # XML parser for BeautifulSoup
 
-# File format detection
-python-magic==0.4.27  # Magic byte detection
+# File format detection (optional - improves format detection accuracy)
+# WINDOWS USERS: Use python-magic-bin instead (includes required DLL):
+#   pip uninstall python-magic
+#   pip install python-magic-bin==0.4.14
+python-magic==0.4.27  # Magic byte detection (Linux/macOS)
 
 # Encoding detection
 chardet==5.2.0  # Character encoding detection
