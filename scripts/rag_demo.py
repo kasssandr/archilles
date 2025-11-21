@@ -165,6 +165,10 @@ class AchillesRAG:
             if 'metadata' in chunk and chunk['metadata'].get('chapter'):
                 metadata['chapter'] = chunk['metadata']['chapter']
 
+            # Add language info if available
+            if 'metadata' in chunk and chunk['metadata'].get('language'):
+                metadata['language'] = chunk['metadata']['language']
+
             metadatas.append(metadata)
 
         # Add to collection
@@ -195,18 +199,34 @@ class AchillesRAG:
             'total_time': total_time,
         }
 
-    def query(self, query_text: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def query(
+        self,
+        query_text: str,
+        top_k: int = 5,
+        language: str = None,
+        book_id: str = None
+    ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
 
         Args:
             query_text: Search query
             top_k: Number of results to return
+            language: Filter by language (e.g., 'deu', 'eng', 'lat') or comma-separated list
+            book_id: Filter by specific book ID
 
         Returns:
             List of relevant chunks with metadata and scores
         """
-        print(f"🔍 QUERY: \"{query_text}\"")
+        # Build filter message
+        filters = []
+        if language:
+            filters.append(f"language={language}")
+        if book_id:
+            filters.append(f"book={book_id}")
+
+        filter_msg = f" ({', '.join(filters)})" if filters else ""
+        print(f"🔍 QUERY: \"{query_text}\"{filter_msg}")
         print(f"  Searching {self.collection.count()} chunks...\n")
 
         # Generate query embedding
@@ -215,10 +235,36 @@ class AchillesRAG:
             convert_to_numpy=True
         ).tolist()
 
+        # Build where clause for filtering
+        where_clause = None
+        if language or book_id:
+            where_conditions = {}
+
+            if language:
+                # Support comma-separated languages
+                if ',' in language:
+                    langs = [l.strip() for l in language.split(',')]
+                    where_conditions['language'] = {'$in': langs}
+                else:
+                    where_conditions['language'] = language
+
+            if book_id:
+                where_conditions['book_id'] = book_id
+
+            # Combine conditions with AND
+            if len(where_conditions) > 1:
+                where_clause = {'$and': [
+                    {k: v} for k, v in where_conditions.items()
+                ]}
+            elif where_conditions:
+                # Single condition
+                where_clause = where_conditions
+
         # Search in ChromaDB
         results = self.collection.query(
             query_embeddings=[query_embedding],
-            n_results=top_k
+            n_results=top_k,
+            where=where_clause
         )
 
         # Format results
@@ -285,6 +331,14 @@ Examples:
 
   # Query with more results
   python scripts/rag_demo.py query "Jewish kings" --top-k 10
+
+  # Filter by language
+  python scripts/rag_demo.py query "kings" --language deu
+  python scripts/rag_demo.py query "Rex" --language lat
+  python scripts/rag_demo.py query "kings" --language deu,eng
+
+  # Filter by book
+  python scripts/rag_demo.py query "Marcion" --book-id "tmpe_ea18s7"
         """
     )
 
@@ -300,6 +354,8 @@ Examples:
     query_parser = subparsers.add_parser('query', help='Search indexed books')
     query_parser.add_argument('query', help='Search query')
     query_parser.add_argument('--top-k', type=int, default=5, help='Number of results (default: 5)')
+    query_parser.add_argument('--language', help='Filter by language (e.g., deu, eng, lat) or comma-separated')
+    query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
 
     # Stats command
@@ -322,7 +378,12 @@ Examples:
 
         elif args.command == 'query':
             # Search
-            results = rag.query(args.query, args.top_k)
+            results = rag.query(
+                args.query,
+                args.top_k,
+                language=args.language,
+                book_id=args.book_id
+            )
             rag.print_results(results)
 
         elif args.command == 'stats':
