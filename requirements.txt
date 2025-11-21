@@ -19,6 +19,15 @@ python-magic==0.4.27  # Magic byte detection (Linux/macOS)
 # Encoding detection
 chardet==5.2.0  # Character encoding detection
 
+# ===== RAG DEPENDENCIES =====
+
+# Embeddings & Vector Search
+sentence-transformers==2.3.1  # BGE-M3 embeddings (multilingual)
+chromadb==0.4.22  # Vector database (local, no server)
+
+# Progress bars & utilities
+tqdm==4.66.1  # Progress bars for indexing
+
 # OCR (optional, for scanned PDFs)
 # pytesseract==0.3.10  # Tesseract OCR wrapper
 # Pillow==10.1.0  # Image processing for OCR
