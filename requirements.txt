@@ -1,12 +1,45 @@
-# Calibre Metadata Analyzer Requirements
-#
-# This tool uses only Python standard library modules:
-# - sqlite3 (included in Python)
-# - argparse (included in Python)
-# - pathlib (included in Python)
-# - collections (included in Python)
-# - json (included in Python)
-#
-# No external dependencies required!
-#
-# Python version: 3.6+
+# Achilles RAG System Requirements
+# Python version: 3.11+
+
+# ===== CORE DEPENDENCIES =====
+
+# Text extraction
+pdfplumber==0.11.0  # PDF extraction (layout-aware)
+pymupdf==1.23.26  # PyMuPDF (fallback for PDF)
+ebooklib==0.18  # EPUB extraction
+beautifulsoup4==4.12.2  # HTML/XML parsing
+lxml==5.1.0  # XML parser for BeautifulSoup
+
+# File format detection (optional - improves format detection accuracy)
+# WINDOWS USERS: Use python-magic-bin instead (includes required DLL):
+#   pip uninstall python-magic
+#   pip install python-magic-bin==0.4.14
+python-magic==0.4.27  # Magic byte detection (Linux/macOS)
+
+# Encoding detection
+chardet==5.2.0  # Character encoding detection
+
+# Language detection
+lingua-language-detector==2.1.1  # Modern, accurate language detection (supports 75+ languages)
+
+# ===== RAG DEPENDENCIES =====
+
+# Embeddings & Vector Search
+sentence-transformers==2.3.1  # BGE-M3 embeddings (multilingual)
+chromadb==0.4.22  # Vector database (local, no server)
+
+# Progress bars & utilities
+tqdm==4.66.1  # Progress bars for indexing
+
+# OCR (optional, for scanned PDFs)
+# pytesseract==0.3.10  # Tesseract OCR wrapper
+# Pillow==10.1.0  # Image processing for OCR
+
+# ===== CALIBRE METADATA ANALYZER (Legacy) =====
+# These are built-in, no external dependencies needed:
+# - sqlite3, argparse, pathlib, collections, json
+
+# ===== NOTES =====
+# - Calibre's ebook-convert must be installed separately: https://calibre-ebook.com/download
+# - For OCR: Tesseract must be installed: https://github.com/tesseract-ocr/tesseract
+# - For full functionality, install Calibre and add to PATH
