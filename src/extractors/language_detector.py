@@ -7,6 +7,7 @@ Optimized for academic texts in multiple languages.
 
 from typing import Optional, List, Dict
 import logging
+from collections import Counter
 
 try:
     from lingua import Language, LanguageDetectorBuilder
@@ -141,7 +142,8 @@ class LanguageDetector:
     def detect_for_chunks(
         cls,
         chunks: List[Dict],
-        min_confidence: float = 0.9
+        min_confidence: float = 0.9,
+        show_progress: bool = True
     ) -> List[Dict]:
         """
         Add language detection to chunks.
@@ -149,6 +151,7 @@ class LanguageDetector:
         Args:
             chunks: List of chunks with 'text' key
             min_confidence: Minimum confidence threshold
+            show_progress: Show progress bar (default: True)
 
         Returns:
             Same chunks with 'language' added to metadata
@@ -160,7 +163,16 @@ class LanguageDetector:
             )
             return chunks
 
-        for chunk in chunks:
+        # Progress bar
+        try:
+            from tqdm import tqdm
+            iterator = tqdm(chunks, desc="    Detecting languages", leave=False) if show_progress else chunks
+        except ImportError:
+            iterator = chunks
+
+        detected_languages = []
+
+        for chunk in iterator:
             text = chunk.get('text', '')
             lang = cls.detect(text, min_confidence=min_confidence)
 
@@ -169,6 +181,16 @@ class LanguageDetector:
                 if 'metadata' not in chunk:
                     chunk['metadata'] = {}
                 chunk['metadata']['language'] = lang
+                detected_languages.append(lang)
+
+        # Print summary
+        if show_progress and detected_languages:
+            lang_counts = Counter(detected_languages)
+            summary_parts = [f"{cls.get_language_name(lang)} ({count})"
+                           for lang, count in lang_counts.most_common()]
+            summary = ", ".join(summary_parts)
+            print(f"    ✓ Languages detected: {summary}")
+            print(f"    ✓ {len(detected_languages)}/{len(chunks)} chunks with language info")
 
         return chunks
 
