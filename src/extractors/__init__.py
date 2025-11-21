@@ -9,6 +9,7 @@ Supports all common e-book formats through a fallback chain:
 
 from .universal_extractor import UniversalExtractor
 from .format_detector import FormatDetector
+from .language_detector import LanguageDetector
 from .models import ExtractedText, ExtractionMetadata, ChunkMetadata
 from .exceptions import (
     ExtractionError,
@@ -19,6 +20,7 @@ from .exceptions import (
 __all__ = [
     'UniversalExtractor',
     'FormatDetector',
+    'LanguageDetector',
     'ExtractedText',
     'ExtractionMetadata',
     'ChunkMetadata',

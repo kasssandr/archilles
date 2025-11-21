@@ -7,6 +7,7 @@ import time
 
 from .models import ExtractedText, ExtractionMetadata, ChunkMetadata
 from .exceptions import ExtractionError
+from .language_detector import LanguageDetector
 
 
 class BaseExtractor(ABC):
@@ -61,7 +62,8 @@ class BaseExtractor(ABC):
     def _create_chunks(
         self,
         text: str,
-        base_metadata: ChunkMetadata = None
+        base_metadata: ChunkMetadata = None,
+        detect_language: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Split text into semantic chunks.
@@ -72,9 +74,10 @@ class BaseExtractor(ABC):
         Args:
             text: Full text to chunk
             base_metadata: Base metadata to copy to each chunk
+            detect_language: If True, automatically detect language for each chunk
 
         Returns:
-            List of chunks with text and metadata
+            List of chunks with text and metadata (including language if detected)
         """
         if not text:
             return []
@@ -141,6 +144,10 @@ class BaseExtractor(ABC):
                 'text': chunk_text,
                 'metadata': chunk_meta.__dict__
             })
+
+        # Detect language for all chunks
+        if detect_language and LanguageDetector.is_available():
+            chunks = LanguageDetector.detect_for_chunks(chunks)
 
         return chunks
 

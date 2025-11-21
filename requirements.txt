@@ -19,6 +19,9 @@ python-magic==0.4.27  # Magic byte detection (Linux/macOS)
 # Encoding detection
 chardet==5.2.0  # Character encoding detection
 
+# Language detection
+langdetect==1.0.9  # Automatic language detection for text
+
 # ===== RAG DEPENDENCIES =====
 
 # Embeddings & Vector Search
