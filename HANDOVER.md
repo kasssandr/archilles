@@ -184,6 +184,46 @@ lingua-language-detector==2.1.1
 
 ---
 
+## 💡 FUTURE ENHANCEMENTS (Für später dokumentiert)
+
+### Progressive Indexing (Phase 2b - NACH MCP Server)
+**Idee von CS/Sonnet:** Drei Indexing-Level für unterschiedliche Nutzertypen
+
+**Konzept:**
+- **Quick (10 Min):** Nur Metadata + Titel/Autoren indexieren
+- **Standard (1-2h):** Full Indexing mit Embeddings ← **AKTUELL**
+- **Research (2-4h):** + Graph RAG für konzeptionelle Verbindungen
+
+**Warum nicht jetzt?**
+- Keep it simple: Erst EINEN soliden Indexing-Pfad fertig
+- Tom lernt noch: Komplexität schrittweise erhöhen
+- Debugging einfacher mit einem Modus
+- Progressive Enhancement ist UX-Feature, nicht Core-Feature
+
+**Implementation Notes (für später):**
+```python
+class IndexingLevel(Enum):
+    QUICK = "metadata_only"      # 10 min
+    STANDARD = "fulltext"        # 1-2h (current)
+    RESEARCH = "fulltext_graph"  # 2-4h
+
+# Track status per book
+indexing_db = {
+    book_id: {
+        'metadata_indexed': True,
+        'fulltext_indexed': False,
+        'graph_indexed': False,
+        'last_updated': datetime
+    }
+}
+```
+
+**Priorität:** MEDIUM (nach MCP + Citations + Annotations)
+**Zeitschätzung:** 2-3 Tage
+**Quelle:** CS-Input 2025-11-21
+
+---
+
 ## 🎯 NÄCHSTE SCHRITTE (Prioritäts-Reihenfolge)
 
 ### SOFORT: Re-Indexing für Sprach-Filterung
