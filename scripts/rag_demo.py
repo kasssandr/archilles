@@ -389,9 +389,17 @@ class AchillesRAG:
         exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """Keyword search using BM25 or exact phrase matching."""
-        if not BM25_AVAILABLE or not self.bm25_index:
+        if not BM25_AVAILABLE:
             print("  ⚠ BM25 not available. Install with: pip install rank-bm25")
             return []
+
+        # Build BM25 index on-the-fly if not available
+        if not self.bm25_index:
+            print("  Building BM25 index on-the-fly...")
+            self._rebuild_bm25_index()
+            if not self.bm25_index:
+                print("  ⚠ Could not build BM25 index (no documents?)")
+                return []
 
         # For exact phrase matching, use different approach
         if exact_phrase:
