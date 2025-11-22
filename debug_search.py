@@ -61,10 +61,11 @@ if matches:
     end_page = match_page + 5
 
     for page_num in range(start_page, end_page + 1):
-        # Filter by BOTH page AND book_id
-        where_clause = {"page": page_num}
+        # Filter by BOTH page AND book_id (ChromaDB requires $and for multiple conditions)
         if book_id:
-            where_clause["book_id"] = book_id
+            where_clause = {"$and": [{"page": page_num}, {"book_id": book_id}]}
+        else:
+            where_clause = {"page": page_num}
 
         results = collection.get(
             where=where_clause,
