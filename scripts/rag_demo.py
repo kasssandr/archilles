@@ -644,31 +644,15 @@ class AchillesRAG:
         if phrase_pos != -1:
             best_match_pos = phrase_pos
         else:
-            # Strategy 1b: Try whitespace-normalized matching
-            # Handles phrases split across line breaks!
-            query_normalized = re.sub(r'\s+', ' ', query_lower.strip())
-            text_normalized = re.sub(r'\s+', ' ', text_lower)
+            # Strategy 1b: Try regex matching with flexible whitespace
+            # This handles line breaks! "evangelista\s+et\s+a\s+presbyteris" matches "evangelista\net a presbyteris"
+            # Escape special regex chars in query, then replace spaces with \s+
+            query_escaped = re.escape(query_lower)
+            query_pattern = re.sub(r'\\ ', r'\\s+', query_escaped)  # Replace escaped spaces with \s+
 
-            norm_pos = text_normalized.find(query_normalized)
-            if norm_pos != -1:
-                # Find approximate position in ORIGINAL text
-                # Count how many characters in original text correspond to norm_pos in normalized
-                char_count = 0
-                norm_char_count = 0
-                for i, char in enumerate(text):
-                    if norm_char_count >= norm_pos:
-                        best_match_pos = i
-                        break
-                    if not (i > 0 and text[i-1:i+1].isspace() and char.isspace()):
-                        # Count this char in normalized version
-                        norm_char_count += 1 if not (char.isspace() and norm_char_count > 0 and text_normalized[norm_char_count-1:norm_char_count] == ' ') else 0
-                    char_count += 1
-
-                # Simplified: just search for first word of phrase
-                first_word = query_normalized.split()[0] if query_normalized.split() else query_normalized
-                first_word_pos = text_lower.find(first_word)
-                if first_word_pos != -1:
-                    best_match_pos = first_word_pos
+            match = re.search(query_pattern, text_lower, re.IGNORECASE)
+            if match:
+                best_match_pos = match.start()
             else:
                 # Strategy 2: Fallback to individual token matching
                 # This works for partial matches or when query is multiple concepts
