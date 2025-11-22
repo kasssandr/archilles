@@ -10,6 +10,7 @@ query_normalized = re.sub(r'\s+', ' ', query.lower().strip())
 all_data = collection.get()
 
 print(f"Searching {len(all_data['ids'])} chunks for: '{query_normalized}'\n")
+print(f"DEBUG: Checking page numbers around the match...\n")
 
 matches = []
 for i, (doc_id, text, meta) in enumerate(zip(all_data['ids'], all_data['documents'], all_data['metadatas'])):
@@ -42,3 +43,33 @@ for i, (doc_id, text, meta) in enumerate(zip(all_data['ids'], all_data['document
         print("\n" + "="*80 + "\n")
 
 print(f"\nTotal matches: {len(matches)}")
+
+# Show pages around the match to understand pagination
+if matches:
+    match_page = matches[0][0]  # page number of the match
+    print(f"\n" + "="*80)
+    print(f"PAGINATION ANALYSIS: Pages around {match_page}")
+    print("="*80 + "\n")
+
+    # Get chunks from pages around the match
+    start_page = max(1, match_page - 5)
+    end_page = match_page + 5
+
+    for page_num in range(start_page, end_page + 1):
+        results = collection.get(
+            where={"page": page_num},
+            include=["documents", "metadatas"],
+            limit=1
+        )
+
+        if results['ids']:
+            text = results['documents'][0]
+            meta = results['metadatas'][0]
+
+            # Show first 100 chars
+            preview = text[:100].replace('\n', ' ')
+            mark = " <-- MATCH HERE" if page_num == match_page else ""
+
+            print(f"Page {page_num}: {preview}...{mark}")
+        else:
+            print(f"Page {page_num}: [no chunk]")
