@@ -1,29 +1,41 @@
 #!/usr/bin/env python3
 """
-Mini-RAG Proof-of-Concept for Achilles
+Achilles RAG System with Hybrid Search
 
-Demonstrates:
-1. Extract text from a book (any format)
-2. Generate BGE-M3 embeddings (multilingual, optimized for German/Latin)
-3. Index in ChromaDB (local vector database)
-4. Semantic search with exact citations (page numbers)
+Features:
+1. Extract text from books (30+ formats: PDF, EPUB, DJVU, MOBI, etc.)
+2. BGE-M3 embeddings (multilingual, optimized for German/Latin/Greek)
+3. BM25 keyword search (exact word matching)
+4. Hybrid search (semantic + keyword via Reciprocal Rank Fusion)
+5. Language filtering (auto-detected: de, en, la, fr, etc.)
+6. ChromaDB local storage (100% offline)
+
+Search Modes:
+- hybrid (default): Best of both worlds - finds concepts AND exact words
+- semantic: Concept-based search using BGE-M3 embeddings
+- keyword: Exact word matching using BM25 (great for Latin phrases, custom terms)
 
 Usage:
     # Index a book
-    python scripts/rag_demo.py index "path/to/book.pdf"
+    python scripts/rag_demo.py index "path/to/book.pdf" --book-id "Josephus"
 
-    # Query the indexed book
-    python scripts/rag_demo.py query "What does Josephus say about the Jewish kings?"
+    # Hybrid search (recommended - combines semantic + keyword)
+    python scripts/rag_demo.py query "evangelista et a presbyteris"
 
-    # Query with top-K results
-    python scripts/rag_demo.py query "Judenkönige" --top-k 10
+    # Keyword-only (exact word matching)
+    python scripts/rag_demo.py query "Judenkönige" --mode keyword
+
+    # With language filter
+    python scripts/rag_demo.py query "Rex" --language la --mode hybrid
 """
 
 import sys
 import argparse
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Literal
 import time
+import pickle
+import re
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -32,6 +44,12 @@ from src.extractors import UniversalExtractor
 import chromadb
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+
+try:
+    from rank_bm25 import BM25Okapi
+    BM25_AVAILABLE = True
+except ImportError:
+    BM25_AVAILABLE = False
 
 
 class AchillesRAG:
@@ -82,7 +100,21 @@ class AchillesRAG:
         )
 
         print(f"  ✓ ChromaDB ready")
-        print(f"  Current index: {self.collection.count()} chunks\n")
+        print(f"  Current index: {self.collection.count()} chunks")
+
+        # Initialize BM25 index for hybrid search
+        self.db_path = Path(db_path)
+        self.bm25_index = None
+        self.bm25_docs = None
+        self.bm25_ids = None
+        self._load_bm25_index()
+
+        if BM25_AVAILABLE and self.bm25_index:
+            print(f"  ✓ BM25 keyword search ready\n")
+        elif not BM25_AVAILABLE:
+            print(f"  ⚠ BM25 not available (install: pip install rank-bm25)\n")
+        else:
+            print(f"  ⚠ BM25 index empty (will be built on first indexing)\n")
 
     def index_book(self, book_path: str, book_id: str = None) -> Dict[str, Any]:
         """
@@ -188,6 +220,10 @@ class AchillesRAG:
         print(f"  Total time: {total_time:.1f}s")
         print(f"  Collection size: {self.collection.count()} chunks\n")
 
+        # Update BM25 index after indexing
+        if BM25_AVAILABLE:
+            self._rebuild_bm25_index()
+
         return {
             'book_id': book_id,
             'chunks_indexed': len(ids),
@@ -199,10 +235,80 @@ class AchillesRAG:
             'total_time': total_time,
         }
 
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        Simple tokenizer for BM25.
+
+        Lowercases and splits on word boundaries.
+        Academic-friendly: keeps hyphens, apostrophes.
+        """
+        # Lowercase
+        text = text.lower()
+        # Split on whitespace and punctuation (but keep hyphens, apostrophes)
+        tokens = re.findall(r"[\w'-]+", text)
+        return tokens
+
+    def _load_bm25_index(self):
+        """Load BM25 index from disk if available."""
+        bm25_path = self.db_path / "bm25_index.pkl"
+
+        if not bm25_path.exists():
+            return
+
+        try:
+            with open(bm25_path, 'rb') as f:
+                data = pickle.load(f)
+                self.bm25_index = data['index']
+                self.bm25_docs = data['docs']
+                self.bm25_ids = data['ids']
+        except Exception as e:
+            print(f"  ⚠ Could not load BM25 index: {e}")
+
+    def _save_bm25_index(self):
+        """Save BM25 index to disk."""
+        if not self.bm25_index:
+            return
+
+        bm25_path = self.db_path / "bm25_index.pkl"
+        bm25_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            with open(bm25_path, 'wb') as f:
+                pickle.dump({
+                    'index': self.bm25_index,
+                    'docs': self.bm25_docs,
+                    'ids': self.bm25_ids
+                }, f)
+        except Exception as e:
+            print(f"  ⚠ Could not save BM25 index: {e}")
+
+    def _rebuild_bm25_index(self):
+        """Rebuild BM25 index from ChromaDB documents."""
+        if not BM25_AVAILABLE:
+            return
+
+        # Get all documents from ChromaDB
+        all_data = self.collection.get()
+
+        if not all_data['ids']:
+            return
+
+        # Tokenize all documents
+        self.bm25_ids = all_data['ids']
+        self.bm25_docs = all_data['documents']
+        tokenized_docs = [self._tokenize(doc) for doc in self.bm25_docs]
+
+        # Build BM25 index
+        self.bm25_index = BM25Okapi(tokenized_docs)
+
+        # Save to disk
+        self._save_bm25_index()
+
     def query(
         self,
         query_text: str,
         top_k: int = 5,
+        mode: Literal['semantic', 'keyword', 'hybrid'] = 'hybrid',
         language: str = None,
         book_id: str = None
     ) -> List[Dict[str, Any]]:
@@ -212,7 +318,8 @@ class AchillesRAG:
         Args:
             query_text: Search query
             top_k: Number of results to return
-            language: Filter by language (e.g., 'deu', 'eng', 'lat') or comma-separated list
+            mode: Search mode - 'semantic' (BGE-M3), 'keyword' (BM25), or 'hybrid' (both)
+            language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
 
         Returns:
@@ -226,9 +333,30 @@ class AchillesRAG:
             filters.append(f"book={book_id}")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
-        print(f"🔍 QUERY: \"{query_text}\"{filter_msg}")
+        mode_emoji = {"semantic": "🧠", "keyword": "🔤", "hybrid": "🔀"}
+        print(f"{mode_emoji.get(mode, '🔍')} QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
         print(f"  Searching {self.collection.count()} chunks...\n")
 
+        # Route to appropriate search method
+        if mode == 'semantic':
+            results = self._semantic_search(query_text, top_k, language, book_id)
+        elif mode == 'keyword':
+            results = self._keyword_search(query_text, top_k, language, book_id)
+        elif mode == 'hybrid':
+            results = self._hybrid_search(query_text, top_k, language, book_id)
+        else:
+            raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
+
+        return results
+
+    def _semantic_search(
+        self,
+        query_text: str,
+        top_k: int,
+        language: str = None,
+        book_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """Semantic search using BGE-M3 embeddings."""
         # Generate query embedding
         query_embedding = self.embedding_model.encode(
             query_text,
@@ -236,29 +364,7 @@ class AchillesRAG:
         ).tolist()
 
         # Build where clause for filtering
-        where_clause = None
-        if language or book_id:
-            where_conditions = {}
-
-            if language:
-                # Support comma-separated languages
-                if ',' in language:
-                    langs = [l.strip() for l in language.split(',')]
-                    where_conditions['language'] = {'$in': langs}
-                else:
-                    where_conditions['language'] = language
-
-            if book_id:
-                where_conditions['book_id'] = book_id
-
-            # Combine conditions with AND
-            if len(where_conditions) > 1:
-                where_clause = {'$and': [
-                    {k: v} for k, v in where_conditions.items()
-                ]}
-            elif where_conditions:
-                # Single condition
-                where_clause = where_conditions
+        where_clause = self._build_where_clause(language, book_id)
 
         # Search in ChromaDB
         results = self.collection.query(
@@ -268,18 +374,158 @@ class AchillesRAG:
         )
 
         # Format results
+        return self._format_results(results, score_type='semantic')
+
+    def _keyword_search(
+        self,
+        query_text: str,
+        top_k: int,
+        language: str = None,
+        book_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """Keyword search using BM25."""
+        if not BM25_AVAILABLE or not self.bm25_index:
+            print("  ⚠ BM25 not available. Install with: pip install rank-bm25")
+            return []
+
+        # Tokenize query
+        query_tokens = self._tokenize(query_text)
+
+        # Get BM25 scores
+        scores = self.bm25_index.get_scores(query_tokens)
+
+        # Get top-k indices
+        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k * 10]  # Get more for filtering
+
+        # Get metadata for filtering
+        all_metadata = self.collection.get(ids=self.bm25_ids)['metadatas']
+
+        # Filter by language/book_id
+        filtered_results = []
+        for idx in top_indices:
+            metadata = all_metadata[idx]
+
+            # Apply filters
+            if language:
+                langs = [l.strip() for l in language.split(',')] if ',' in language else [language]
+                if metadata.get('language') not in langs:
+                    continue
+
+            if book_id and metadata.get('book_id') != book_id:
+                continue
+
+            filtered_results.append({
+                'rank': len(filtered_results) + 1,
+                'text': self.bm25_docs[idx],
+                'metadata': metadata,
+                'score': scores[idx],
+                'similarity': min(scores[idx] / 10.0, 1.0),  # Normalize BM25 score to 0-1
+            })
+
+            if len(filtered_results) >= top_k:
+                break
+
+        return filtered_results
+
+    def _hybrid_search(
+        self,
+        query_text: str,
+        top_k: int,
+        language: str = None,
+        book_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Hybrid search combining semantic (BGE-M3) and keyword (BM25).
+
+        Uses Reciprocal Rank Fusion (RRF) to combine scores.
+        """
+        # Get results from both methods (request more to have enough after fusion)
+        semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id)
+        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id)
+
+        if not BM25_AVAILABLE or not keyword_results:
+            # Fallback to semantic-only
+            return semantic_results[:top_k]
+
+        # Reciprocal Rank Fusion (RRF)
+        # RRF score = sum(1 / (k + rank)) for each result
+        k = 60  # RRF constant (standard value)
+        rrf_scores = {}
+
+        # Add semantic scores
+        for result in semantic_results:
+            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            rrf_scores[doc_id] = {
+                'score': 1 / (k + result['rank']),
+                'result': result
+            }
+
+        # Add keyword scores (accumulate if already present)
+        for result in keyword_results:
+            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            if doc_id in rrf_scores:
+                rrf_scores[doc_id]['score'] += 1 / (k + result['rank'])
+            else:
+                rrf_scores[doc_id] = {
+                    'score': 1 / (k + result['rank']),
+                    'result': result
+                }
+
+        # Sort by RRF score
+        sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+
+        # Format final results
+        final_results = []
+        for i, (doc_id, data) in enumerate(sorted_results[:top_k]):
+            result = data['result'].copy()
+            result['rank'] = i + 1
+            result['similarity'] = min(data['score'], 1.0)  # Normalize
+            final_results.append(result)
+
+        return final_results
+
+    def _build_where_clause(self, language: str = None, book_id: str = None):
+        """Build ChromaDB where clause for filtering."""
+        if not (language or book_id):
+            return None
+
+        where_conditions = {}
+
+        if language:
+            # Support comma-separated languages
+            if ',' in language:
+                langs = [l.strip() for l in language.split(',')]
+                where_conditions['language'] = {'$in': langs}
+            else:
+                where_conditions['language'] = language
+
+        if book_id:
+            where_conditions['book_id'] = book_id
+
+        # Combine conditions with AND
+        if len(where_conditions) > 1:
+            return {'$and': [{k: v} for k, v in where_conditions.items()]}
+        elif where_conditions:
+            return where_conditions
+        return None
+
+    def _format_results(self, results: Dict, score_type: str = 'semantic') -> List[Dict[str, Any]]:
+        """Format ChromaDB results into standard format."""
         formatted_results = []
 
-        if results['ids'] and len(results['ids'][0]) > 0:
-            for i in range(len(results['ids'][0])):
-                result = {
-                    'rank': i + 1,
-                    'text': results['documents'][0][i],
-                    'metadata': results['metadatas'][0][i],
-                    'distance': results['distances'][0][i],
-                    'similarity': 1 - results['distances'][0][i],  # Convert distance to similarity
-                }
-                formatted_results.append(result)
+        if not results['ids'] or len(results['ids'][0]) == 0:
+            return formatted_results
+
+        for i in range(len(results['ids'][0])):
+            result = {
+                'rank': i + 1,
+                'text': results['documents'][0][i],
+                'metadata': results['metadatas'][0][i],
+                'distance': results['distances'][0][i],
+                'similarity': 1 - results['distances'][0][i],  # Convert distance to similarity
+                'score_type': score_type
+            }
+            formatted_results.append(result)
 
         return formatted_results
 
@@ -326,19 +572,24 @@ Examples:
   # Index Josephus Antiquitates
   python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Flavius Josephus/Judische Altertumer_...pdf"
 
-  # Query
-  python scripts/rag_demo.py query "Was sagt Josephus über die Judenkönige?"
+  # Query (hybrid mode by default - combines semantic + keyword)
+  python scripts/rag_demo.py query "evangelista et a presbyteris"
 
-  # Query with more results
-  python scripts/rag_demo.py query "Jewish kings" --top-k 10
+  # Search modes
+  python scripts/rag_demo.py query "Judenkönige" --mode hybrid     # Best: semantic + keyword (default)
+  python scripts/rag_demo.py query "Judenkönige" --mode keyword    # Exact word matching (BM25)
+  python scripts/rag_demo.py query "Judenkönige" --mode semantic   # Concept search (BGE-M3)
 
   # Filter by language
-  python scripts/rag_demo.py query "kings" --language deu
-  python scripts/rag_demo.py query "Rex" --language lat
-  python scripts/rag_demo.py query "kings" --language deu,eng
+  python scripts/rag_demo.py query "kings" --language de
+  python scripts/rag_demo.py query "Rex" --language la
+  python scripts/rag_demo.py query "kings" --language de,en
 
   # Filter by book
-  python scripts/rag_demo.py query "Marcion" --book-id "tmpe_ea18s7"
+  python scripts/rag_demo.py query "Marcion" --book-id "von_Harnack"
+
+  # More results
+  python scripts/rag_demo.py query "Jewish kings" --top-k 10
         """
     )
 
@@ -354,7 +605,9 @@ Examples:
     query_parser = subparsers.add_parser('query', help='Search indexed books')
     query_parser.add_argument('query', help='Search query')
     query_parser.add_argument('--top-k', type=int, default=5, help='Number of results (default: 5)')
-    query_parser.add_argument('--language', help='Filter by language (e.g., deu, eng, lat) or comma-separated')
+    query_parser.add_argument('--mode', choices=['semantic', 'keyword', 'hybrid'], default='hybrid',
+                              help='Search mode: semantic (BGE-M3), keyword (BM25), or hybrid (both, default)')
+    query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
 
@@ -380,7 +633,8 @@ Examples:
             # Search
             results = rag.query(
                 args.query,
-                args.top_k,
+                top_k=args.top_k,
+                mode=args.mode,
                 language=args.language,
                 book_id=args.book_id
             )
