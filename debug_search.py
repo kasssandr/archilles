@@ -47,17 +47,27 @@ print(f"\nTotal matches: {len(matches)}")
 # Show pages around the match to understand pagination
 if matches:
     match_page = matches[0][0]  # page number of the match
+    match_id = matches[0][1]  # chunk ID
+
+    # Extract book_id from chunk_id (e.g., "von_Harnack_chunk_328" → "von_Harnack")
+    book_id = '_'.join(match_id.split('_')[:-2]) if '_chunk_' in match_id else None
+
     print(f"\n" + "="*80)
-    print(f"PAGINATION ANALYSIS: Pages around {match_page}")
+    print(f"PAGINATION ANALYSIS: Pages around {match_page} in book '{book_id}'")
     print("="*80 + "\n")
 
-    # Get chunks from pages around the match
+    # Get chunks from pages around the match (filtered by book_id!)
     start_page = max(1, match_page - 5)
     end_page = match_page + 5
 
     for page_num in range(start_page, end_page + 1):
+        # Filter by BOTH page AND book_id
+        where_clause = {"page": page_num}
+        if book_id:
+            where_clause["book_id"] = book_id
+
         results = collection.get(
-            where={"page": page_num},
+            where=where_clause,
             include=["documents", "metadatas"],
             limit=1
         )
