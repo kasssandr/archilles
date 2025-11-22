@@ -522,10 +522,17 @@ class AchillesRAG:
         Hybrid search combining semantic (BGE-M3) and keyword (BM25).
 
         Uses Reciprocal Rank Fusion (RRF) to combine scores.
+
+        IMPORTANT: If exact_phrase=True, ONLY returns exact phrase matches (no semantic mixing!)
         """
+        # For exact phrase matching, skip semantic search entirely
+        # We want ONLY exact matches, not semantically similar results!
+        if exact_phrase:
+            return self._keyword_search(query_text, top_k, language, book_id, exact_phrase=True)
+
         # Get results from both methods (request more to have enough after fusion)
         semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id)
-        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, exact_phrase=exact_phrase)
+        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, exact_phrase=False)
 
         if not BM25_AVAILABLE or not keyword_results:
             # Fallback to semantic-only
