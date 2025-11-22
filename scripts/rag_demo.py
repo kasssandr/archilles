@@ -620,21 +620,29 @@ class AchillesRAG:
         Returns:
             Snippet with "..." prefix/suffix if truncated
         """
-        # Tokenize query to find individual words
-        query_tokens = self._tokenize(query_text)
-
-        if not query_tokens:
-            # Fallback: first chars
-            return text[:300] + ('...' if len(text) > 300 else '')
-
-        # Find first occurrence of any query token
         text_lower = text.lower()
+        query_lower = query_text.lower()
         best_match_pos = len(text)  # Default: end of text
 
-        for token in query_tokens:
-            pos = text_lower.find(token.lower())
-            if pos != -1 and pos < best_match_pos:
-                best_match_pos = pos
+        # Strategy 1: Try to find the ENTIRE query phrase first (exact phrase matching)
+        # This is critical for Latin quotes like "evangelista et a presbyteris"
+        phrase_pos = text_lower.find(query_lower)
+        if phrase_pos != -1:
+            best_match_pos = phrase_pos
+        else:
+            # Strategy 2: Fallback to individual token matching
+            # This works for partial matches or when query is multiple concepts
+            query_tokens = self._tokenize(query_text)
+
+            if not query_tokens:
+                # No tokens found, show beginning
+                return text[:300] + ('...' if len(text) > 300 else '')
+
+            # Find first occurrence of any query token
+            for token in query_tokens:
+                pos = text_lower.find(token.lower())
+                if pos != -1 and pos < best_match_pos:
+                    best_match_pos = pos
 
         # If no match found (shouldn't happen), show beginning
         if best_match_pos == len(text):
