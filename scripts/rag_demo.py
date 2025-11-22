@@ -529,8 +529,58 @@ class AchillesRAG:
 
         return formatted_results
 
-    def print_results(self, results: List[Dict[str, Any]]):
-        """Pretty print search results."""
+    def _get_context_snippet(self, text: str, query_text: str, context_chars: int = 200) -> str:
+        """
+        Extract a relevant snippet from text that contains query terms.
+
+        For keyword/hybrid searches, this shows WHERE the match was found.
+        Much better UX than showing first 300 chars which might not contain the match!
+
+        Args:
+            text: Full chunk text
+            query_text: Original query
+            context_chars: Characters of context around match (default: 200)
+
+        Returns:
+            Snippet with "..." prefix/suffix if truncated
+        """
+        # Tokenize query to find individual words
+        query_tokens = self._tokenize(query_text)
+
+        if not query_tokens:
+            # Fallback: first chars
+            return text[:300] + ('...' if len(text) > 300 else '')
+
+        # Find first occurrence of any query token
+        text_lower = text.lower()
+        best_match_pos = len(text)  # Default: end of text
+
+        for token in query_tokens:
+            pos = text_lower.find(token.lower())
+            if pos != -1 and pos < best_match_pos:
+                best_match_pos = pos
+
+        # If no match found (shouldn't happen), show beginning
+        if best_match_pos == len(text):
+            return text[:300] + ('...' if len(text) > 300 else '')
+
+        # Calculate snippet boundaries
+        start = max(0, best_match_pos - context_chars)
+        end = min(len(text), best_match_pos + context_chars)
+
+        # Extract snippet
+        snippet = text[start:end]
+
+        # Add ellipsis if truncated
+        if start > 0:
+            snippet = '...' + snippet
+        if end < len(text):
+            snippet = snippet + '...'
+
+        return snippet
+
+    def print_results(self, results: List[Dict[str, Any]], query_text: str = ""):
+        """Pretty print search results with context snippets."""
         if not results:
             print("❌ No results found.\n")
             return
@@ -557,7 +607,14 @@ class AchillesRAG:
 
             print(f"\n[{rank}] {citation}")
             print(f"    Relevanz: {similarity:.3f} ({'sehr hoch' if similarity > 0.8 else 'hoch' if similarity > 0.6 else 'mittel'})")
-            print(f"    Text: {text[:300]}{'...' if len(text) > 300 else ''}")
+
+            # Show context snippet with query terms (if available)
+            if query_text:
+                snippet = self._get_context_snippet(text, query_text)
+            else:
+                snippet = text[:300] + ('...' if len(text) > 300 else '')
+
+            print(f"    Text: {snippet}")
 
         print("\n" + "=" * 80 + "\n")
 
@@ -638,7 +695,7 @@ Examples:
                 language=args.language,
                 book_id=args.book_id
             )
-            rag.print_results(results)
+            rag.print_results(results, query_text=args.query)
 
         elif args.command == 'stats':
             # Show stats
