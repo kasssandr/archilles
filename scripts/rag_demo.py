@@ -456,9 +456,14 @@ class AchillesRAG:
 
         Finds documents that contain the EXACT phrase, not just the words.
         Critical for Latin phrases like "evangelista et a presbyteris".
+
+        IMPORTANT: Normalizes whitespace to handle line breaks!
+        "evangelista\net a presbyteris" matches "evangelista et a presbyteris"
         """
-        # Normalize query for matching
-        query_lower = query_text.lower()
+        import re
+
+        # Normalize query: lowercase + collapse whitespace (newlines, tabs, multiple spaces → single space)
+        query_normalized = re.sub(r'\s+', ' ', query_text.lower().strip())
 
         # Get all documents
         all_data = self.collection.get(ids=self.bm25_ids)
@@ -479,15 +484,18 @@ class AchillesRAG:
             if book_id and metadata.get('book_id') != book_id:
                 continue
 
-            # Check for exact phrase (case-insensitive)
-            doc_lower = doc_text.lower()
-            if query_lower in doc_lower:
+            # Normalize document text: lowercase + collapse whitespace
+            # This handles line breaks! "evangelista\net a presbyteris" → "evangelista et a presbyteris"
+            doc_normalized = re.sub(r'\s+', ' ', doc_text.lower())
+
+            # Check for exact phrase in normalized text
+            if query_normalized in doc_normalized:
                 # Count occurrences for scoring
-                count = doc_lower.count(query_lower)
+                count = doc_normalized.count(query_normalized)
 
                 matches.append({
                     'rank': 0,  # Will be set later
-                    'text': doc_text,
+                    'text': doc_text,  # Keep ORIGINAL text (with line breaks)
                     'metadata': metadata,
                     'score': count,  # More occurrences = higher score
                     'similarity': min(count / 10.0, 1.0),  # Normalize
@@ -612,6 +620,10 @@ class AchillesRAG:
         For keyword/hybrid searches, this shows WHERE the match was found.
         Much better UX than showing first 300 chars which might not contain the match!
 
+        IMPORTANT: Handles line breaks in phrases!
+        If query is "evangelista et a presbyteris" and text has line break:
+        "...evangelista\net a presbyteris..." → still finds it!
+
         Args:
             text: Full chunk text
             query_text: Original query
@@ -620,6 +632,8 @@ class AchillesRAG:
         Returns:
             Snippet with "..." prefix/suffix if truncated
         """
+        import re
+
         text_lower = text.lower()
         query_lower = query_text.lower()
         best_match_pos = len(text)  # Default: end of text
@@ -630,19 +644,45 @@ class AchillesRAG:
         if phrase_pos != -1:
             best_match_pos = phrase_pos
         else:
-            # Strategy 2: Fallback to individual token matching
-            # This works for partial matches or when query is multiple concepts
-            query_tokens = self._tokenize(query_text)
+            # Strategy 1b: Try whitespace-normalized matching
+            # Handles phrases split across line breaks!
+            query_normalized = re.sub(r'\s+', ' ', query_lower.strip())
+            text_normalized = re.sub(r'\s+', ' ', text_lower)
 
-            if not query_tokens:
-                # No tokens found, show beginning
-                return text[:300] + ('...' if len(text) > 300 else '')
+            norm_pos = text_normalized.find(query_normalized)
+            if norm_pos != -1:
+                # Find approximate position in ORIGINAL text
+                # Count how many characters in original text correspond to norm_pos in normalized
+                char_count = 0
+                norm_char_count = 0
+                for i, char in enumerate(text):
+                    if norm_char_count >= norm_pos:
+                        best_match_pos = i
+                        break
+                    if not (i > 0 and text[i-1:i+1].isspace() and char.isspace()):
+                        # Count this char in normalized version
+                        norm_char_count += 1 if not (char.isspace() and norm_char_count > 0 and text_normalized[norm_char_count-1:norm_char_count] == ' ') else 0
+                    char_count += 1
 
-            # Find first occurrence of any query token
-            for token in query_tokens:
-                pos = text_lower.find(token.lower())
-                if pos != -1 and pos < best_match_pos:
-                    best_match_pos = pos
+                # Simplified: just search for first word of phrase
+                first_word = query_normalized.split()[0] if query_normalized.split() else query_normalized
+                first_word_pos = text_lower.find(first_word)
+                if first_word_pos != -1:
+                    best_match_pos = first_word_pos
+            else:
+                # Strategy 2: Fallback to individual token matching
+                # This works for partial matches or when query is multiple concepts
+                query_tokens = self._tokenize(query_text)
+
+                if not query_tokens:
+                    # No tokens found, show beginning
+                    return text[:300] + ('...' if len(text) > 300 else '')
+
+                # Find first occurrence of any query token
+                for token in query_tokens:
+                    pos = text_lower.find(token.lower())
+                    if pos != -1 and pos < best_match_pos:
+                        best_match_pos = pos
 
         # If no match found (shouldn't happen), show beginning
         if best_match_pos == len(text):
