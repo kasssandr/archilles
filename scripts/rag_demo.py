@@ -310,7 +310,8 @@ class AchillesRAG:
         top_k: int = 5,
         mode: Literal['semantic', 'keyword', 'hybrid'] = 'hybrid',
         language: str = None,
-        book_id: str = None
+        book_id: str = None,
+        exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -321,6 +322,7 @@ class AchillesRAG:
             mode: Search mode - 'semantic' (BGE-M3), 'keyword' (BM25), or 'hybrid' (both)
             language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
+            exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -331,6 +333,8 @@ class AchillesRAG:
             filters.append(f"language={language}")
         if book_id:
             filters.append(f"book={book_id}")
+        if exact_phrase:
+            filters.append("exact phrase")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
         mode_emoji = {"semantic": "🧠", "keyword": "🔤", "hybrid": "🔀"}
@@ -341,9 +345,9 @@ class AchillesRAG:
         if mode == 'semantic':
             results = self._semantic_search(query_text, top_k, language, book_id)
         elif mode == 'keyword':
-            results = self._keyword_search(query_text, top_k, language, book_id)
+            results = self._keyword_search(query_text, top_k, language, book_id, exact_phrase=exact_phrase)
         elif mode == 'hybrid':
-            results = self._hybrid_search(query_text, top_k, language, book_id)
+            results = self._hybrid_search(query_text, top_k, language, book_id, exact_phrase=exact_phrase)
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
 
@@ -381,12 +385,17 @@ class AchillesRAG:
         query_text: str,
         top_k: int,
         language: str = None,
-        book_id: str = None
+        book_id: str = None,
+        exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
-        """Keyword search using BM25."""
+        """Keyword search using BM25 or exact phrase matching."""
         if not BM25_AVAILABLE or not self.bm25_index:
             print("  ⚠ BM25 not available. Install with: pip install rank-bm25")
             return []
+
+        # For exact phrase matching, use different approach
+        if exact_phrase:
+            return self._exact_phrase_search(query_text, top_k, language, book_id)
 
         # Tokenize query
         query_tokens = self._tokenize(query_text)
@@ -427,12 +436,71 @@ class AchillesRAG:
 
         return filtered_results
 
-    def _hybrid_search(
+    def _exact_phrase_search(
         self,
         query_text: str,
         top_k: int,
         language: str = None,
         book_id: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Exact phrase matching (case-insensitive).
+
+        Finds documents that contain the EXACT phrase, not just the words.
+        Critical for Latin phrases like "evangelista et a presbyteris".
+        """
+        # Normalize query for matching
+        query_lower = query_text.lower()
+
+        # Get all documents
+        all_data = self.collection.get(ids=self.bm25_ids)
+
+        # Find exact matches
+        matches = []
+        for idx, (doc_id, doc_text, metadata) in enumerate(zip(
+            all_data['ids'],
+            all_data['documents'],
+            all_data['metadatas']
+        )):
+            # Apply filters first
+            if language:
+                langs = [l.strip() for l in language.split(',')] if ',' in language else [language]
+                if metadata.get('language') not in langs:
+                    continue
+
+            if book_id and metadata.get('book_id') != book_id:
+                continue
+
+            # Check for exact phrase (case-insensitive)
+            doc_lower = doc_text.lower()
+            if query_lower in doc_lower:
+                # Count occurrences for scoring
+                count = doc_lower.count(query_lower)
+
+                matches.append({
+                    'rank': 0,  # Will be set later
+                    'text': doc_text,
+                    'metadata': metadata,
+                    'score': count,  # More occurrences = higher score
+                    'similarity': min(count / 10.0, 1.0),  # Normalize
+                })
+
+        # Sort by score (number of occurrences)
+        matches.sort(key=lambda x: x['score'], reverse=True)
+
+        # Assign ranks
+        for i, match in enumerate(matches[:top_k]):
+            match['rank'] = i + 1
+
+        return matches[:top_k]
+
+    def _hybrid_search(
+        self,
+        query_text: str,
+        top_k: int,
+        language: str = None,
+        book_id: str = None,
+        exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search combining semantic (BGE-M3) and keyword (BM25).
@@ -441,7 +509,7 @@ class AchillesRAG:
         """
         # Get results from both methods (request more to have enough after fusion)
         semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id)
-        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id)
+        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, exact_phrase=exact_phrase)
 
         if not BM25_AVAILABLE or not keyword_results:
             # Fallback to semantic-only
@@ -664,6 +732,8 @@ Examples:
     query_parser.add_argument('--top-k', type=int, default=5, help='Number of results (default: 5)')
     query_parser.add_argument('--mode', choices=['semantic', 'keyword', 'hybrid'], default='hybrid',
                               help='Search mode: semantic (BGE-M3), keyword (BM25), or hybrid (both, default)')
+    query_parser.add_argument('--exact', action='store_true',
+                              help='Exact phrase matching (case-insensitive) - critical for Latin quotes')
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
@@ -693,7 +763,8 @@ Examples:
                 top_k=args.top_k,
                 mode=args.mode,
                 language=args.language,
-                book_id=args.book_id
+                book_id=args.book_id,
+                exact_phrase=args.exact
             )
             rag.print_results(results, query_text=args.query)
 
