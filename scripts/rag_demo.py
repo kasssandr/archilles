@@ -41,6 +41,7 @@ import re
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.extractors import UniversalExtractor
+from src.calibre_db import CalibreDB
 import chromadb
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
@@ -119,26 +120,46 @@ class AchillesRAG:
 
     def _extract_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
-        Universal metadata extraction for all supported formats.
+        Universal metadata extraction with Calibre integration.
+
+        Priority:
+        1. File metadata (EPUB/PDF embedded metadata)
+        2. Calibre database (fallback for ISBN, etc.)
 
         Args:
             file_path: Path to book file
 
         Returns:
-            Dictionary with metadata (format-dependent):
-                - PDF: author, title, subject, keywords, year, creator
-                - EPUB: author, title, publisher, isbn, language, year
-                - Others: basic file info
+            Dictionary with metadata + isbn_source tracking
         """
         file_ext = file_path.suffix.lower()
 
+        # Extract from file first
         if file_ext == '.pdf':
-            return self._extract_pdf_metadata(file_path)
+            file_metadata = self._extract_pdf_metadata(file_path)
         elif file_ext == '.epub':
-            return self._extract_epub_metadata(file_path)
+            file_metadata = self._extract_epub_metadata(file_path)
         else:
-            # Fallback: basic file info
-            return {}
+            file_metadata = {}
+
+        # Try Calibre database for missing fields (especially ISBN)
+        calibre_metadata = self._extract_calibre_metadata(file_path)
+
+        # Merge: File metadata takes priority, Calibre fills gaps
+        merged = {}
+
+        # Always prefer file metadata
+        merged.update(calibre_metadata)  # Calibre first (lower priority)
+        merged.update(file_metadata)     # File second (higher priority)
+
+        # Track ISBN source
+        if merged.get('isbn'):
+            if file_metadata.get('isbn'):
+                merged['isbn_source'] = 'file'
+            elif calibre_metadata.get('isbn'):
+                merged['isbn_source'] = 'calibre'
+
+        return merged
 
     def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
         """Extract metadata from PDF files."""
@@ -268,6 +289,49 @@ class AchillesRAG:
 
         return metadata
 
+    def _extract_calibre_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """
+        Extract metadata from Calibre database (read-only).
+
+        Args:
+            file_path: Path to book file
+
+        Returns:
+            Dictionary with Calibre metadata (empty if not in Calibre library)
+        """
+        metadata = {}
+
+        try:
+            # Find Calibre library
+            library_path = CalibreDB.find_library_path(file_path)
+            if not library_path:
+                return metadata
+
+            # Query Calibre DB
+            with CalibreDB(library_path) as calibre:
+                book_data = calibre.get_book_by_path(file_path)
+
+                if book_data:
+                    # Map Calibre fields to our metadata
+                    if book_data.get('author'):
+                        metadata['author'] = book_data['author']
+                    if book_data.get('title'):
+                        metadata['title'] = book_data['title']
+                    if book_data.get('publisher'):
+                        metadata['publisher'] = book_data['publisher']
+                    if book_data.get('language'):
+                        metadata['language'] = book_data['language']
+                    if book_data.get('isbn'):
+                        metadata['isbn'] = book_data['isbn']
+                    if book_data.get('calibre_id'):
+                        metadata['calibre_id'] = book_data['calibre_id']
+
+        except Exception as e:
+            # Silently fail if Calibre DB not available
+            pass
+
+        return metadata
+
     def index_book(self, book_path: str, book_id: str = None) -> Dict[str, Any]:
         """
         Extract and index a book.
@@ -365,8 +429,13 @@ class AchillesRAG:
                     metadata['publisher'] = book_metadata['publisher']
                 if book_metadata.get('isbn'):
                     metadata['isbn'] = book_metadata['isbn']
+                    # Track ISBN source (file vs calibre)
+                    if book_metadata.get('isbn_source'):
+                        metadata['isbn_source'] = book_metadata['isbn_source']
                 if book_metadata.get('description'):
                     metadata['description'] = book_metadata['description']
+                if book_metadata.get('calibre_id'):
+                    metadata['calibre_id'] = book_metadata['calibre_id']
 
             # Add source file path for direct links
             metadata['source_file'] = str(extracted.metadata.file_path)
@@ -1067,7 +1136,11 @@ class AchillesRAG:
             if metadata.get('publisher'):
                 meta_lines.append(f"Verlag: {metadata['publisher']}")
             if metadata.get('isbn'):
-                meta_lines.append(f"ISBN: {metadata['isbn']}")
+                isbn_text = f"ISBN: {metadata['isbn']}"
+                # Add warning if ISBN from Calibre (not from file)
+                if metadata.get('isbn_source') == 'calibre':
+                    isbn_text += " ⚠"
+                meta_lines.append(isbn_text)
 
             if meta_lines:
                 lines.append(f"*{' • '.join(meta_lines)}*  ")
