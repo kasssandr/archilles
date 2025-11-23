@@ -128,34 +128,73 @@ class HeaderFooterExtractor:
         """
         Extract potential page numbers from text.
 
+        CRITICAL: Only check FIRST LINE of header and LAST LINE of footer
+        to avoid false positives from citations in body text!
+
         Returns:
             List of PageNumber candidates (sorted by confidence)
         """
         candidates = []
 
-        # Extract header and footer
-        header = text[:self.header_chars]
-        footer = text[-self.footer_chars:]
+        # Extract FIRST LINE of header and LAST LINE of footer
+        # This avoids false positives from citations like "siehe S. 145*" in body text
+        lines = text.split('\n')
 
-        # Check header
+        if not lines:
+            return candidates
+
+        header_line = lines[0] if len(lines) > 0 else ""
+        footer_line = lines[-1] if len(lines) > 0 else ""
+
+        # Also check second/third lines as fallback (headers can be multi-line)
+        header_lines = '\n'.join(lines[:3]) if len(lines) > 3 else '\n'.join(lines)
+        footer_lines = '\n'.join(lines[-3:]) if len(lines) > 3 else '\n'.join(lines)
+
+        # Check header (prioritize first line, then first 3 lines)
         for pattern, ptype, base_conf, variant in self.PATTERNS:
-            for match in re.finditer(pattern, header, re.IGNORECASE | re.MULTILINE):
+            # First line (highest priority)
+            for match in re.finditer(pattern, header_line, re.IGNORECASE):
                 page_val = match.group(1).strip()
                 candidates.append(PageNumber(
                     value=page_val,
                     source=f'header_{ptype}',
-                    confidence=base_conf / 10.0
+                    confidence=(base_conf + 2) / 10.0  # Bonus for first line
                 ))
 
-        # Check footer
+            # First 3 lines (lower priority)
+            if header_line not in header_lines:  # Avoid duplicates
+                for match in re.finditer(pattern, header_lines, re.IGNORECASE | re.MULTILINE):
+                    page_val = match.group(1).strip()
+                    # Only add if not already found in first line
+                    if not any(c.value == page_val and 'header' in c.source for c in candidates):
+                        candidates.append(PageNumber(
+                            value=page_val,
+                            source=f'header_{ptype}',
+                            confidence=base_conf / 10.0
+                        ))
+
+        # Check footer (prioritize last line, then last 3 lines)
         for pattern, ptype, base_conf, variant in self.PATTERNS:
-            for match in re.finditer(pattern, footer, re.IGNORECASE | re.MULTILINE):
+            # Last line (highest priority)
+            for match in re.finditer(pattern, footer_line, re.IGNORECASE):
                 page_val = match.group(1).strip()
                 candidates.append(PageNumber(
                     value=page_val,
                     source=f'footer_{ptype}',
-                    confidence=base_conf / 10.0
+                    confidence=(base_conf + 2) / 10.0  # Bonus for last line
                 ))
+
+            # Last 3 lines (lower priority)
+            if footer_line not in footer_lines:  # Avoid duplicates
+                for match in re.finditer(pattern, footer_lines, re.IGNORECASE | re.MULTILINE):
+                    page_val = match.group(1).strip()
+                    # Only add if not already found in last line
+                    if not any(c.value == page_val and 'footer' in c.source for c in candidates):
+                        candidates.append(PageNumber(
+                            value=page_val,
+                            source=f'footer_{ptype}',
+                            confidence=base_conf / 10.0
+                        ))
 
         # Sort by confidence
         candidates.sort(key=lambda x: x.confidence, reverse=True)
