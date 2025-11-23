@@ -55,3 +55,12 @@ analysis_*.txt
 # Achilles RAG exports (generated markdown files)
 achilles_search_*.md
 test_improved_export_*.md
+
+# Local RAG databases (not for GitHub)
+achilles_rag_db/
+chroma_db/
+
+# Personal test files
+meine_zitate.md
+test.md
+test_search.py
