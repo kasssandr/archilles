@@ -310,6 +310,96 @@ class PageNumberValidator:
 
         return filtered
 
+    def interpolate_missing_pages(
+        self,
+        page_numbers: Dict[int, PageNumber],
+        min_neighbors: int = 3,
+        max_gap: int = 5
+    ) -> Dict[int, PageNumber]:
+        """
+        Interpolate missing page numbers based on neighbors.
+
+        Only interpolates when:
+        - At least min_neighbors known pages exist in a ±10 page window
+        - Gap between known pages is ≤ max_gap
+        - Sequence is consistent (regular increments)
+
+        Args:
+            page_numbers: Existing page numbers
+            min_neighbors: Minimum known pages needed for interpolation
+            max_gap: Maximum gap to interpolate
+
+        Returns:
+            page_numbers with interpolated values added
+        """
+        sorted_pages = sorted(page_numbers.keys())
+        interpolated = dict(page_numbers)  # Copy
+
+        for i in range(len(sorted_pages) - 1):
+            prev_pdf = sorted_pages[i]
+            next_pdf = sorted_pages[i + 1]
+
+            gap = next_pdf - prev_pdf
+
+            # Skip if gap is small (adjacent or near-adjacent pages)
+            if gap <= 1:
+                continue
+
+            # Skip if gap is too large
+            if gap > max_gap:
+                continue
+
+            prev_page = page_numbers[prev_pdf]
+            next_page = page_numbers[next_pdf]
+
+            # Only interpolate if same suffix (e.g., both have *)
+            prev_numeric, prev_suffix = self.normalize_page_value(prev_page.value)
+            next_numeric, next_suffix = self.normalize_page_value(next_page.value)
+
+            if prev_numeric is None or next_numeric is None or prev_suffix != next_suffix:
+                continue
+
+            # Check if we have enough neighbors for confidence
+            # Look at ±10 pages around the gap
+            window_start = max(0, i - 10)
+            window_end = min(len(sorted_pages), i + 10)
+            neighbors_in_window = window_end - window_start
+
+            if neighbors_in_window < min_neighbors:
+                continue
+
+            # Check if the sequence is regular
+            expected_increment = (next_numeric - prev_numeric) / gap
+
+            # Only interpolate if increment is close to 1 (regular pagination)
+            if abs(expected_increment - 1.0) > 0.1:
+                # Not a regular sequence
+                continue
+
+            # Interpolate!
+            for pdf_offset in range(1, gap):
+                missing_pdf = prev_pdf + pdf_offset
+                interpolated_value = prev_numeric + pdf_offset
+
+                # Format with suffix
+                if prev_suffix == '*':
+                    interpolated_str = f"{interpolated_value}*"
+                elif prev_suffix == 'roman':
+                    # Skip roman numeral interpolation (too complex)
+                    continue
+                else:
+                    interpolated_str = str(interpolated_value)
+
+                # Add with lower confidence
+                interpolated[missing_pdf] = PageNumber(
+                    value=interpolated_str,
+                    source='interpolated',
+                    confidence=0.7,  # Medium confidence
+                    section=prev_page.section  # Inherit section
+                )
+
+        return interpolated
+
     def check_continuity(
         self,
         page_numbers: Dict[int, PageNumber]
@@ -511,17 +601,21 @@ def main():
     header_pages = validator.detect_outliers(header_pages)
     print("✓ Outlier detection complete\n")
 
-    print("Step 5: Validating with continuity check...")
+    print("Step 5: Interpolating missing pages...")
+    header_pages = validator.interpolate_missing_pages(header_pages, min_neighbors=3)
+    print("✓ Interpolation complete\n")
+
+    print("Step 6: Validating with continuity check...")
     header_pages = validator.check_continuity(header_pages)
     print("✓ Continuity check complete\n")
 
     # Cross-validate with TOC
     if toc_structure:
-        print("Step 6: Cross-validating with TOC structure...")
+        print("Step 7: Cross-validating with TOC structure...")
         validated_pages = validator.cross_validate(toc_structure, header_pages)
         print("✓ Cross-validation complete\n")
     else:
-        print("Step 6: Skipping cross-validation (no TOC)\n")
+        print("Step 7: Skipping cross-validation (no TOC)\n")
         validated_pages = header_pages
 
     # Show results
