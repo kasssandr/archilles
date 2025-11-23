@@ -364,27 +364,36 @@ def main():
 
     # Get source file path
     print("Step 1: Locating source PDF...")
-    result = collection.get(
-        where={"book_id": "von_Harnack"},
-        include=["metadatas"],
-        limit=1
-    )
 
-    if not result['metadatas']:
-        print("✗ No chunks found for von_Harnack")
-        return
+    # Try the known PDF location first
+    known_pdf_path = r"D:\Calibre-Bibliothek\Adolf von Harnack\Marcion_ Das Evangelium vom fremden (8322)\Marcion_ Das Evangelium vom fre - Adolf von Harnack.pdf"
 
-    meta = result['metadatas'][0]
-    source_file = meta.get('source_file')
-
-    if not source_file or not Path(source_file).exists():
-        print(f"✗ Source file not found: {source_file}")
-        print("Cannot extract TOC without source file.")
-        print("Proceeding with header/footer extraction only...\n")
-        toc_structure = {}
-    else:
+    if Path(known_pdf_path).exists():
+        source_file = known_pdf_path
         print(f"✓ Found: {source_file}\n")
+    else:
+        # Fallback: check metadata
+        result = collection.get(
+            where={"book_id": "von_Harnack"},
+            include=["metadatas"],
+            limit=1
+        )
 
+        if not result['metadatas']:
+            print("✗ No chunks found for von_Harnack")
+            return
+
+        meta = result['metadatas'][0]
+        source_file = meta.get('source_file')
+
+        if not source_file or not Path(source_file).exists():
+            print(f"✗ Source file not found: {source_file}")
+            print("Cannot extract TOC without source file.")
+            print("Proceeding with header/footer extraction only...\n")
+            toc_structure = {}
+            source_file = None
+
+    if source_file and Path(source_file).exists():
         # Extract TOC
         print("Step 2: Extracting Table of Contents...")
         toc_parser = TOCParser(source_file)
@@ -406,6 +415,8 @@ def main():
         else:
             print("✗ No TOC found in PDF\n")
             toc_structure = {}
+    else:
+        toc_structure = {}
 
     # Extract from headers/footers
     print("Step 3: Extracting page numbers from headers/footers...")
