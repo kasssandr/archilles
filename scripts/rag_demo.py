@@ -238,10 +238,16 @@ class AchillesRAG:
             identifier = book.get_metadata('DC', 'identifier')
             if identifier:
                 for id_tuple in identifier:
-                    id_str = str(id_tuple[0])
-                    # Check if it's an ISBN
-                    if 'isbn' in id_str.lower() or (id_str.replace('-', '').replace(' ', '').isdigit() and len(id_str.replace('-', '')) in [10, 13]):
-                        metadata['isbn'] = id_str.strip()
+                    id_str = str(id_tuple[0]).strip()
+                    # Check if it's an ISBN (formats: "isbn:123", "ISBN 123", "123" with 10/13 digits)
+                    if 'isbn' in id_str.lower():
+                        # Extract just the ISBN number (remove "isbn:" prefix)
+                        isbn_clean = id_str.lower().replace('isbn:', '').replace('isbn', '').strip()
+                        metadata['isbn'] = isbn_clean
+                        break
+                    elif id_str.replace('-', '').replace(' ', '').isdigit() and len(id_str.replace('-', '').replace(' ', '')) in [10, 13]:
+                        # Pure numeric ISBN without prefix
+                        metadata['isbn'] = id_str
                         break
 
             # Subject/Keywords

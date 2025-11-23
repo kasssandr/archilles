@@ -56,14 +56,21 @@ def test_epub_metadata(epub_path):
             if year_match:
                 print(f"  → Year:    {year_match.group(1)}")
 
-        # ISBN
+        # ISBN and other identifiers
         identifier = book.get_metadata('DC', 'identifier')
         if identifier:
             print(f"\nIdentifiers:")
+            isbn_found = False
             for id_tuple in identifier:
-                id_str = str(id_tuple[0])
+                id_str = str(id_tuple[0]).strip()
                 if 'isbn' in id_str.lower():
-                    print(f"  ISBN:      {id_str}")
+                    # Extract clean ISBN
+                    isbn_clean = id_str.lower().replace('isbn:', '').replace('isbn', '').strip()
+                    print(f"  ISBN:      {isbn_clean}")
+                    isbn_found = True
+                elif id_str.replace('-', '').replace(' ', '').isdigit() and len(id_str.replace('-', '').replace(' ', '')) in [10, 13]:
+                    print(f"  ISBN:      {id_str} (numeric)")
+                    isbn_found = True
                 else:
                     print(f"  Other:     {id_str}")
 
