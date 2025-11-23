@@ -44,6 +44,7 @@ from src.extractors import UniversalExtractor
 import chromadb
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
+import os
 
 try:
     from rank_bm25 import BM25Okapi
@@ -719,9 +720,15 @@ class AchillesRAG:
             printed_conf = metadata.get('printed_page_confidence', 0.0)
             page_warning = None
 
+            # Debug mode: show raw metadata values
+            if os.environ.get('DEBUG_METADATA'):
+                print(f"    [DEBUG] printed_page: {repr(printed_page)} (type: {type(printed_page).__name__})")
+
             if printed_page and printed_conf >= 0.8:
                 # Use printed page number (high confidence)
-                citation_parts.append(f"S. {printed_page}")
+                # Explicitly convert to string to preserve special characters like asterisks
+                printed_page_str = str(printed_page) if printed_page else ""
+                citation_parts.append(f"S. {printed_page_str}")
 
                 # Add warning if confidence < 0.9
                 if printed_conf < 0.9:
