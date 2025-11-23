@@ -709,12 +709,30 @@ class AchillesRAG:
             metadata = result['metadata']
             text = result['text']
 
-            # Build citation
+            # Build citation with printed page numbers
             citation_parts = []
             if metadata.get('book_title'):
                 citation_parts.append(metadata['book_title'])
-            if metadata.get('page'):
-                citation_parts.append(f"S. {metadata['page']}")
+
+            # Check for printed page number with confidence
+            printed_page = metadata.get('printed_page')
+            printed_conf = metadata.get('printed_page_confidence', 0.0)
+            page_warning = None
+
+            if printed_page and printed_conf >= 0.8:
+                # Use printed page number (high confidence)
+                citation_parts.append(f"S. {printed_page}")
+
+                # Add warning if confidence < 0.9
+                if printed_conf < 0.9:
+                    page_warning = f"Seitenzahl-Konfidenz: {printed_conf:.2f} - bitte verifizieren"
+            elif metadata.get('page'):
+                # Fallback to PDF page number
+                citation_parts.append(f"PDF S. {metadata['page']}")
+
+                # Add warning if printed page exists but low confidence
+                if printed_page:
+                    page_warning = f"⚠ Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
             elif metadata.get('chapter'):
                 citation_parts.append(metadata['chapter'])
 
@@ -722,6 +740,10 @@ class AchillesRAG:
 
             print(f"\n[{rank}] {citation}")
             print(f"    Relevanz: {similarity:.3f} ({'sehr hoch' if similarity > 0.8 else 'hoch' if similarity > 0.6 else 'mittel'})")
+
+            # Show page number warning if applicable
+            if page_warning:
+                print(f"    📄 {page_warning}")
 
             # Show context snippet with query terms (if available)
             if query_text:
