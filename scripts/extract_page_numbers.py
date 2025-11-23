@@ -254,6 +254,62 @@ class PageNumberValidator:
 
         return result
 
+    def detect_outliers(
+        self,
+        page_numbers: Dict[int, PageNumber]
+    ) -> Dict[int, PageNumber]:
+        """
+        Detect and penalize outliers (unrealistic page numbers).
+
+        Outliers:
+        - Very high page numbers on early PDF pages (e.g., PDF 11 → 238*)
+        - Duplicate page numbers (two PDFs claiming same printed page)
+        - Large jumps (>20 pages forward)
+
+        Returns:
+            Filtered page_numbers with outliers penalized
+        """
+        sorted_pages = sorted(page_numbers.keys())
+        filtered = {}
+
+        # Track duplicates
+        printed_to_pdf = defaultdict(list)  # printed_page → [pdf_pages]
+
+        for pdf_page, page_num in page_numbers.items():
+            numeric, suffix = self.normalize_page_value(page_num.value)
+
+            if numeric is None:
+                filtered[pdf_page] = page_num
+                continue
+
+            # Rule 1: Unrealistically high page numbers for early PDF pages
+            # If PDF page < 50 and printed page > 200, suspicious
+            if pdf_page < 50 and numeric > 200:
+                page_num.confidence *= 0.3  # Heavy penalty
+
+            # Rule 2: Track duplicates
+            printed_to_pdf[page_num.value].append(pdf_page)
+
+            filtered[pdf_page] = page_num
+
+        # Handle duplicates: keep only the best one
+        for printed_val, pdf_pages in printed_to_pdf.items():
+            if len(pdf_pages) > 1:
+                # Multiple PDFs claim same printed page - keep best
+                candidates = [(pdf_page, filtered[pdf_page]) for pdf_page in pdf_pages]
+                candidates.sort(key=lambda x: x[1].confidence, reverse=True)
+
+                # Keep best, penalize others
+                for i, (pdf_page, page_num) in enumerate(candidates):
+                    if i == 0:
+                        # Keep best (maybe slight boost)
+                        page_num.confidence = min(1.0, page_num.confidence + 0.05)
+                    else:
+                        # Penalize duplicates heavily
+                        page_num.confidence *= 0.2
+
+        return filtered
+
     def check_continuity(
         self,
         page_numbers: Dict[int, PageNumber]
@@ -290,6 +346,9 @@ class PageNumberValidator:
                     elif abs(numeric - prev_numeric) <= 2:
                         # Close enough (might be missing page)
                         continuity_score += 0.1
+                    elif abs(numeric - prev_numeric) > 20:
+                        # Large jump - suspicious!
+                        continuity_score -= 0.3
 
             # Check next page
             if i < len(sorted_pages) - 1:
@@ -303,9 +362,12 @@ class PageNumberValidator:
                         continuity_score += 0.2
                     elif abs(next_numeric - numeric) <= 2:
                         continuity_score += 0.1
+                    elif abs(next_numeric - numeric) > 20:
+                        # Large jump - suspicious!
+                        continuity_score -= 0.3
 
-            # Update confidence
-            page_num.confidence = min(1.0, page_num.confidence + continuity_score)
+            # Update confidence (can go negative, will be clamped later)
+            page_num.confidence = max(0.0, min(1.0, page_num.confidence + continuity_score))
 
         return page_numbers
 
@@ -443,18 +505,23 @@ def main():
     print(f"✓ Extracted {len(header_pages)} page numbers from headers/footers\n")
 
     # Validate
-    print("Step 4: Validating with continuity check...")
     validator = PageNumberValidator()
+
+    print("Step 4: Detecting outliers...")
+    header_pages = validator.detect_outliers(header_pages)
+    print("✓ Outlier detection complete\n")
+
+    print("Step 5: Validating with continuity check...")
     header_pages = validator.check_continuity(header_pages)
     print("✓ Continuity check complete\n")
 
     # Cross-validate with TOC
     if toc_structure:
-        print("Step 5: Cross-validating with TOC structure...")
+        print("Step 6: Cross-validating with TOC structure...")
         validated_pages = validator.cross_validate(toc_structure, header_pages)
         print("✓ Cross-validation complete\n")
     else:
-        print("Step 5: Skipping cross-validation (no TOC)\n")
+        print("Step 6: Skipping cross-validation (no TOC)\n")
         validated_pages = header_pages
 
     # Show results
