@@ -762,6 +762,103 @@ class AchillesRAG:
 
         print("\n" + "=" * 80 + "\n")
 
+    def export_to_markdown(
+        self,
+        results: List[Dict[str, Any]],
+        query_text: str,
+        output_file: str = None
+    ) -> str:
+        """
+        Export search results to Markdown format (optimized for Joplin).
+
+        Args:
+            results: Search results from query()
+            query_text: Original search query
+            output_file: Optional file path (default: auto-generated)
+
+        Returns:
+            Path to the created markdown file
+        """
+        from datetime import datetime
+
+        if not output_file:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            safe_query = "".join(c if c.isalnum() else "_" for c in query_text[:30])
+            output_file = f"achilles_search_{safe_query}_{timestamp}.md"
+
+        # Build markdown content
+        lines = []
+
+        # Header
+        lines.append(f"# Achilles RAG - Suchergebnisse")
+        lines.append(f"")
+        lines.append(f"**Query:** `{query_text}`  ")
+        lines.append(f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
+        lines.append(f"**Ergebnisse:** {len(results)}")
+        lines.append(f"")
+        lines.append(f"---")
+        lines.append(f"")
+
+        # Results
+        for result in results:
+            rank = result['rank']
+            similarity = result['similarity']
+            metadata = result['metadata']
+            text = result['text']
+
+            # Build citation
+            book_title = metadata.get('book_title', metadata.get('book_id', 'Unknown'))
+
+            # Page number with confidence
+            printed_page = metadata.get('printed_page')
+            printed_conf = metadata.get('printed_page_confidence', 0.0)
+
+            if printed_page and printed_conf >= 0.8:
+                page_str = f"S. {str(printed_page)}"
+                if printed_conf < 1.0:
+                    page_str += f" (Konfidenz: {printed_conf:.2f})"
+            elif metadata.get('page'):
+                page_str = f"PDF S. {metadata['page']}"
+            else:
+                page_str = metadata.get('chapter', '')
+
+            # Result header
+            lines.append(f"## [{rank}] {book_title}")
+            if page_str:
+                lines.append(f"**Seite:** {page_str}  ")
+            lines.append(f"**Relevanz:** {similarity:.3f}")
+            lines.append(f"")
+
+            # Quote
+            snippet = self._get_context_snippet(text, query_text) if query_text else text[:300]
+            lines.append(f"> {snippet}")
+            lines.append(f"")
+
+            # Metadata (collapsed)
+            if metadata.get('language'):
+                lines.append(f"*Sprache: {metadata['language']}*  ")
+
+            lines.append(f"")
+            lines.append(f"---")
+            lines.append(f"")
+
+        # Footer with tags
+        tags = ["#achilles", "#rag", "#suche"]
+        if any(r['metadata'].get('language') == 'la' for r in results):
+            tags.append("#latein")
+        if any(r['metadata'].get('language') == 'de' for r in results):
+            tags.append("#deutsch")
+
+        lines.append(f"")
+        lines.append(" ".join(tags))
+
+        # Write file
+        content = "\n".join(lines)
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        return output_file
+
 
 def main():
     """Main CLI interface."""
@@ -791,6 +888,9 @@ Examples:
 
   # More results
   python scripts/rag_demo.py query "Jewish kings" --top-k 10
+
+  # Export to Markdown (for Joplin/Obsidian)
+  python scripts/rag_demo.py query "evangelista et a presbyteris" --exact --export zitate.md
         """
     )
 
@@ -813,6 +913,7 @@ Examples:
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
+    query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show index statistics')
@@ -843,6 +944,11 @@ Examples:
                 exact_phrase=args.exact
             )
             rag.print_results(results, query_text=args.query)
+
+            # Export to Markdown if requested
+            if args.export:
+                output_file = rag.export_to_markdown(results, args.query, args.export)
+                print(f"✅ Exported to: {output_file}")
 
         elif args.command == 'stats':
             # Show stats
