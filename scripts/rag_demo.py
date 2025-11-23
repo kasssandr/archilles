@@ -117,6 +117,69 @@ class AchillesRAG:
         else:
             print(f"  ⚠ BM25 index empty (will be built on first indexing)\n")
 
+    def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """
+        Extract metadata from PDF file (author, title, year, etc.).
+
+        Args:
+            file_path: Path to PDF file
+
+        Returns:
+            Dictionary with metadata (empty dict if not PDF or no metadata)
+        """
+        metadata = {}
+
+        # Only extract from PDFs
+        if file_path.suffix.lower() != '.pdf':
+            return metadata
+
+        try:
+            import fitz  # PyMuPDF
+
+            doc = fitz.open(str(file_path))
+            pdf_info = doc.metadata
+
+            # Extract standard PDF metadata
+            if pdf_info:
+                # Author
+                if pdf_info.get('author'):
+                    metadata['author'] = pdf_info['author'].strip()
+
+                # Title
+                if pdf_info.get('title'):
+                    metadata['title'] = pdf_info['title'].strip()
+
+                # Subject (often used for subtitle/description)
+                if pdf_info.get('subject'):
+                    metadata['subject'] = pdf_info['subject'].strip()
+
+                # Keywords
+                if pdf_info.get('keywords'):
+                    metadata['keywords'] = pdf_info['keywords'].strip()
+
+                # Creation/Modification date (extract year)
+                if pdf_info.get('creationDate'):
+                    try:
+                        # Format: D:20191203... (YYYYMMDD)
+                        date_str = pdf_info['creationDate']
+                        if date_str.startswith('D:') and len(date_str) >= 6:
+                            year_str = date_str[2:6]
+                            metadata['year'] = int(year_str)
+                    except (ValueError, IndexError):
+                        pass
+
+                # Producer/Creator (often contains software used)
+                if pdf_info.get('creator'):
+                    metadata['creator'] = pdf_info['creator'].strip()
+
+            doc.close()
+
+        except Exception as e:
+            # Silently fail if metadata extraction doesn't work
+            pass
+
+        return metadata
+
     def index_book(self, book_path: str, book_id: str = None) -> Dict[str, Any]:
         """
         Extract and index a book.
@@ -137,6 +200,9 @@ class AchillesRAG:
 
         print(f"📚 INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
+
+        # Extract PDF metadata (author, title, year, etc.)
+        pdf_metadata = self._extract_pdf_metadata(book_path)
 
         # Step 1: Extract text
         print("  [1/3] Extracting text...")
@@ -189,6 +255,23 @@ class AchillesRAG:
                 'chunk_index': i,
                 'format': extracted.metadata.detected_format,
             }
+
+            # Add PDF metadata (author, title, year, etc.)
+            if pdf_metadata:
+                if pdf_metadata.get('author'):
+                    metadata['author'] = pdf_metadata['author']
+                if pdf_metadata.get('title'):
+                    # Prefer PDF title over filename
+                    metadata['book_title'] = pdf_metadata['title']
+                if pdf_metadata.get('year'):
+                    metadata['year'] = pdf_metadata['year']
+                if pdf_metadata.get('subject'):
+                    metadata['subject'] = pdf_metadata['subject']
+                if pdf_metadata.get('keywords'):
+                    metadata['keywords'] = pdf_metadata['keywords']
+
+            # Add source file path for direct links
+            metadata['source_file'] = str(extracted.metadata.file_path)
 
             # Add page info if available
             if 'metadata' in chunk and chunk['metadata'].get('page'):
@@ -822,11 +905,54 @@ class AchillesRAG:
             else:
                 page_str = metadata.get('chapter', '')
 
-            # Result header
-            lines.append(f"## [{rank}] {book_title}")
+            # Result header with author and year
+            author = metadata.get('author', '')
+            year = metadata.get('year', '')
+
+            if author and year:
+                header = f"## [{rank}] {author}: {book_title} ({year})"
+            elif author:
+                header = f"## [{rank}] {author}: {book_title}"
+            elif year:
+                header = f"## [{rank}] {book_title} ({year})"
+            else:
+                header = f"## [{rank}] {book_title}"
+
+            lines.append(header)
+
+            # Page number
             if page_str:
                 lines.append(f"**Seite:** {page_str}  ")
-            lines.append(f"**Relevanz:** {similarity:.3f}")
+
+            # Relevanz
+            lines.append(f"**Relevanz:** {similarity:.3f}  ")
+
+            # Direct link to PDF/EPUB (file:/// protocol)
+            source_file = metadata.get('source_file')
+            if source_file:
+                # Create file:/// URL for clickable links in Joplin/Obsidian
+                # Windows: file:///D:/path/to/file.pdf
+                # Linux/Mac: file:///home/user/file.pdf
+
+                # Normalize path separators to forward slashes for URLs
+                url_path = source_file.replace('\\', '/')
+
+                # Add file:/// prefix
+                if url_path.startswith('/'):
+                    # Unix path
+                    file_url = f"file://{url_path}"
+                else:
+                    # Windows path (e.g., D:/...)
+                    file_url = f"file:///{url_path}"
+
+                # Extract filename (handle both Windows and Unix paths)
+                if '/' in url_path:
+                    filename = url_path.split('/')[-1]
+                else:
+                    filename = url_path
+
+                lines.append(f"**Quelle:** [{filename}]({file_url})  ")
+
             lines.append(f"")
 
             # Quote
@@ -834,9 +960,15 @@ class AchillesRAG:
             lines.append(f"> {snippet}")
             lines.append(f"")
 
-            # Metadata (collapsed)
+            # Additional metadata
+            meta_lines = []
             if metadata.get('language'):
-                lines.append(f"*Sprache: {metadata['language']}*  ")
+                meta_lines.append(f"Sprache: {metadata['language']}")
+            if metadata.get('subject'):
+                meta_lines.append(f"Thema: {metadata['subject']}")
+
+            if meta_lines:
+                lines.append(f"*{' • '.join(meta_lines)}*  ")
 
             lines.append(f"")
             lines.append(f"---")
