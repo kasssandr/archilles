@@ -117,21 +117,32 @@ class AchillesRAG:
         else:
             print(f"  ⚠ BM25 index empty (will be built on first indexing)\n")
 
-    def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
+    def _extract_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
-        Extract metadata from PDF file (author, title, year, etc.).
+        Universal metadata extraction for all supported formats.
 
         Args:
-            file_path: Path to PDF file
+            file_path: Path to book file
 
         Returns:
-            Dictionary with metadata (empty dict if not PDF or no metadata)
+            Dictionary with metadata (format-dependent):
+                - PDF: author, title, subject, keywords, year, creator
+                - EPUB: author, title, publisher, isbn, language, year
+                - Others: basic file info
         """
-        metadata = {}
+        file_ext = file_path.suffix.lower()
 
-        # Only extract from PDFs
-        if file_path.suffix.lower() != '.pdf':
-            return metadata
+        if file_ext == '.pdf':
+            return self._extract_pdf_metadata(file_path)
+        elif file_ext == '.epub':
+            return self._extract_epub_metadata(file_path)
+        else:
+            # Fallback: basic file info
+            return {}
+
+    def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """Extract metadata from PDF files."""
+        metadata = {}
 
         try:
             import fitz  # PyMuPDF
@@ -180,6 +191,77 @@ class AchillesRAG:
 
         return metadata
 
+    def _extract_epub_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """Extract metadata from EPUB files using Dublin Core standards."""
+        metadata = {}
+
+        try:
+            from ebooklib import epub
+
+            book = epub.read_epub(str(file_path))
+
+            # Dublin Core metadata (standard for EPUBs)
+            # Author
+            author = book.get_metadata('DC', 'creator')
+            if author and author[0]:
+                metadata['author'] = str(author[0][0]).strip()
+
+            # Title
+            title = book.get_metadata('DC', 'title')
+            if title and title[0]:
+                metadata['title'] = str(title[0][0]).strip()
+
+            # Publisher
+            publisher = book.get_metadata('DC', 'publisher')
+            if publisher and publisher[0]:
+                metadata['publisher'] = str(publisher[0][0]).strip()
+
+            # Language
+            language = book.get_metadata('DC', 'language')
+            if language and language[0]:
+                metadata['language'] = str(language[0][0]).strip()
+
+            # Date/Year
+            date = book.get_metadata('DC', 'date')
+            if date and date[0]:
+                try:
+                    date_str = str(date[0][0])
+                    # Try to extract year (formats: YYYY, YYYY-MM-DD, etc.)
+                    import re
+                    year_match = re.search(r'(\d{4})', date_str)
+                    if year_match:
+                        metadata['year'] = int(year_match.group(1))
+                except (ValueError, AttributeError):
+                    pass
+
+            # ISBN
+            identifier = book.get_metadata('DC', 'identifier')
+            if identifier:
+                for id_tuple in identifier:
+                    id_str = str(id_tuple[0])
+                    # Check if it's an ISBN
+                    if 'isbn' in id_str.lower() or (id_str.replace('-', '').replace(' ', '').isdigit() and len(id_str.replace('-', '')) in [10, 13]):
+                        metadata['isbn'] = id_str.strip()
+                        break
+
+            # Subject/Keywords
+            subject = book.get_metadata('DC', 'subject')
+            if subject and subject[0]:
+                # Can have multiple subjects
+                subjects = [str(s[0]).strip() for s in subject if s]
+                metadata['subject'] = ', '.join(subjects)
+
+            # Description (often contains book summary)
+            description = book.get_metadata('DC', 'description')
+            if description and description[0]:
+                metadata['description'] = str(description[0][0]).strip()
+
+        except Exception as e:
+            # Silently fail if metadata extraction doesn't work
+            pass
+
+        return metadata
+
     def index_book(self, book_path: str, book_id: str = None) -> Dict[str, Any]:
         """
         Extract and index a book.
@@ -201,8 +283,9 @@ class AchillesRAG:
         print(f"📚 INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
 
-        # Extract PDF metadata (author, title, year, etc.)
-        pdf_metadata = self._extract_pdf_metadata(book_path)
+        # Extract metadata (author, title, year, ISBN, publisher, etc.)
+        # Works for PDF, EPUB, and other formats
+        book_metadata = self._extract_metadata(book_path)
 
         # Step 1: Extract text
         print("  [1/3] Extracting text...")
@@ -256,19 +339,28 @@ class AchillesRAG:
                 'format': extracted.metadata.detected_format,
             }
 
-            # Add PDF metadata (author, title, year, etc.)
-            if pdf_metadata:
-                if pdf_metadata.get('author'):
-                    metadata['author'] = pdf_metadata['author']
-                if pdf_metadata.get('title'):
-                    # Prefer PDF title over filename
-                    metadata['book_title'] = pdf_metadata['title']
-                if pdf_metadata.get('year'):
-                    metadata['year'] = pdf_metadata['year']
-                if pdf_metadata.get('subject'):
-                    metadata['subject'] = pdf_metadata['subject']
-                if pdf_metadata.get('keywords'):
-                    metadata['keywords'] = pdf_metadata['keywords']
+            # Add book metadata (author, title, year, ISBN, publisher, etc.)
+            # Works for PDF, EPUB, and other formats
+            if book_metadata:
+                if book_metadata.get('author'):
+                    metadata['author'] = book_metadata['author']
+                if book_metadata.get('title'):
+                    # Prefer embedded title over filename
+                    metadata['book_title'] = book_metadata['title']
+                if book_metadata.get('year'):
+                    metadata['year'] = book_metadata['year']
+                if book_metadata.get('subject'):
+                    metadata['subject'] = book_metadata['subject']
+                if book_metadata.get('keywords'):
+                    metadata['keywords'] = book_metadata['keywords']
+
+                # EPUB-specific fields
+                if book_metadata.get('publisher'):
+                    metadata['publisher'] = book_metadata['publisher']
+                if book_metadata.get('isbn'):
+                    metadata['isbn'] = book_metadata['isbn']
+                if book_metadata.get('description'):
+                    metadata['description'] = book_metadata['description']
 
             # Add source file path for direct links
             metadata['source_file'] = str(extracted.metadata.file_path)
@@ -966,6 +1058,10 @@ class AchillesRAG:
                 meta_lines.append(f"Sprache: {metadata['language']}")
             if metadata.get('subject'):
                 meta_lines.append(f"Thema: {metadata['subject']}")
+            if metadata.get('publisher'):
+                meta_lines.append(f"Verlag: {metadata['publisher']}")
+            if metadata.get('isbn'):
+                meta_lines.append(f"ISBN: {metadata['isbn']}")
 
             if meta_lines:
                 lines.append(f"*{' • '.join(meta_lines)}*  ")
