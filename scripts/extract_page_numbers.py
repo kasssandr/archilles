@@ -93,9 +93,10 @@ class HeaderFooterExtractor:
     # Improved patterns with stricter matching
     PATTERNS = [
         # Appendix with asterisk - VERY specific to avoid false positives
-        (r'^(\d+)\*', 'appendix_asterisk', 10, 'standalone_start'),
-        (r'(\d+)\*\s*$', 'appendix_asterisk', 10, 'standalone_end'),
-        (r':\s*\w+\.\s*(\d+)\*', 'author_appendix', 9, 'with_author'),
+        # CRITICAL: Asterisk must be INSIDE capturing group to be extracted!
+        (r'^(\d+\*)', 'appendix_asterisk', 10, 'standalone_start'),
+        (r'(\d+\*)\s*$', 'appendix_asterisk', 10, 'standalone_end'),
+        (r':\s*\w+\.\s*(\d+\*)', 'author_appendix', 9, 'with_author'),
 
         # Roman numerals (preface) - must be standalone
         (r'^\s*([ivxlcdm]{2,})\s*$', 'roman', 8, 'standalone'),
