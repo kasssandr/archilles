@@ -51,3 +51,7 @@ metadata.db
 # Output files
 *.json
 analysis_*.txt
+
+# Achilles RAG exports (generated markdown files)
+achilles_search_*.md
+test_improved_export_*.md
