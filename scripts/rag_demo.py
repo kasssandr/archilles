@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Achilles RAG System with Hybrid Search
 
@@ -23,7 +23,7 @@ Usage:
     python scripts/rag_demo.py query "evangelista et a presbyteris"
 
     # Keyword-only (exact word matching)
-    python scripts/rag_demo.py query "Judenkönige" --mode keyword
+    python scripts/rag_demo.py query "Herrschaftslegitimation" --mode keyword
 
     # With language filter
     python scripts/rag_demo.py query "Rex" --language la --mode hybrid
@@ -1180,10 +1180,10 @@ Examples:
   # Query (hybrid mode by default - combines semantic + keyword)
   python scripts/rag_demo.py query "evangelista et a presbyteris"
 
-  # Search modes
-  python scripts/rag_demo.py query "Judenkönige" --mode hybrid     # Best: semantic + keyword (default)
-  python scripts/rag_demo.py query "Judenkönige" --mode keyword    # Exact word matching (BM25)
-  python scripts/rag_demo.py query "Judenkönige" --mode semantic   # Concept search (BGE-M3)
+  # Search modes (demonstration with different query types)
+  python scripts/rag_demo.py query "network analysis" --mode hybrid     # Best: semantic + keyword (default)
+  python scripts/rag_demo.py query "Herrschaftslegitimation" --mode keyword    # Exact word matching (BM25)
+  python scripts/rag_demo.py query "migration narratives" --mode semantic   # Concept search (BGE-M3)
 
   # Filter by language
   python scripts/rag_demo.py query "kings" --language de

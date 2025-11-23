@@ -1,4 +1,4 @@
-# ACHILLES - Übergabe-Dokumentation
+﻿# ACHILLES - Übergabe-Dokumentation
 **Branch:** `claude/rag-market-analysis-01Lh7DmoCCZdqrvfbtkm3ewD`
 **Stand:** 21. November 2025
 **Letzter Commit:** e8876ea
@@ -7,7 +7,7 @@
 
 ## 📋 PROJEKT-ÜBERBLICK
 
-**Achilles** ist ein lokales RAG-System (Retrieval-Augmented Generation) für deine 8.139-Bücher-Calibre-Bibliothek (Schwerpunkt: Geschichte, Philosophie, Theologie).
+**Achilles** ist ein lokales RAG-System (Retrieval-Augmented Generation) für deine große Calibre-Bibliotheken (~12.000+ Bücher) mit Schwerpunkt auf Geisteswissenschaften, Sozialwissenschaften und Kulturwissenschaften.
 
 **Kern-Anforderungen:**
 - ✅ 100% lokal/offline (GDPR-konform, keine Cloud)
@@ -154,14 +154,14 @@ lingua-language-detector==2.1.1
 | **Sprach-Erkennung** | ✅ FERTIG | e8876ea | Lingua integriert, Filterung funktioniert |
 | **ChromaDB Setup** | ✅ FERTIG | 9e595d8 | Persistent storage, Metadaten-Support |
 | **Clickable Citations** | ⏳ TODO | - | calibre:// und file:// URIs |
-| **Hybrid Search** | ⏳ TODO | - | Semantic + Keyword (für "Judenkönige") |
+| **Hybrid Search** | ⏳ TODO | - | Semantic + Keyword (z.B. "Herrschaftslegitimation") |
 | **Annotations-Sync** | ⏳ TODO | - | 10.151 Annotations separat indexieren |
 
 ### Was fehlt noch für MVP:
 
 1. **Hybrid Search** (Semantic + Keyword)
    - Du hast erwähnt: "war schon implementiert" (in früherem System?)
-   - Wichtig für deine Custom-Tags wie "Judenkönige"
+   - Wichtig für deine Custom-Tags und spezifische Fachbegriffe
    - Du sagtest explizit: "Annotations + Volltext → getrennt!"
 
 2. **Clickable Citations**
@@ -174,7 +174,7 @@ lingua-language-detector==2.1.1
    - Separater Such-Modus (nicht mit Volltext gemischt)
 
 4. **Performance-Optimierung**
-   - Von 2 Büchern auf alle 8.139 skalieren
+   - Von Prototyp auf Vollbestand skalieren (~12.000+ Bücher)
    - Batch-Indexing
    - Inkrementelle Updates
 
@@ -196,7 +196,7 @@ lingua-language-detector==2.1.1
 
 **Warum nicht jetzt?**
 - Keep it simple: Erst EINEN soliden Indexing-Pfad fertig
-- Tom lernt noch: Komplexität schrittweise erhöhen
+- Komplexität schrittweise erhöhen
 - Debugging einfacher mit einem Modus
 - Progressive Enhancement ist UX-Feature, nicht Core-Feature
 
@@ -264,7 +264,7 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 
 **Was zu tun:**
 - Kombination aus Semantic Search (BGE-M3) + Keyword Search (BM25)
-- Wichtig für Custom-Terms wie "Judenkönige" (deine Begriffsschöpfung)
+- Wichtig für Custom-Terms und spezifische Fachbegriffe (deine Begriffsschöpfung)
 - Parameter: `--mode semantic|keyword|hybrid`
 
 **Zeitschätzung:** 1-2 Tage
@@ -296,7 +296,7 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 ---
 
 #### 4. **Performance-Optimierung**
-**Warum:** Skalierung auf 8.139 Bücher
+**Warum:** Skalierung auf große Bibliotheken (12.000+ Bücher)
 
 **Was zu tun:**
 - Batch-Indexing (mehrere Bücher parallel)
@@ -325,9 +325,9 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 - **Hintergrund:** VWL/Marketing, NICHT Software-Entwicklung
 - **Lernstil:** Hands-on, klare Erklärungen
 - **Kommunikation:** Direkt, Humor ok, kein Marketing-Druck
-- **Bibliothek:** 4.837 Englisch + 2.984 Deutsch + 7 Latein
-- **Custom Terms:** "Judenkönige" ist deine Begriffsschöpfung (nicht in historischen Texten)
-- **Netzwerk:** Begrenzt - Professor in Basel/Berlin, Neffe in AI
+- **Bibliothek:** Mehrsprachige akademische Sammlung (Englisch, Deutsch, Latein)
+- **Fachbereiche:** Geisteswissenschaften, Sozialwissenschaften, Kulturwissenschaften
+- **Netzwerk:** Akademische Kontakte, interdisziplinär
 
 ### Wichtige Lektionen
 1. **Semantische vs. Keyword-Suche**
@@ -457,7 +457,7 @@ a415005 - Add comprehensive specification document for Achilles RAG system
 
 ### Was als nächstes kommt:
 1. ⚠️ **SOFORT:** Re-index Josephus & von Harnack mit Sprach-Metadaten
-2. 🔧 **Feature #1:** Hybrid Search (Semantic + Keyword) für "Judenkönige"
+2. 🔧 **Feature #1:** Hybrid Search (Semantic + Keyword) für spezifische Fachbegriffe und Custom-Terms
 3. 🔗 **Feature #2:** Clickable Citations (calibre:// URIs)
 4. 📚 **Feature #3:** Annotations-Import (10.151 Annotations, separater Index)
 5. ⚡ **Optimization:** Batch-Indexing für 8.139 Bücher

@@ -1,8 +1,8 @@
-# Pflichtenheft: Achilles RAG-System für wissenschaftliche Textsammlungen
+﻿# Pflichtenheft: Achilles RAG-System für wissenschaftliche Textsammlungen
 
 **Version:** 1.0
 **Datum:** 22. November 2025
-**Auftraggeber:** Tom (Geschichtswissenschaft, Philosophie, Theologie)
+**Auftraggeber:** Academic Research Community
 **Auftragnehmer:** Claude Code
 **Projektname:** Achilles
 **Ziel:** Lokales, GDPR-konformes RAG-System für Geisteswissenschaftler
@@ -21,11 +21,7 @@
 5. 100% lokal, keine Cloud-Abhängigkeit
 
 **Zielgruppe:** Deutsche/europäische Geisteswissenschaftler, besonders:
-- Geschichtswissenschaft
-- Philosophie
-- Theologie
-- Altphilologie
-- Mythenforschung
+- Geisteswissenschaften (Geschichtswissenschaft, Literaturwissenschaft, Sprachwissenschaft)`n- Sozialwissenschaften (Soziologie, Politikwissenschaft, Anthropologie)`n- Kulturwissenschaften (Medienwissenschaft, Kulturanthropologie)`n- Altphilologie und Klassische Studien`n- Interdisziplinäre Forschung
 
 **Monetarisierung:** 299 € Einmalkauf + optional 99 €/Jahr Updates
 
@@ -54,7 +50,7 @@ BAAI/bge-m3
 
 # Erwartete Verbesserungen
 - Deutsch-Englisch-Mischtext: +25-40% Recall
-- Fachbegriffe (theologisch/philosophisch): +30% Precision
+- Fachspezifische Terminologie: +30% Precision
 - Latein/Griechisch (wenn vorhanden): +15-20% Recall
 
 # Performance-Ziele
@@ -69,7 +65,7 @@ BAAI/bge-m3
 - [ ] `EMBEDDING_UPGRADE_REPORT.md` – Dokumentation mit Metriken
 
 **Akzeptanzkriterien:**
-- ✅ BGE-M3 läuft stabil auf Toms Hardware
+- ✅ BGE-M3 läuft stabil auf Standard-Hardware
 - ✅ Alle 10.151 Annotations erfolgreich re-indexiert
 - ✅ Mindestens 20% Verbesserung bei deutschen Queries (3-5 Test-Queries)
 - ✅ Keine Performance-Verschlechterung (<1s Response-Zeit)
@@ -130,7 +126,7 @@ strategy = "semantic" (respektiere Absatzgrenzen)
 - [ ] `docs/PDF_EXTRACTION.md` – Dokumentation
 
 **Akzeptanzkriterien:**
-- ✅ 5 Test-PDFs aus Toms Bibliothek erfolgreich verarbeitet
+- ✅ 5 Test-PDFs aus verschiedenen Bibliotheken erfolgreich verarbeitet
 - ✅ Seitenzahlen zu 95%+ korrekt extrahiert
 - ✅ Fußnoten separat erfasst
 - ✅ Keine Textverfälschungen bei Sonderzeichen (griechisch/lateinisch)
@@ -279,7 +275,7 @@ SYSTEM:
 - ✅ Alle Antworten enthalten Citations
 - ✅ Keine technischen Fehler (Crashes, Timeouts)
 - ✅ Performance: Query → Answer in <15s
-- ✅ Tom kann das System selbst nutzen (CLI)
+- ✅ System ist benutzerfreundlich (CLI)
 
 **Deliverables:**
 - [ ] `demo_queries.md` – 10 Test-Queries mit erwarteten Outputs
@@ -411,7 +407,7 @@ ALTERNATIVE PASSAGEN:
 **Anforderungen:**
 - Author, Title, Year, ISBN, Tags aus Calibre-DB extrahieren
 - Language-Detection (wichtig für multilinguale Sammlungen)
-- Custom Columns (falls Tom welche nutzt)
+- Custom Columns (falls genutzt)
 - Series-Information (z.B. "Loeb Classical Library, Bd. 4")
 
 **Technische Spezifikation:**
@@ -464,7 +460,7 @@ ALTERNATIVE PASSAGEN:
 
 **Ziel:** Argumentative Bögen nicht zerstören (wie von Grok analysiert)
 
-**Problem:** Standard-Chunking zerstört Kontext bei langen philosophischen/theologischen Texten
+**Problem:** Standard-Chunking zerstört Kontext bei langen argumentativen Texten
 
 **Lösung: Parent-Document-Retrieval**
 ```
@@ -510,10 +506,10 @@ child_chunks = []   # Absatz-Level (256-512 tokens)
 
 **Test-Szenarien:**
 ```
-1. Query: "Vergleiche Josephus und Eusebius zur Frage der Judenkönige"
+1. Query: "Vergleiche Josephus und Eusebius zu historischen Herrschaftsstrukturen"
    → Erwartung: Antwort mit 4-6 Citations, alle klickbar, Kontext klar
 
-2. Query: "Was sagt Blumenberg über den Mythos?"
+2. Query: "Network analysis in medieval social structures"
    → Erwartung: Lange Textpassagen bleiben im argumentativen Kontext
 
 3. Filter-Query: "Suche in lateinischen Quellen vor 500 n.Chr."
@@ -523,9 +519,9 @@ child_chunks = []   # Absatz-Level (256-512 tokens)
 **Akzeptanzkriterien Phase 2:**
 - ✅ Alle Test-Queries erfolgreich
 - ✅ Citations zu 95%+ klickbar und korrekt
-- ✅ Retrieval-Transparenz: Tom versteht warum welche Quelle
+- ✅ Retrieval-Transparenz: Nutzer versteht warum welche Quelle
 - ✅ Hierarchical Retrieval zeigt besseren Kontext als vorher
-- ✅ System ist "wissenschaftlich nutzbar" (Toms Urteil)
+- ✅ System ist "wissenschaftlich nutzbar" 
 
 **Deliverables:**
 - [ ] `PHASE2_COMPLETION_REPORT.md`
@@ -873,9 +869,9 @@ Docker (optional für Server-Deployment)
 | Risiko | Wahrscheinlichkeit | Impact | Mitigation |
 |--------|-------------------|--------|------------|
 | Anthropic MCP-Bug nicht behoben | Mittel | Hoch | Fallback: Standalone-App priorisieren |
-| Ollama zu langsam auf Toms Hardware | Niedrig | Mittel | Kleinere Modelle (Phi-3.5, Mistral-7B) |
+| Ollama zu langsam auf Standard-Hardware | Niedrig | Mittel | Kleinere Modelle (Phi-3.5, Mistral-7B) |
 | PDF-Koordinaten nicht extrahierbar | Mittel | Hoch | Fallback: Nur Seitenzahl (immer noch gut) |
-| Beta-Tester-Rekrutierung schwierig | Niedrig | Mittel | Direkt Tom's Netzwerk nutzen |
+| Beta-Tester-Rekrutierung schwierig | Niedrig | Mittel | Direkt Akademisches Netzwerk nutzen |
 | BGE-M3 RAM-Probleme | Niedrig | Mittel | Fallback: nomic-embed-text-v2 (kleiner) |
 
 ---
@@ -894,7 +890,7 @@ Docker (optional für Server-Deployment)
 
 ### Phase Completion Reports
 - Nach jeder Phase: Umfassender Bericht
-- Demos: Tom testet neue Features
+- Demos: User Testing neue Features
 - Go/No-Go-Entscheidung für nächste Phase
 
 ---
@@ -939,7 +935,7 @@ achilles/
 **Ende des Pflichtenhefts**
 
 **Nächste Schritte:**
-1. Review mit Tom: Ist das so richtig?
+1. Review: Ist das so richtig?
 2. Claude Code: Phase 1, Woche 1 starten!
 3. Daily Check-ins: Fortschritt tracken
 
