@@ -325,6 +325,8 @@ class AchillesRAG:
                         metadata['isbn'] = book_data['isbn']
                     if book_data.get('calibre_id'):
                         metadata['calibre_id'] = book_data['calibre_id']
+                    if book_data.get('tags'):
+                        metadata['tags'] = book_data['tags']
 
         except Exception as e:
             # Silently fail if Calibre DB not available
@@ -436,6 +438,9 @@ class AchillesRAG:
                     metadata['description'] = book_metadata['description']
                 if book_metadata.get('calibre_id'):
                     metadata['calibre_id'] = book_metadata['calibre_id']
+                if book_metadata.get('tags'):
+                    # Store tags as comma-separated string for ChromaDB compatibility
+                    metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
 
             # Add source file path for direct links
             metadata['source_file'] = str(extracted.metadata.file_path)
@@ -534,7 +539,7 @@ class AchillesRAG:
             print(f"  ⚠ Could not save BM25 index: {e}")
 
     def _rebuild_bm25_index(self):
-        """Rebuild BM25 index from ChromaDB documents."""
+        """Rebuild BM25 index from ChromaDB documents + metadata (tags, title, author)."""
         if not BM25_AVAILABLE:
             return
 
@@ -544,10 +549,32 @@ class AchillesRAG:
         if not all_data['ids']:
             return
 
-        # Tokenize all documents
+        # Store original documents and IDs
         self.bm25_ids = all_data['ids']
         self.bm25_docs = all_data['documents']
-        tokenized_docs = [self._tokenize(doc) for doc in self.bm25_docs]
+
+        # Create enriched documents with metadata for BM25 indexing
+        # This makes tags, titles, authors searchable via keyword search
+        enriched_docs = []
+        for doc, metadata in zip(self.bm25_docs, all_data['metadatas']):
+            enriched_text = doc
+
+            # Add tags to searchable text (if available)
+            if metadata.get('tags'):
+                enriched_text += f" [TAGS: {metadata['tags']}]"
+
+            # Add book title (helps finding books by title)
+            if metadata.get('book_title'):
+                enriched_text += f" [TITLE: {metadata['book_title']}]"
+
+            # Add author (helps finding books by author)
+            if metadata.get('author'):
+                enriched_text += f" [AUTHOR: {metadata['author']}]"
+
+            enriched_docs.append(enriched_text)
+
+        # Tokenize enriched documents
+        tokenized_docs = [self._tokenize(doc) for doc in enriched_docs]
 
         # Build BM25 index
         self.bm25_index = BM25Okapi(tokenized_docs)

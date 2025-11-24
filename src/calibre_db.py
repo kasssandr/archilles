@@ -135,6 +135,18 @@ class CalibreDB:
         isbn_row = cursor.fetchone()
         isbn = isbn_row['val'] if isbn_row else row['legacy_isbn']
 
+        # Get tags
+        tags_query = """
+        SELECT tags.name
+        FROM tags
+        INNER JOIN books_tags_link ON tags.id = books_tags_link.tag
+        WHERE books_tags_link.book = ?
+        ORDER BY tags.name
+        """
+        cursor = self.conn.execute(tags_query, (book_id,))
+        tag_rows = cursor.fetchall()
+        tags = [tag_row['name'] for tag_row in tag_rows] if tag_rows else []
+
         return {
             'calibre_id': book_id,
             'title': row['title'],
@@ -143,4 +155,5 @@ class CalibreDB:
             'language': row['language'],
             'isbn': isbn,
             'path': row['path'],
+            'tags': tags,
         }
