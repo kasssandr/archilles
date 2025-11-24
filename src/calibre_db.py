@@ -49,6 +49,74 @@ class CalibreDB:
 
         return text
 
+    def get_custom_columns(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Get all custom column definitions from Calibre database.
+
+        Returns:
+            Dictionary mapping column_id to column metadata
+            {1: {'label': 'mytags', 'name': 'My Tags', 'datatype': 'text'}, ...}
+        """
+        query = """
+        SELECT id, label, name, datatype, display
+        FROM custom_columns
+        """
+        cursor = self.conn.execute(query)
+        rows = cursor.fetchall()
+
+        columns = {}
+        for row in rows:
+            columns[row['id']] = {
+                'label': row['label'],  # e.g., 'mytags' (used in column name: custom_column_1)
+                'name': row['name'],    # e.g., 'My Tags' (display name)
+                'datatype': row['datatype'],  # text, comments, datetime, float, int, bool, rating, series, enumeration
+                'display': row['display']
+            }
+        return columns
+
+    def get_custom_field_value(self, book_id: int, column_id: int, datatype: str) -> Any:
+        """
+        Get value of a custom field for a specific book.
+
+        Args:
+            book_id: Calibre book ID
+            column_id: Custom column ID
+            datatype: Data type of the field (text, datetime, float, etc.)
+
+        Returns:
+            Field value (type depends on datatype)
+        """
+        table_name = f"custom_column_{column_id}"
+
+        try:
+            # Different query depending on datatype
+            if datatype in ['text', 'comments', 'series', 'enumeration']:
+                # Text-based fields: value column
+                query = f"SELECT value FROM {table_name} WHERE book = ?"
+            elif datatype in ['datetime', 'float', 'int', 'rating', 'bool']:
+                # Numeric/date fields: value column
+                query = f"SELECT value FROM {table_name} WHERE book = ?"
+            else:
+                # Fallback
+                query = f"SELECT value FROM {table_name} WHERE book = ?"
+
+            cursor = self.conn.execute(query, (book_id,))
+            row = cursor.fetchone()
+
+            if not row or row['value'] is None:
+                return None
+
+            # Clean HTML from 'comments' type fields
+            if datatype == 'comments' and row['value']:
+                return self.clean_html(row['value'])
+
+            return row['value']
+
+        except Exception as e:
+            # Table might not exist or other error
+            logger.debug(f"Could not read custom column {column_id}: {e}")
+            return None
+
     def __init__(self, library_path: Path):
         """
         Initialize connection to Calibre library.
@@ -189,7 +257,23 @@ class CalibreDB:
         if comments_text:
             comments_text = self.clean_html(comments_text)
 
-        return {
+        # Get custom fields (if any)
+        custom_fields = {}
+        try:
+            custom_columns = self.get_custom_columns()
+            for col_id, col_info in custom_columns.items():
+                value = self.get_custom_field_value(book_id, col_id, col_info['datatype'])
+                if value is not None:
+                    # Use label as key (e.g., 'mytags', 'reading_status')
+                    custom_fields[col_info['label']] = {
+                        'value': value,
+                        'name': col_info['name'],  # Display name
+                        'datatype': col_info['datatype']
+                    }
+        except Exception as e:
+            logger.debug(f"Could not read custom fields: {e}")
+
+        result = {
             'calibre_id': book_id,
             'title': row['title'],
             'author': row['author'],
@@ -200,3 +284,9 @@ class CalibreDB:
             'tags': tags,
             'comments': comments_text,
         }
+
+        # Add custom fields to result (if any)
+        if custom_fields:
+            result['custom_fields'] = custom_fields
+
+        return result

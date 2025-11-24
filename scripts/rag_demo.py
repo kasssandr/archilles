@@ -327,6 +327,8 @@ class AchillesRAG:
                         metadata['calibre_id'] = book_data['calibre_id']
                     if book_data.get('tags'):
                         metadata['tags'] = book_data['tags']
+                    if book_data.get('custom_fields'):
+                        metadata['custom_fields'] = book_data['custom_fields']
 
         except Exception as e:
             # Silently fail if Calibre DB not available
@@ -441,6 +443,10 @@ class AchillesRAG:
                 if book_metadata.get('tags'):
                     # Store tags as comma-separated string for ChromaDB compatibility
                     metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+                if book_metadata.get('custom_fields'):
+                    # Store custom fields as JSON string for ChromaDB compatibility
+                    import json
+                    metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
 
             # Add source file path for direct links
             metadata['source_file'] = str(extracted.metadata.file_path)
@@ -492,6 +498,9 @@ class AchillesRAG:
                 comment_metadata['calibre_id'] = book_metadata['calibre_id']
             if book_metadata.get('tags'):
                 comment_metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+            if book_metadata.get('custom_fields'):
+                import json
+                comment_metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
 
             # Add to lists
             ids.append(f"{book_id}_comment")
@@ -610,6 +619,24 @@ class AchillesRAG:
             # Add author (helps finding books by author)
             if metadata.get('author'):
                 enriched_text += f" [AUTHOR: {metadata['author']}]"
+
+            # Add custom fields (if available) - makes user-defined Calibre fields searchable
+            if metadata.get('custom_fields'):
+                # Custom fields are stored as JSON string in metadata
+                # Parse and add to searchable text
+                try:
+                    import json
+                    custom_fields = metadata['custom_fields']
+                    if isinstance(custom_fields, str):
+                        custom_fields = json.loads(custom_fields)
+
+                    for field_label, field_data in custom_fields.items():
+                        if isinstance(field_data, dict) and 'value' in field_data:
+                            value = field_data['value']
+                            name = field_data.get('name', field_label)
+                            enriched_text += f" [CUSTOM_{field_label.upper()}: {value}]"
+                except Exception:
+                    pass  # Silently skip if parsing fails
 
             enriched_docs.append(enriched_text)
 
