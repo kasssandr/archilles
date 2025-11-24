@@ -459,6 +459,46 @@ class AchillesRAG:
 
             metadatas.append(metadata)
 
+        # Add Calibre comments as separate chunk (if available)
+        if book_metadata and book_metadata.get('comments'):
+            print(f"    ℹ Adding Calibre comment as searchable chunk...")
+
+            comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
+
+            # Generate embedding for comment
+            comment_embedding = self.embedding_model.encode(
+                comment_text,
+                show_progress_bar=False,
+                convert_to_numpy=True
+            ).tolist()
+
+            # Create comment chunk metadata
+            comment_metadata = {
+                'book_id': book_id,
+                'book_title': book_metadata.get('title', extracted.metadata.file_path.stem),
+                'chunk_index': -1,  # Special index for comments
+                'chunk_type': 'calibre_comment',
+                'format': extracted.metadata.detected_format,
+            }
+
+            # Copy book metadata to comment chunk
+            if book_metadata.get('author'):
+                comment_metadata['author'] = book_metadata['author']
+            if book_metadata.get('publisher'):
+                comment_metadata['publisher'] = book_metadata['publisher']
+            if book_metadata.get('isbn'):
+                comment_metadata['isbn'] = book_metadata['isbn']
+            if book_metadata.get('calibre_id'):
+                comment_metadata['calibre_id'] = book_metadata['calibre_id']
+            if book_metadata.get('tags'):
+                comment_metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+
+            # Add to lists
+            ids.append(f"{book_id}_comment")
+            documents.append(comment_text)
+            embeddings.append(comment_embedding)
+            metadatas.append(comment_metadata)
+
         # Add to collection
         self.collection.add(
             ids=ids,
@@ -589,7 +629,8 @@ class AchillesRAG:
         mode: Literal['semantic', 'keyword', 'hybrid'] = 'hybrid',
         language: str = None,
         book_id: str = None,
-        exact_phrase: bool = False
+        exact_phrase: bool = False,
+        tag_filter: List[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -601,6 +642,7 @@ class AchillesRAG:
             language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
+            tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -613,6 +655,8 @@ class AchillesRAG:
             filters.append(f"book={book_id}")
         if exact_phrase:
             filters.append("exact phrase")
+        if tag_filter:
+            filters.append(f"tags={', '.join(tag_filter)}")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
         mode_emoji = {"semantic": "🧠", "keyword": "🔤", "hybrid": "🔀"}
@@ -628,6 +672,24 @@ class AchillesRAG:
             results = self._hybrid_search(query_text, top_k, language, book_id, exact_phrase=exact_phrase)
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
+
+        # Post-filter by tags (if specified)
+        if tag_filter:
+            filtered_results = []
+            for result in results:
+                result_tags = result['metadata'].get('tags', '')
+                if result_tags:
+                    # Check if any of the filter tags match
+                    result_tag_list = [t.strip().lower() for t in result_tags.split(',')]
+                    filter_tag_list = [t.strip().lower() for t in tag_filter]
+                    if any(ft in result_tag_list for ft in filter_tag_list):
+                        filtered_results.append(result)
+
+            # Re-rank after filtering
+            for i, result in enumerate(filtered_results):
+                result['rank'] = i + 1
+
+            results = filtered_results[:top_k]
 
         return results
 
@@ -840,7 +902,24 @@ class AchillesRAG:
                     'result': result
                 }
 
-        # Sort by RRF score
+        # Apply boost factors BEFORE sorting
+        # Extract query terms for tag matching
+        query_terms = set(query_text.lower().split())
+
+        for doc_id, data in rrf_scores.items():
+            result_metadata = data['result']['metadata']
+
+            # Boost for Calibre comments (curated content)
+            if result_metadata.get('chunk_type') == 'calibre_comment':
+                data['score'] *= 1.2
+
+            # Boost for tag matches
+            if result_metadata.get('tags'):
+                result_tags = set(result_metadata['tags'].lower().split(', '))
+                if query_terms & result_tags:  # If any query term matches any tag
+                    data['score'] *= 1.15
+
+        # Sort by RRF score (now with boosts applied)
         sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1]['score'], reverse=True)
 
         # Format final results
@@ -1246,6 +1325,7 @@ Examples:
                               help='Exact phrase matching (case-insensitive) - critical for Latin quotes')
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
+    query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
     query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
@@ -1275,7 +1355,8 @@ Examples:
                 mode=args.mode,
                 language=args.language,
                 book_id=args.book_id,
-                exact_phrase=args.exact
+                exact_phrase=args.exact,
+                tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None
             )
             rag.print_results(results, query_text=args.query)
 

@@ -8,12 +8,46 @@ import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, Any
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
 
 class CalibreDB:
     """Read-only interface to Calibre's metadata database."""
+
+    @staticmethod
+    def clean_html(html_text: str) -> str:
+        """
+        Remove HTML tags from Calibre comments field.
+
+        Calibre stores comments as HTML, we need clean text for indexing.
+
+        Args:
+            html_text: HTML string from Calibre comments
+
+        Returns:
+            Clean text without HTML tags
+        """
+        if not html_text:
+            return ""
+
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', html_text)
+
+        # Decode common HTML entities
+        text = text.replace('&nbsp;', ' ')
+        text = text.replace('&amp;', '&')
+        text = text.replace('&lt;', '<')
+        text = text.replace('&gt;', '>')
+        text = text.replace('&quot;', '"')
+        text = text.replace('&#39;', "'")
+
+        # Clean up whitespace
+        text = re.sub(r'\s+', ' ', text)
+        text = text.strip()
+
+        return text
 
     def __init__(self, library_path: Path):
         """
@@ -104,6 +138,8 @@ class CalibreDB:
             books.title,
             books.path,
             books.isbn as legacy_isbn,
+            books.has_cover,
+            comments.text as comments,
             authors.name as author,
             publishers.name as publisher,
             languages.lang_code as language
@@ -114,6 +150,7 @@ class CalibreDB:
         LEFT JOIN publishers ON books_publishers_link.publisher = publishers.id
         LEFT JOIN books_languages_link ON books.id = books_languages_link.book
         LEFT JOIN languages ON books_languages_link.lang_code = languages.id
+        LEFT JOIN comments ON books.id = comments.book
         WHERE books.path = ?
         """
 
@@ -147,6 +184,11 @@ class CalibreDB:
         tag_rows = cursor.fetchall()
         tags = [tag_row['name'] for tag_row in tag_rows] if tag_rows else []
 
+        # Clean comments (remove HTML)
+        comments_text = row['comments'] if row['comments'] else None
+        if comments_text:
+            comments_text = self.clean_html(comments_text)
+
         return {
             'calibre_id': book_id,
             'title': row['title'],
@@ -156,4 +198,5 @@ class CalibreDB:
             'isbn': isbn,
             'path': row['path'],
             'tags': tags,
+            'comments': comments_text,
         }
