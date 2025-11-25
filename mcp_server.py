@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""
+Achilles MCP Server Entry Point
+
+Starts the Calibre MCP Server with stdio transport for Claude Desktop integration.
+"""
+
+import asyncio
+import json
+import logging
+import sys
+from pathlib import Path
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
+from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
+
+# Configure logging to file (not stdout, as that's used for MCP communication)
+log_file = Path.home() / ".achilles" / "mcp_server.log"
+log_file.parent.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    filename=str(log_file),
+    filemode='a'
+)
+logger = logging.getLogger(__name__)
+
+
+async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
+    """
+    Handle an MCP request by calling the appropriate server method.
+
+    Args:
+        server: The CalibreMCPServer instance
+        method: The tool method name
+        params: The parameters for the method
+
+    Returns:
+        Result dictionary
+    """
+    try:
+        # Map tool names to server methods
+        tool_map = {
+            'get_book_annotations': server.get_book_annotations_tool,
+            'search_annotations': server.search_annotations_tool,
+            'list_annotated_books': server.list_annotated_books_tool,
+            'compute_annotation_hash': server.compute_hash_tool,
+            'index_annotations': server.index_annotations_tool,
+            'get_index_stats': server.get_index_stats_tool,
+            'detect_duplicates': server.detect_duplicates_tool,
+            'get_book_details': server.get_book_details_tool,
+            'get_doublette_tag_instruction': server.get_doublette_tag_instruction_tool,
+            'export_bibliography': server.export_bibliography_tool,
+        }
+
+        if method in tool_map:
+            result = tool_map[method](**params)
+            return result
+        else:
+            return {'error': f'Unknown method: {method}'}
+
+    except Exception as e:
+        logger.error(f"Error handling request {method}: {e}", exc_info=True)
+        return {'error': str(e)}
+
+
+async def stdio_server(server: CalibreMCPServer):
+    """
+    Run an MCP server using stdio transport.
+
+    Reads JSON-RPC requests from stdin and writes responses to stdout.
+    """
+    logger.info("Starting Achilles MCP Server (stdio mode)")
+
+    # Get tool definitions
+    tools = create_mcp_tools(server)
+
+    # Send server info on startup
+    server_info = {
+        'jsonrpc': '2.0',
+        'method': 'server/info',
+        'params': {
+            'name': 'achilles',
+            'version': '1.0.0',
+            'capabilities': {
+                'tools': tools
+            }
+        }
+    }
+
+    # Log available tools
+    logger.info(f"Registered {len(tools)} tools")
+    for tool in tools:
+        logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
+
+    # Process requests from stdin
+    while True:
+        try:
+            line = sys.stdin.readline()
+            if not line:
+                break
+
+            request = json.loads(line.strip())
+            logger.info(f"Received request: {request.get('method', 'unknown')}")
+
+            # Handle different request types
+            if request.get('method') == 'tools/list':
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': request.get('id'),
+                    'result': {'tools': tools}
+                }
+            elif request.get('method') == 'tools/call':
+                tool_name = request['params']['name']
+                tool_params = request['params'].get('arguments', {})
+
+                result = await handle_request(server, tool_name, tool_params)
+
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': request.get('id'),
+                    'result': result
+                }
+            else:
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': request.get('id'),
+                    'error': {
+                        'code': -32601,
+                        'message': f'Method not found: {request.get("method")}'
+                    }
+                }
+
+            # Send response
+            sys.stdout.write(json.dumps(response) + '\n')
+            sys.stdout.flush()
+            logger.info(f"Sent response for request {request.get('id')}")
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            continue
+        except Exception as e:
+            logger.error(f"Error processing request: {e}", exc_info=True)
+            error_response = {
+                'jsonrpc': '2.0',
+                'id': request.get('id') if 'request' in locals() else None,
+                'error': {
+                    'code': -32603,
+                    'message': str(e)
+                }
+            }
+            sys.stdout.write(json.dumps(error_response) + '\n')
+            sys.stdout.flush()
+
+
+def main():
+    """Main entry point."""
+    # Load configuration
+    config_path = Path("D:/Calibre-Bibliothek/.achilles/config.json")
+    config = {}
+
+    if config_path.exists():
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            logger.info(f"Loaded config from {config_path}")
+        except Exception as e:
+            logger.warning(f"Failed to load config: {e}")
+
+    # Initialize server
+    server = CalibreMCPServer(
+        library_path=config.get('calibre_library_path', 'D:/Calibre-Bibliothek'),
+        annotations_dir=None,  # Will auto-detect
+        enable_semantic_search=True,
+        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.achilles/chroma_db')
+    )
+
+    logger.info(f"Server initialized with library: {config.get('calibre_library_path', 'D:/Calibre-Bibliothek')}")
+    logger.info(f"Semantic search enabled: {server.enable_semantic_search}")
+
+    # Run stdio server
+    asyncio.run(stdio_server(server))
+
+
+if __name__ == '__main__':
+    main()
