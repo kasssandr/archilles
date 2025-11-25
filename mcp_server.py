@@ -107,7 +107,23 @@ async def stdio_server(server: CalibreMCPServer):
             logger.info(f"Received request: {request.get('method', 'unknown')}")
 
             # Handle different request types
-            if request.get('method') == 'tools/list':
+                        if request.get('method') == 'initialize':
+                response = {
+                    'jsonrpc': '2.0',
+                    'id': request.get('id'),
+                    'result': {
+                        'protocolVersion': '2024-11-05',
+                        'capabilities': {
+                            'tools': {}
+                        },
+                        'serverInfo': {
+                            'name': 'achilles',
+                            'version': '1.0.0'
+                        }
+                    }
+                }
+            elif request.get('method') == 'tools/list':
+
                 response = {
                     'jsonrpc': '2.0',
                     'id': request.get('id'),
