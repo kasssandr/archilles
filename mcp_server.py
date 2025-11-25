@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Achilles MCP Server Entry Point
+ARCHILLES MCP Server Entry Point
 
 Starts the Calibre MCP Server with stdio transport for Claude Desktop integration.
 """
@@ -73,7 +73,7 @@ async def stdio_server(server: CalibreMCPServer):
 
     Reads JSON-RPC requests from stdin and writes responses to stdout.
     """
-    logger.info("Starting Achilles MCP Server (stdio mode)")
+    logger.info("Starting ARCHILLES MCP Server (stdio mode)")
 
     # Get tool definitions
     tools = create_mcp_tools(server)
@@ -83,7 +83,7 @@ async def stdio_server(server: CalibreMCPServer):
         'jsonrpc': '2.0',
         'method': 'server/info',
         'params': {
-            'name': 'achilles',
+            'name': 'archilles',
             'version': '1.0.0',
             'capabilities': {
                 'tools': tools
@@ -117,7 +117,7 @@ async def stdio_server(server: CalibreMCPServer):
                             'tools': {}
                         },
                         'serverInfo': {
-                            'name': 'achilles',
+                            'name': 'archilles',
                             'version': '1.0.0'
                         }
                     }
