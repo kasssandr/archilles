@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Achilles Universal Text Extractor can extract text from **20+ e-book formats** using a robust multi-tier fallback strategy:
+The ARCHILLES Universal Text Extractor can extract text from **20+ e-book formats** using a robust multi-tier fallback strategy:
 
 ```
 1. Native Extractors → Fast & Precise

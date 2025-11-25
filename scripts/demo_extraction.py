@@ -2,7 +2,7 @@
 """
 Demo script for universal text extraction.
 
-Shows how to extract text from any e-book format supported by Achilles.
+Shows how to extract text from any e-book format supported by ARCHILLES.
 """
 
 import sys

@@ -1,6 +1,6 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-Achilles RAG System with Hybrid Search
+ARCHILLES RAG System with Hybrid Search
 
 Features:
 1. Extract text from books (30+ formats: PDF, EPUB, DJVU, MOBI, etc.)
@@ -77,7 +77,7 @@ class AchillesRAG:
             db_path: Path to ChromaDB storage
             model_name: Sentence transformer model (default: BGE-M3)
         """
-        print(f"🚀 Initializing Achilles RAG...")
+        print(f"?? Initializing ARCHILLES RAG...")
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
@@ -90,7 +90,7 @@ class AchillesRAG:
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
         self.embedding_model = SentenceTransformer(model_name)
-        print(f"  ✓ Model loaded: {model_name}")
+        print(f"  ? Model loaded: {model_name}")
 
         # Initialize ChromaDB
         self.chroma_client = chromadb.PersistentClient(path=db_path)
@@ -101,7 +101,7 @@ class AchillesRAG:
             metadata={"hnsw:space": "cosine"}
         )
 
-        print(f"  ✓ ChromaDB ready")
+        print(f"  ? ChromaDB ready")
         print(f"  Current index: {self.collection.count()} chunks")
 
         # Initialize BM25 index for hybrid search
@@ -112,11 +112,11 @@ class AchillesRAG:
         self._load_bm25_index()
 
         if BM25_AVAILABLE and self.bm25_index:
-            print(f"  ✓ BM25 keyword search ready\n")
+            print(f"  ? BM25 keyword search ready\n")
         elif not BM25_AVAILABLE:
-            print(f"  ⚠ BM25 not available (install: pip install rank-bm25)\n")
+            print(f"  ? BM25 not available (install: pip install rank-bm25)\n")
         else:
-            print(f"  ⚠ BM25 index empty (will be built on first indexing)\n")
+            print(f"  ? BM25 index empty (will be built on first indexing)\n")
 
     def _extract_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
@@ -354,7 +354,7 @@ class AchillesRAG:
 
         book_id = book_id or book_path.stem
 
-        print(f"📚 INDEXING BOOK: {book_path.name}")
+        print(f"?? INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
@@ -367,8 +367,8 @@ class AchillesRAG:
         extracted = self.extractor.extract(book_path)
         extract_time = time.time() - start_time
 
-        print(f"    ✓ Extracted {len(extracted.chunks)} chunks in {extract_time:.1f}s")
-        print(f"    ✓ {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages\n")
+        print(f"    ? Extracted {len(extracted.chunks)} chunks in {extract_time:.1f}s")
+        print(f"    ? {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages\n")
 
         # Step 2: Generate embeddings
         print("  [2/3] Generating embeddings...")
@@ -389,7 +389,7 @@ class AchillesRAG:
             embeddings.extend(batch_embeddings.tolist())
 
         embed_time = time.time() - start_time
-        print(f"    ✓ Generated {len(embeddings)} embeddings in {embed_time:.1f}s\n")
+        print(f"    ? Generated {len(embeddings)} embeddings in {embed_time:.1f}s\n")
 
         # Step 3: Index in ChromaDB
         print("  [3/3] Indexing in ChromaDB...")
@@ -467,7 +467,7 @@ class AchillesRAG:
 
         # Add Calibre comments as separate chunk (if available)
         if book_metadata and book_metadata.get('comments'):
-            print(f"    ℹ Adding Calibre comment as searchable chunk...")
+            print(f"    ? Adding Calibre comment as searchable chunk...")
 
             comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
 
@@ -517,11 +517,11 @@ class AchillesRAG:
         )
 
         index_time = time.time() - start_time
-        print(f"    ✓ Indexed {len(ids)} chunks in {index_time:.1f}s\n")
+        print(f"    ? Indexed {len(ids)} chunks in {index_time:.1f}s\n")
 
         # Summary
         total_time = extract_time + embed_time + index_time
-        print(f"✅ INDEXING COMPLETE")
+        print(f"? INDEXING COMPLETE")
         print(f"  Total time: {total_time:.1f}s")
         print(f"  Collection size: {self.collection.count()} chunks\n")
 
@@ -567,7 +567,7 @@ class AchillesRAG:
                 self.bm25_docs = data['docs']
                 self.bm25_ids = data['ids']
         except Exception as e:
-            print(f"  ⚠ Could not load BM25 index: {e}")
+            print(f"  ? Could not load BM25 index: {e}")
 
     def _save_bm25_index(self):
         """Save BM25 index to disk."""
@@ -585,7 +585,7 @@ class AchillesRAG:
                     'ids': self.bm25_ids
                 }, f)
         except Exception as e:
-            print(f"  ⚠ Could not save BM25 index: {e}")
+            print(f"  ? Could not save BM25 index: {e}")
 
     def _rebuild_bm25_index(self):
         """Rebuild BM25 index from ChromaDB documents + metadata (tags, title, author)."""
@@ -686,8 +686,8 @@ class AchillesRAG:
             filters.append(f"tags={', '.join(tag_filter)}")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
-        mode_emoji = {"semantic": "🧠", "keyword": "🔤", "hybrid": "🔀"}
-        print(f"{mode_emoji.get(mode, '🔍')} QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
+        mode_emoji = {"semantic": "??", "keyword": "??", "hybrid": "??"}
+        print(f"{mode_emoji.get(mode, '??')} QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
         print(f"  Searching {self.collection.count()} chunks...\n")
 
         # Route to appropriate search method
@@ -757,7 +757,7 @@ class AchillesRAG:
     ) -> List[Dict[str, Any]]:
         """Keyword search using BM25 or exact phrase matching."""
         if not BM25_AVAILABLE:
-            print("  ⚠ BM25 not available. Install with: pip install rank-bm25")
+            print("  ? BM25 not available. Install with: pip install rank-bm25")
             return []
 
         # Build BM25 index on-the-fly if not available
@@ -765,7 +765,7 @@ class AchillesRAG:
             print("  Building BM25 index on-the-fly...")
             self._rebuild_bm25_index()
             if not self.bm25_index:
-                print("  ⚠ Could not build BM25 index (no documents?)")
+                print("  ? Could not build BM25 index (no documents?)")
                 return []
 
         # For exact phrase matching, use different approach
@@ -829,7 +829,7 @@ class AchillesRAG:
         """
         import re
 
-        # Normalize query: lowercase + collapse whitespace (newlines, tabs, multiple spaces → single space)
+        # Normalize query: lowercase + collapse whitespace (newlines, tabs, multiple spaces ? single space)
         query_normalized = re.sub(r'\s+', ' ', query_text.lower().strip())
 
         # Get all documents
@@ -852,7 +852,7 @@ class AchillesRAG:
                 continue
 
             # Normalize document text: lowercase + collapse whitespace
-            # This handles line breaks! "evangelista\net a presbyteris" → "evangelista et a presbyteris"
+            # This handles line breaks! "evangelista\net a presbyteris" ? "evangelista et a presbyteris"
             doc_normalized = re.sub(r'\s+', ' ', doc_text.lower())
 
             # Check for exact phrase in normalized text
@@ -1013,7 +1013,7 @@ class AchillesRAG:
 
         IMPORTANT: Handles line breaks in phrases!
         If query is "evangelista et a presbyteris" and text has line break:
-        "...evangelista\net a presbyteris..." → still finds it!
+        "...evangelista\net a presbyteris..." ? still finds it!
 
         Args:
             text: Full chunk text
@@ -1081,10 +1081,10 @@ class AchillesRAG:
     def print_results(self, results: List[Dict[str, Any]], query_text: str = ""):
         """Pretty print search results with context snippets."""
         if not results:
-            print("❌ No results found.\n")
+            print("? No results found.\n")
             return
 
-        print(f"📊 TOP {len(results)} RESULTS:\n")
+        print(f"?? TOP {len(results)} RESULTS:\n")
         print("=" * 80)
 
         for result in results:
@@ -1122,7 +1122,7 @@ class AchillesRAG:
 
                 # Add warning if printed page exists but low confidence
                 if printed_page:
-                    page_warning = f"⚠ Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
+                    page_warning = f"? Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
             elif metadata.get('chapter'):
                 citation_parts.append(metadata['chapter'])
 
@@ -1133,7 +1133,7 @@ class AchillesRAG:
 
             # Show page number warning if applicable
             if page_warning:
-                print(f"    📄 {page_warning}")
+                print(f"    ?? {page_warning}")
 
             # Show context snippet with query terms (if available)
             if query_text:
@@ -1173,7 +1173,7 @@ class AchillesRAG:
         lines = []
 
         # Header
-        lines.append(f"# Achilles RAG - Suchergebnisse")
+        lines.append(f"# ARCHILLES RAG - Suchergebnisse")
         lines.append(f"")
         lines.append(f"**Query:** `{query_text}`  ")
         lines.append(f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
@@ -1272,11 +1272,11 @@ class AchillesRAG:
                 isbn_text = f"ISBN: {metadata['isbn']}"
                 # Add warning if ISBN from Calibre (not from file)
                 if metadata.get('isbn_source') == 'calibre':
-                    isbn_text += " ⚠"
+                    isbn_text += " ?"
                 meta_lines.append(isbn_text)
 
             if meta_lines:
-                lines.append(f"*{' • '.join(meta_lines)}*  ")
+                lines.append(f"*{' � '.join(meta_lines)}*  ")
 
             lines.append(f"")
             lines.append(f"---")
@@ -1390,16 +1390,16 @@ Examples:
             # Export to Markdown if requested
             if args.export:
                 output_file = rag.export_to_markdown(results, args.query, args.export)
-                print(f"✅ Exported to: {output_file}")
+                print(f"? Exported to: {output_file}")
 
         elif args.command == 'stats':
             # Show stats
-            print(f"📊 INDEX STATISTICS\n")
+            print(f"?? INDEX STATISTICS\n")
             print(f"  Total chunks: {rag.collection.count()}")
             print(f"  Database path: {args.db_path}\n")
 
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"? Error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

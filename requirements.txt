@@ -1,4 +1,4 @@
-# Achilles RAG System Requirements
+# ARCHILLES RAG System Requirements
 # Python version: 3.11+
 
 # ===== CORE DEPENDENCIES =====

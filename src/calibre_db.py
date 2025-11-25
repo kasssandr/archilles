@@ -1,5 +1,5 @@
 """
-Calibre database integration for Achilles RAG.
+Calibre database integration for ARCHILLES RAG.
 
 Read-only access to Calibre's metadata.db for enriched metadata.
 """
