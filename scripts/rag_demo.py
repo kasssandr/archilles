@@ -1276,7 +1276,7 @@ class AchillesRAG:
                 meta_lines.append(isbn_text)
 
             if meta_lines:
-                lines.append(f"*{' � '.join(meta_lines)}*  ")
+                lines.append(f"*{'   '.join(meta_lines)}*  ")
 
             lines.append(f"")
             lines.append(f"---")
@@ -1298,6 +1298,239 @@ class AchillesRAG:
             f.write(content)
 
         return output_file
+
+    @staticmethod
+    def get_system_prompt() -> str:
+        """
+        Get the system prompt for Claude with citation instructions.
+
+        Returns XML-formatted instructions that tell Claude to cite sources.
+        """
+        return """<system_instructions>
+Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage des Nutzers NUR auf Basis der bereitgestellten Dokumentenauszüge zu beantworten.
+
+<rules>
+1. Zitiere jede Tatsachenbehauptung sofort mit der ID des Dokuments in eckigen Klammern, z.B. [doc_1].
+2. Nutze keine externen Informationen. Wenn die Antwort nicht in den Dokumenten steht, sage das klar.
+3. Antworte in der Sprache des Nutzers, behalte aber den wissenschaftlichen Fachjargon bei.
+4. Bei mehreren Quellen für dieselbe Aussage: gib alle relevanten IDs an, z.B. [doc_1, doc_3].
+5. Fasse am Ende alle zitierten Quellen als Literaturliste zusammen.
+</rules>
+</system_instructions>"""
+
+    def format_results_as_xml(
+        self,
+        results: List[Dict[str, Any]],
+        query_text: str,
+        expand_context: bool = False,
+        expansion_chars: int = 400
+    ) -> str:
+        """
+        Format search results as XML-structured documents for Claude.
+
+        Creates a <documents> block with individual <document> entries,
+        each containing <meta> and <content> sections.
+
+        Args:
+            results: Search results from query()
+            query_text: Original user query
+            expand_context: Enable context expansion (Small-to-Big) if char_offsets available
+            expansion_chars: Characters to add before/after chunk (default: 400)
+
+        Returns:
+            XML-formatted string ready for Claude
+        """
+        lines = []
+
+        lines.append("<documents>")
+
+        for i, result in enumerate(results, start=1):
+            doc_id = f"doc_{i}"
+            metadata = result['metadata']
+            text = result['text']
+
+            # Apply context expansion if enabled and available
+            if expand_context:
+                text = self.expand_chunk_context(text, metadata, expansion_chars)
+
+            # Build metadata line
+            meta_parts = []
+
+            if metadata.get('author'):
+                meta_parts.append(f"Autor: {metadata['author']}")
+
+            if metadata.get('book_title'):
+                meta_parts.append(f"Titel: {metadata['book_title']}")
+
+            if metadata.get('year'):
+                meta_parts.append(f"Jahr: {metadata['year']}")
+
+            # Page number (prefer printed page if available)
+            if metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
+                meta_parts.append(f"Seite: {metadata['printed_page']}")
+            elif metadata.get('page'):
+                meta_parts.append(f"Seite: {metadata['page']}")
+            elif metadata.get('chapter'):
+                meta_parts.append(f"Kapitel: {metadata['chapter']}")
+
+            meta_str = ", ".join(meta_parts) if meta_parts else "Metadaten nicht verfügbar"
+
+            # Build inline metadata for content injection
+            inline_meta = self._build_inline_metadata(metadata, doc_id)
+
+            # Inject metadata into text content
+            # This helps Claude understand context (e.g., a quote from Arendt vs. Heidegger)
+            text_with_metadata = f"{inline_meta}\n{text}\n<<<ENDE QUELLE>>>"
+
+            # Build XML document entry
+            lines.append(f"   <document id=\"{doc_id}\">")
+            lines.append(f"      <meta>{meta_str}</meta>")
+            lines.append(f"      <content>{self._escape_xml(text_with_metadata)}</content>")
+            lines.append(f"   </document>")
+
+        lines.append("</documents>")
+        lines.append("")
+        lines.append("<user_query>")
+        lines.append(self._escape_xml(query_text))
+        lines.append("</user_query>")
+
+        return "\n".join(lines)
+
+    def expand_chunk_context(
+        self,
+        chunk_text: str,
+        metadata: Dict[str, Any],
+        expansion_chars: int = 400
+    ) -> str:
+        """
+        Expand chunk context by adding surrounding text (Small-to-Big Retrieval).
+
+        IMPORTANT: Requires char_start, char_end, and original_text in metadata!
+        Currently NOT IMPLEMENTED because these fields are not stored in the index.
+
+        To activate this feature:
+        1. Modify index_book() to store char_start, char_end in metadata
+        2. Store full book text somewhere accessible (e.g., metadata['original_text_ref'])
+        3. This function will then retrieve and expand the context
+
+        Args:
+            chunk_text: Original chunk text from search result
+            metadata: Chunk metadata (must contain char_start, char_end, original_text)
+            expansion_chars: Characters to add before and after (default: 400)
+
+        Returns:
+            Expanded text with context, or original chunk if expansion not possible
+        """
+        # Check if we have the required fields
+        if not all(k in metadata for k in ['char_start', 'char_end', 'original_text']):
+            # Graceful degradation: return original chunk
+            # No error - just log a debug message
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug("Context expansion not available (char_offsets not in index)")
+            return chunk_text
+
+        # Extract required data
+        char_start = metadata['char_start']
+        char_end = metadata['char_end']
+        original_text = metadata['original_text']
+
+        # Calculate expanded boundaries
+        expanded_start = max(0, char_start - expansion_chars)
+        expanded_end = min(len(original_text), char_end + expansion_chars)
+
+        # Extract expanded context
+        expanded_text = original_text[expanded_start:expanded_end]
+
+        # Optional: Mark the original chunk within the expanded context
+        # This helps Claude identify the most relevant part
+        # prefix = expanded_text[:char_start - expanded_start]
+        # core = expanded_text[char_start - expanded_start:char_end - expanded_start]
+        # suffix = expanded_text[char_end - expanded_start:]
+        # return f"{prefix}>>>{core}<<<{suffix}"
+
+        return expanded_text
+
+    def _build_inline_metadata(self, metadata: Dict[str, Any], doc_id: str) -> str:
+        """
+        Build inline metadata string to inject before chunk text.
+
+        Format: <<<QUELLE ID=doc_1>>>
+                [Metadaten: Autor="X", Titel="Y", Jahr=Z, Seite=123]
+
+        This provides context for interpretation (Arendt vs. Heidegger matters!)
+        """
+        meta_parts = []
+
+        if metadata.get('author'):
+            # Quote the author name to handle special characters
+            meta_parts.append(f'Autor="{metadata["author"]}"')
+
+        if metadata.get('book_title'):
+            meta_parts.append(f'Titel="{metadata["book_title"]}"')
+
+        if metadata.get('year'):
+            meta_parts.append(f'Jahr={metadata["year"]}')
+
+        # Page number
+        if metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
+            meta_parts.append(f'Seite={metadata["printed_page"]}')
+        elif metadata.get('page'):
+            meta_parts.append(f'Seite={metadata["page"]}')
+        elif metadata.get('chapter'):
+            meta_parts.append(f'Kapitel="{metadata["chapter"]}"')
+
+        meta_str = ", ".join(meta_parts) if meta_parts else "keine Metadaten"
+
+        return f"<<<QUELLE ID={doc_id}>>>\n[Metadaten: {meta_str}]"
+
+    def _escape_xml(self, text: str) -> str:
+        """Escape XML special characters."""
+        return (text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&apos;"))
+
+    def create_claude_prompt(
+        self,
+        results: List[Dict[str, Any]],
+        query_text: str,
+        expand_context: bool = False,
+        expansion_chars: int = 400
+    ) -> Dict[str, str]:
+        """
+        Create a complete prompt package for Claude with system instructions and XML documents.
+
+        This combines:
+        - System prompt with citation rules
+        - XML-formatted documents with metadata
+        - User query
+
+        Args:
+            results: Search results from query()
+            query_text: Original user query
+            expand_context: Enable context expansion (Small-to-Big) if available
+            expansion_chars: Characters to add before/after chunk (default: 400)
+
+        Returns:
+            Dictionary with 'system' and 'user' prompts
+        """
+        system_prompt = self.get_system_prompt()
+        xml_content = self.format_results_as_xml(
+            results,
+            query_text,
+            expand_context=expand_context,
+            expansion_chars=expansion_chars
+        )
+
+        return {
+            'system': system_prompt,
+            'user': xml_content,
+            'num_sources': len(results),
+            'total_tokens_approx': len(system_prompt.split()) + len(xml_content.split())
+        }
 
 
 def main():
