@@ -16,6 +16,14 @@ from typing import Any, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from calibre_analyzer import CalibreAnalyzer
 
+# Import RAG system for XML prompt generation
+try:
+    from scripts.rag_demo import AchillesRAG
+    RAG_AVAILABLE = True
+except ImportError:
+    RAG_AVAILABLE = False
+    logging.warning("AchillesRAG not available. XML prompt generation disabled.")
+
 from .annotations import (
     compute_book_hash,
     get_book_annotations,
@@ -49,7 +57,8 @@ class CalibreMCPServer:
         library_path: Optional[str] = None,
         annotations_dir: Optional[str] = None,
         enable_semantic_search: bool = False,
-        chroma_persist_dir: Optional[str] = None
+        chroma_persist_dir: Optional[str] = None,
+        rag_db_path: Optional[str] = None
     ):
         """
         Initialize the Calibre MCP Server.
@@ -91,6 +100,17 @@ class CalibreMCPServer:
                     "Install with: pip install chromadb"
                 )
                 self.enable_semantic_search = False
+
+        # Initialize RAG system for XML prompt generation
+        self.rag = None
+        if RAG_AVAILABLE:
+            try:
+                rag_path = rag_db_path or "./achilles_rag_db"
+                self.rag = AchillesRAG(db_path=rag_path)
+                logger.info(f"RAG system initialized: {rag_path}")
+            except Exception as e:
+                logger.warning(f"Failed to initialize RAG system: {e}")
+                self.rag = None
 
     def get_book_annotations_tool(
         self,
@@ -418,6 +438,98 @@ class CalibreMCPServer:
                 'error': f'Failed to export bibliography: {str(e)}'
             }
 
+    def search_books_with_citations_tool(
+        self,
+        query: str,
+        top_k: int = 5,
+        mode: str = 'hybrid',
+        language: Optional[str] = None,
+        expand_context: bool = False
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: Search books and generate XML-structured prompts with citation support.
+
+        This tool combines RAG search with XML prompt generation, providing:
+        - Structured <documents> with metadata
+        - System prompt with citation instructions
+        - Ready-to-use prompts for Claude
+
+        Args:
+            query: Search query
+            top_k: Number of results to return (default: 5)
+            mode: Search mode - 'hybrid', 'semantic', or 'keyword' (default: 'hybrid')
+            language: Filter by language (e.g., 'de', 'en', 'la')
+            expand_context: Enable context expansion (Small-to-Big) if char_offsets available
+
+        Returns:
+            Dictionary with XML prompts and search results
+        """
+        if not self.rag:
+            return {
+                'error': 'RAG system not available',
+                'help': 'RAG system requires AchillesRAG to be installed and initialized'
+            }
+
+        try:
+            # Perform search
+            results = self.rag.query(
+                query_text=query,
+                top_k=top_k,
+                mode=mode,
+                language=language
+            )
+
+            if not results:
+                return {
+                    'results': [],
+                    'message': 'No results found',
+                    'query': query
+                }
+
+            # Generate XML prompts
+            claude_prompt = self.rag.create_claude_prompt(
+                results=results,
+                query_text=query,
+                expand_context=expand_context
+            )
+
+            # Return structured response
+            return {
+                'query': query,
+                'num_results': len(results),
+                'search_mode': mode,
+                'language_filter': language,
+                'system_prompt': claude_prompt['system'],
+                'user_prompt': claude_prompt['user'],
+                'approx_tokens': claude_prompt['total_tokens_approx'],
+                'usage_instructions': (
+                    "Copy 'system_prompt' to Claude's System Prompt field, "
+                    "then copy 'user_prompt' to the message. "
+                    "Claude will cite sources as [doc_1], [doc_2], etc."
+                ),
+                'raw_results': [
+                    {
+                        'rank': r['rank'],
+                        'text_preview': r['text'][:200] + '...' if len(r['text']) > 200 else r['text'],
+                        'similarity': r.get('similarity', 0),
+                        'metadata': {
+                            'author': r['metadata'].get('author'),
+                            'title': r['metadata'].get('book_title'),
+                            'year': r['metadata'].get('year'),
+                            'page': r['metadata'].get('page'),
+                        }
+                    }
+                    for r in results
+                ]
+            }
+
+        except Exception as e:
+            logger.error(f"Search with citations failed: {e}", exc_info=True)
+            return {
+                'error': f'Search failed: {str(e)}',
+                'query': query
+            }
+
 
 def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
     """
@@ -633,6 +745,40 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                         'description': 'Maximum number of books to export'
                     }
                 }
+            }
+        },
+        {
+            'name': 'search_books_with_citations',
+            'description': 'Search books with RAG and generate XML-structured prompts with citation support. Returns system prompt + user prompt ready for Claude Desktop. Claude will cite sources as [doc_1], [doc_2], etc.',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'query': {
+                        'type': 'string',
+                        'description': 'Search query (e.g., "Was ist Herrschaftslegitimation?")'
+                    },
+                    'top_k': {
+                        'type': 'integer',
+                        'description': 'Number of results to return (default: 5)',
+                        'default': 5
+                    },
+                    'mode': {
+                        'type': 'string',
+                        'enum': ['hybrid', 'semantic', 'keyword'],
+                        'description': 'Search mode: hybrid (recommended), semantic (meaning-based), or keyword (exact matching)',
+                        'default': 'hybrid'
+                    },
+                    'language': {
+                        'type': 'string',
+                        'description': 'Filter by language code (e.g., "de" for German, "en" for English, "la" for Latin)'
+                    },
+                    'expand_context': {
+                        'type': 'boolean',
+                        'description': 'Enable context expansion (Small-to-Big retrieval) if char_offsets available',
+                        'default': False
+                    }
+                },
+                'required': ['query']
             }
         }
     ]
