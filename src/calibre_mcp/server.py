@@ -105,10 +105,24 @@ class CalibreMCPServer:
         self.rag = None
         if RAG_AVAILABLE:
             try:
-                rag_path = rag_db_path or "./achilles_rag_db"
-                self.rag = AchillesRAG(db_path=rag_path)
-                logger.info(f"RAG system initialized: {rag_path}")
+                import io
+
+                # Redirect stdout during RAG initialization to prevent MCP protocol interference
+                # AchillesRAG prints status messages that would corrupt JSON-RPC communication
+                old_stdout = sys.stdout
+                sys.stdout = sys.stderr  # Redirect prints to stderr
+
+                try:
+                    rag_path = rag_db_path or "./achilles_rag_db"
+                    self.rag = AchillesRAG(db_path=rag_path)
+                    logger.info(f"RAG system initialized: {rag_path}")
+                finally:
+                    sys.stdout = old_stdout  # Restore stdout
+
             except Exception as e:
+                # Ensure stdout is restored even if initialization fails
+                if 'old_stdout' in locals():
+                    sys.stdout = old_stdout
                 logger.warning(f"Failed to initialize RAG system: {e}")
                 self.rag = None
 
@@ -471,13 +485,21 @@ class CalibreMCPServer:
             }
 
         try:
-            # Perform search
-            results = self.rag.query(
-                query_text=query,
-                top_k=top_k,
-                mode=mode,
-                language=language
-            )
+            # Redirect stdout during search to prevent MCP protocol interference
+            # The query() method prints status messages that corrupt JSON-RPC
+            old_stdout = sys.stdout
+            sys.stdout = sys.stderr
+
+            try:
+                # Perform search
+                results = self.rag.query(
+                    query_text=query,
+                    top_k=top_k,
+                    mode=mode,
+                    language=language
+                )
+            finally:
+                sys.stdout = old_stdout
 
             if not results:
                 return {
