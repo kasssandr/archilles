@@ -113,8 +113,8 @@ This will show:
    - Manually inspect database:
      ```python
      import chromadb
-     client = chromadb.PersistentClient(path="./achilles_rag_db")
-     collection = client.get_collection("achilles_books")
+     client = chromadb.PersistentClient(path="./archilles_rag_db")
+     collection = client.get_collection("archilles_books")
      results = collection.get(
          where={"$and": [{"book_id": "von_Harnack"}, {"page": 329}]},
          include=["metadatas"]

@@ -18,11 +18,11 @@ from calibre_analyzer import CalibreAnalyzer
 
 # Import RAG system for XML prompt generation
 try:
-    from scripts.rag_demo import AchillesRAG
+    from scripts.rag_demo import archillesRAG
     RAG_AVAILABLE = True
 except ImportError:
     RAG_AVAILABLE = False
-    logging.warning("AchillesRAG not available. XML prompt generation disabled.")
+    logging.warning("archillesRAG not available. XML prompt generation disabled.")
 
 from .annotations import (
     compute_book_hash,
@@ -108,13 +108,13 @@ class CalibreMCPServer:
                 import io
 
                 # Redirect stdout during RAG initialization to prevent MCP protocol interference
-                # AchillesRAG prints status messages that would corrupt JSON-RPC communication
+                # archillesRAG prints status messages that would corrupt JSON-RPC communication
                 old_stdout = sys.stdout
                 sys.stdout = sys.stderr  # Redirect prints to stderr
 
                 try:
-                    rag_path = rag_db_path or "./achilles_rag_db"
-                    self.rag = AchillesRAG(db_path=rag_path)
+                    rag_path = rag_db_path or "./archilles_rag_db"
+                    self.rag = archillesRAG(db_path=rag_path)
                     logger.info(f"RAG system initialized: {rag_path}")
                 finally:
                     sys.stdout = old_stdout  # Restore stdout
@@ -481,7 +481,7 @@ class CalibreMCPServer:
         if not self.rag:
             return {
                 'error': 'RAG system not available',
-                'help': 'RAG system requires AchillesRAG to be installed and initialized'
+                'help': 'RAG system requires archillesRAG to be installed and initialized'
             }
 
         try:

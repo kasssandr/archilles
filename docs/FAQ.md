@@ -94,7 +94,7 @@ Yes, automatically if PyTorch with CUDA is installed. Otherwise falls back to CP
 
 ### Where is the vector database stored?
 
-By default in `./achilles_rag_db/`. Configurable via `--db-path`.
+By default in `./archilles_rag_db/`. Configurable via `--db-path`.
 
 ## Privacy & Legal
 

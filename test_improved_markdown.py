@@ -39,7 +39,7 @@ output_file = f"test_improved_export_{timestamp}.md"
 lines = []
 
 # Header
-lines.append(f"# Achilles RAG - Suchergebnisse")
+lines.append(f"# archilles RAG - Suchergebnisse")
 lines.append(f"")
 lines.append(f"**Query:** `{query_text}`  ")
 lines.append(f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
@@ -132,7 +132,7 @@ for result in test_results:
     lines.append(f"")
 
 # Footer with tags
-tags = ["#achilles", "#rag", "#suche", "#latein"]
+tags = ["#archilles", "#rag", "#suche", "#latein"]
 lines.append(f"")
 lines.append(" ".join(tags))
 

@@ -1,45 +1,45 @@
-# Pflichtenheft: ARCHILLES RAG-System für wissenschaftliche Textsammlungen
+# Pflichtenheft: ARCHILLES RAG-System fï¿½r wissenschaftliche Textsammlungen
 
 **Version:** 1.0
 **Datum:** 22. November 2025
 **Auftraggeber:** Academic Research Community
 **Auftragnehmer:** Claude Code
-**Projektname:** Achilles
-**Ziel:** Lokales, GDPR-konformes RAG-System für Geisteswissenschaftler
+**Projektname:** archilles
+**Ziel:** Lokales, GDPR-konformes RAG-System fï¿½r Geisteswissenschaftler
 
 ---
 
 ## EXECUTIVE SUMMARY
 
-**Vision:** Das DevonThink für das KI-Zeitalter – plattformübergreifend, GDPR-by-design, 100% offline
+**Vision:** Das DevonThink fï¿½r das KI-Zeitalter ï¿½ plattformï¿½bergreifend, GDPR-by-design, 100% offline
 
 **Alleinstellungsmerkmale:**
 1. Perfekte Calibre-Integration mit Annotations-Sync
 2. Exakte Zitatpflicht (jeder Satz ? klickbare PDF-Stelle)
 3. Geisteswissenschaften-Optimierung (Hierarchical Retrieval, Timeline-View)
-4. MCP-Server für Claude Desktop / andere Clients
-5. 100% lokal, keine Cloud-Abhängigkeit
+4. MCP-Server fï¿½r Claude Desktop / andere Clients
+5. 100% lokal, keine Cloud-Abhï¿½ngigkeit
 
-**Zielgruppe:** Deutsche/europäische Geisteswissenschaftler, besonders:
-- Geisteswissenschaften (Geschichtswissenschaft, Literaturwissenschaft, Sprachwissenschaft)`n- Sozialwissenschaften (Soziologie, Politikwissenschaft, Anthropologie)`n- Kulturwissenschaften (Medienwissenschaft, Kulturanthropologie)`n- Altphilologie und Klassische Studien`n- Interdisziplinäre Forschung
+**Zielgruppe:** Deutsche/europï¿½ische Geisteswissenschaftler, besonders:
+- Geisteswissenschaften (Geschichtswissenschaft, Literaturwissenschaft, Sprachwissenschaft)`n- Sozialwissenschaften (Soziologie, Politikwissenschaft, Anthropologie)`n- Kulturwissenschaften (Medienwissenschaft, Kulturanthropologie)`n- Altphilologie und Klassische Studien`n- Interdisziplinï¿½re Forschung
 
-**Monetarisierung:** 299 € Einmalkauf + optional 99 €/Jahr Updates
+**Monetarisierung:** 299 ï¿½ Einmalkauf + optional 99 ï¿½/Jahr Updates
 
-**Zeitrahmen:** 4-6 Wochen zum verkaufsfähigen MVP
+**Zeitrahmen:** 4-6 Wochen zum verkaufsfï¿½higen MVP
 
 ---
 
 ## PHASE 1: FOUNDATION MVP (WOCHEN 1-2)
-### Priorität: ?? KRITISCH – Ohne das läuft nichts
+### Prioritï¿½t: ?? KRITISCH ï¿½ Ohne das lï¿½uft nichts
 
-### 1.1 EMBEDDING-UPGRADE ? **HÖCHSTE PRIORITÄT**
+### 1.1 EMBEDDING-UPGRADE ? **Hï¿½CHSTE PRIORITï¿½T**
 
-**Ziel:** Von all-mpnet-base-v2 auf BGE-M3 upgraden für bessere deutsche Texte
+**Ziel:** Von all-mpnet-base-v2 auf BGE-M3 upgraden fï¿½r bessere deutsche Texte
 
 **Anforderungen:**
 - BGE-M3 (1024-dim, multilingual) installieren und testen
 - Alle 10.151 bestehenden Annotations re-indexieren
-- A/B-Test: Retrieval-Qualität alt vs. neu dokumentieren
+- A/B-Test: Retrieval-Qualitï¿½t alt vs. neu dokumentieren
 - Performance-Messung: Indexing-Zeit, Query-Zeit, RAM-Nutzung
 
 **Technische Spezifikation:**
@@ -54,24 +54,24 @@ BAAI/bge-m3
 - Latein/Griechisch (wenn vorhanden): +15-20% Recall
 
 # Performance-Ziele
-- Indexing: <2 Stunden für 10.151 Annotations
+- Indexing: <2 Stunden fï¿½r 10.151 Annotations
 - Query-Zeit: <1 Sekunde (wie bisher)
-- RAM: <8 GB für komplette Vektordatenbank
+- RAM: <8 GB fï¿½r komplette Vektordatenbank
 ```
 
 **Deliverables:**
-- [ ] `scripts/upgrade_to_bge_m3.py` – Re-Indexing-Skript
-- [ ] `scripts/compare_embeddings.py` – A/B-Test-Report
-- [ ] `EMBEDDING_UPGRADE_REPORT.md` – Dokumentation mit Metriken
+- [ ] `scripts/upgrade_to_bge_m3.py` ï¿½ Re-Indexing-Skript
+- [ ] `scripts/compare_embeddings.py` ï¿½ A/B-Test-Report
+- [ ] `EMBEDDING_UPGRADE_REPORT.md` ï¿½ Dokumentation mit Metriken
 
 **Akzeptanzkriterien:**
-- ? BGE-M3 läuft stabil auf Standard-Hardware
+- ? BGE-M3 lï¿½uft stabil auf Standard-Hardware
 - ? Alle 10.151 Annotations erfolgreich re-indexiert
 - ? Mindestens 20% Verbesserung bei deutschen Queries (3-5 Test-Queries)
 - ? Keine Performance-Verschlechterung (<1s Response-Zeit)
 
-**Zeitschätzung:** 2-3 Tage
-**Abhängigkeiten:** Keine
+**Zeitschï¿½tzung:** 2-3 Tage
+**Abhï¿½ngigkeiten:** Keine
 
 ---
 
@@ -90,7 +90,7 @@ BAAI/bge-m3
 # Stack
 pdfplumber==0.11.0
 pymupdf==1.23.8
-pytesseract==0.3.10  # für OCR-Fallback
+pytesseract==0.3.10  # fï¿½r OCR-Fallback
 
 # Chunk-Strategie
 chunk_size = 512 tokens
@@ -105,7 +105,7 @@ strategy = "semantic" (respektiere Absatzgrenzen)
     "author": str,
     "year": int,
     "page": int,  # exakte Seitenzahl
-    "page_label": str,  # z.B. "xiv" für röm. Ziffern
+    "page_label": str,  # z.B. "xiv" fï¿½r rï¿½m. Ziffern
     "char_start": int,
     "char_end": int,
     "chapter": str,  # wenn aus TOC extrahierbar
@@ -113,38 +113,38 @@ strategy = "semantic" (respektiere Absatzgrenzen)
 }
 ```
 
-**Spezielle Anforderungen für Geisteswissenschaften:**
-- Fußnoten separat markieren (nicht im Haupt-Text-Chunk)
-- Römische Seitenzahlen (Vorwort) korrekt erfassen
+**Spezielle Anforderungen fï¿½r Geisteswissenschaften:**
+- Fuï¿½noten separat markieren (nicht im Haupt-Text-Chunk)
+- Rï¿½mische Seitenzahlen (Vorwort) korrekt erfassen
 - Mehrspaltige Layouts (kritische Editionen) erkennen
-- Griechische/lateinische Passagen nicht beschädigen
+- Griechische/lateinische Passagen nicht beschï¿½digen
 
 **Deliverables:**
-- [ ] `src/pdf_extractor.py` – PDF-Verarbeitungs-Pipeline
-- [ ] `src/metadata_schema.py` – Metadaten-Definitionen
-- [ ] `tests/test_pdf_extraction.py` – Unit-Tests
-- [ ] `docs/PDF_EXTRACTION.md` – Dokumentation
+- [ ] `src/pdf_extractor.py` ï¿½ PDF-Verarbeitungs-Pipeline
+- [ ] `src/metadata_schema.py` ï¿½ Metadaten-Definitionen
+- [ ] `tests/test_pdf_extraction.py` ï¿½ Unit-Tests
+- [ ] `docs/PDF_EXTRACTION.md` ï¿½ Dokumentation
 
 **Akzeptanzkriterien:**
 - ? 5 Test-PDFs aus verschiedenen Bibliotheken erfolgreich verarbeitet
 - ? Seitenzahlen zu 95%+ korrekt extrahiert
-- ? Fußnoten separat erfasst
-- ? Keine Textverfälschungen bei Sonderzeichen (griechisch/lateinisch)
+- ? Fuï¿½noten separat erfasst
+- ? Keine Textverfï¿½lschungen bei Sonderzeichen (griechisch/lateinisch)
 - ? Fallback auf OCR bei gescannten PDFs funktioniert
 
-**Zeitschätzung:** 3-5 Tage
-**Abhängigkeiten:** Keine
+**Zeitschï¿½tzung:** 3-5 Tage
+**Abhï¿½ngigkeiten:** Keine
 
 ---
 
 ### 1.3 CHROMADB-SETUP MIT ERWEITERTEN METADATEN
 
-**Ziel:** Vektordatenbank mit allen Metadaten für spätere Filter-Funktionen
+**Ziel:** Vektordatenbank mit allen Metadaten fï¿½r spï¿½tere Filter-Funktionen
 
 **Anforderungen:**
 - ChromaDB mit BGE-M3 Embeddings
 - Alle Metadaten aus 1.2 speichern
-- Filter-fähig nach: author, year, book_id, page_range
+- Filter-fï¿½hig nach: author, year, book_id, page_range
 - Persistent Storage (SQLite-Backend)
 
 **Technische Spezifikation:**
@@ -154,7 +154,7 @@ chromadb==0.4.22
 
 # Collection-Setup
 collection = client.create_collection(
-    name="achilles_main",
+    name="archilles_main",
     metadata={
         "hnsw:space": "cosine",
         "embedding_model": "BAAI/bge-m3"
@@ -163,29 +163,29 @@ collection = client.create_collection(
 
 # Indexing-Performance-Ziele
 - 10.151 Annotations: <2 Stunden
-- 2.408 Bücher (wenn voll-indexiert): <48 Stunden
-- Inkrementelles Update: <5 Minuten für 1 Buch
+- 2.408 Bï¿½cher (wenn voll-indexiert): <48 Stunden
+- Inkrementelles Update: <5 Minuten fï¿½r 1 Buch
 
 # Speicherplatz
-- Erwartete DB-Größe: 500 MB - 2 GB
-- Backup-fähig (simple Datei-Kopie)
+- Erwartete DB-Grï¿½ï¿½e: 500 MB - 2 GB
+- Backup-fï¿½hig (simple Datei-Kopie)
 ```
 
 **Deliverables:**
-- [ ] `src/vector_store.py` – ChromaDB Wrapper
-- [ ] `scripts/init_chromadb.py` – Initiales Setup
-- [ ] `scripts/index_calibre_library.py` – Bulk-Indexing
-- [ ] `tests/test_vector_store.py` – Tests
+- [ ] `src/vector_store.py` ï¿½ ChromaDB Wrapper
+- [ ] `scripts/init_chromadb.py` ï¿½ Initiales Setup
+- [ ] `scripts/index_calibre_library.py` ï¿½ Bulk-Indexing
+- [ ] `tests/test_vector_store.py` ï¿½ Tests
 
 **Akzeptanzkriterien:**
-- ? ChromaDB läuft stabil mit BGE-M3
+- ? ChromaDB lï¿½uft stabil mit BGE-M3
 - ? 10.151 Annotations erfolgreich indexiert
 - ? Metadata-Filter funktionieren (test: "author='Josephus'")
 - ? Query-Performance <1s
-- ? Persistent Storage funktioniert (Neustart möglich)
+- ? Persistent Storage funktioniert (Neustart mï¿½glich)
 
-**Zeitschätzung:** 2-3 Tage
-**Abhängigkeiten:** 1.1 (BGE-M3 muss fertig sein)
+**Zeitschï¿½tzung:** 2-3 Tage
+**Abhï¿½ngigkeiten:** 1.1 (BGE-M3 muss fertig sein)
 
 ---
 
@@ -194,8 +194,8 @@ collection = client.create_collection(
 **Ziel:** Lokale LLM-Antworten auf RAG-Queries
 
 **Anforderungen:**
-- Ollama installiert und läuft
-- Llama-3.1-8B als primäres Modell
+- Ollama installiert und lï¿½uft
+- Llama-3.1-8B als primï¿½res Modell
 - Mistral-7B als Alternative (schneller)
 - Einfache Query ? Context ? LLM ? Answer Pipeline
 
@@ -211,11 +211,11 @@ fallback: mistral:7b-instruct
 
 # Prompt-Template (wissenschaftlicher Fokus)
 """
-Du bist ein wissenschaftlicher Forschungsassistent für Geisteswissenschaften.
+Du bist ein wissenschaftlicher Forschungsassistent fï¿½r Geisteswissenschaften.
 Beantworte die Frage NUR basierend auf dem bereitgestellten Kontext.
 
 STRIKTE REGELN:
-1. Nutze KEIN externes Wissen – nur den Kontext
+1. Nutze KEIN externes Wissen ï¿½ nur den Kontext
 2. Zitiere IMMER mit [Quelle X, S. Y]
 3. Wenn die Antwort nicht im Kontext ist: "Keine Information hierzu gefunden"
 4. Ton: neutral, formal, wissenschaftlich
@@ -230,47 +230,47 @@ ANTWORT:
 """
 
 # Performance-Ziele
-- Response-Zeit: <10s für 8B-Modell
+- Response-Zeit: <10s fï¿½r 8B-Modell
 - RAM: <16 GB
 - Tokens: 512-1024 Output, 4096 Input (Context)
 ```
 
 **Deliverables:**
-- [ ] `src/llm_interface.py` – Ollama-Wrapper
-- [ ] `src/rag_pipeline.py` – Query ? Retrieval ? LLM ? Response
-- [ ] `prompts/scientific_rag.txt` – System-Prompt
-- [ ] `tests/test_llm_integration.py` – Tests
+- [ ] `src/llm_interface.py` ï¿½ Ollama-Wrapper
+- [ ] `src/rag_pipeline.py` ï¿½ Query ? Retrieval ? LLM ? Response
+- [ ] `prompts/scientific_rag.txt` ï¿½ System-Prompt
+- [ ] `tests/test_llm_integration.py` ï¿½ Tests
 
 **Akzeptanzkriterien:**
-- ? Ollama läuft auf Toms System
+- ? Ollama lï¿½uft auf Toms System
 - ? Llama-3.1-8B antwortet auf Test-Queries
 - ? Citations im Format [Quelle, S. X] funktionieren
-- ? Keine Halluzinationen bei 5 Test-Queries (manuell prüfen)
+- ? Keine Halluzinationen bei 5 Test-Queries (manuell prï¿½fen)
 - ? Response-Zeit <10s
 
-**Zeitschätzung:** 2-3 Tage
-**Abhängigkeiten:** 1.3 (ChromaDB muss Daten liefern können)
+**Zeitschï¿½tzung:** 2-3 Tage
+**Abhï¿½ngigkeiten:** 1.3 (ChromaDB muss Daten liefern kï¿½nnen)
 
 ---
 
-### 1.5 ENDE-ZU-ENDE-TEST (MVP FUNKTIONSFÄHIG)
+### 1.5 ENDE-ZU-ENDE-TEST (MVP FUNKTIONSFï¿½HIG)
 
 **Ziel:** Kompletter RAG-Workflow funktioniert
 
 **Test-Szenario:**
 ```
-USER: "Was sagt Josephus über die jüdischen Könige?"
+USER: "Was sagt Josephus ï¿½ber die jï¿½dischen Kï¿½nige?"
 
 SYSTEM:
 1. Query ? BGE-M3 Embedding
 2. ChromaDB Semantic Search ? Top 5 Chunks
 3. Chunks + Query ? Ollama (Llama-3.1-8B)
 4. Output:
-   "Josephus beschreibt die jüdischen Könige als... [Josephus,
+   "Josephus beschreibt die jï¿½dischen Kï¿½nige als... [Josephus,
    Antiquitates, S. 142]. Er betont besonders... [ebd., S. 156]."
 ```
 
-**Akzeptanzkriterien für Phase 1 Abschluss:**
+**Akzeptanzkriterien fï¿½r Phase 1 Abschluss:**
 - ? 10 Test-Queries laufen komplett durch
 - ? Alle Antworten enthalten Citations
 - ? Keine technischen Fehler (Crashes, Timeouts)
@@ -278,26 +278,26 @@ SYSTEM:
 - ? System ist benutzerfreundlich (CLI)
 
 **Deliverables:**
-- [ ] `demo_queries.md` – 10 Test-Queries mit erwarteten Outputs
-- [ ] `PHASE1_COMPLETION_REPORT.md` – Abschlussbericht
+- [ ] `demo_queries.md` ï¿½ 10 Test-Queries mit erwarteten Outputs
+- [ ] `PHASE1_COMPLETION_REPORT.md` ï¿½ Abschlussbericht
 
-**Zeitschätzung:** 1 Tag (Integration + Testing)
-**Abhängigkeiten:** 1.1-1.4 alle fertig
+**Zeitschï¿½tzung:** 1 Tag (Integration + Testing)
+**Abhï¿½ngigkeiten:** 1.1-1.4 alle fertig
 
 ---
 
-## PHASE 2: WISSENSCHAFTLICHE QUALITÄT (WOCHEN 3-4)
-### Priorität: ?? HOCH – Macht es wissenschaftlich nutzbar
+## PHASE 2: WISSENSCHAFTLICHE QUALITï¿½T (WOCHEN 3-4)
+### Prioritï¿½t: ?? HOCH ï¿½ Macht es wissenschaftlich nutzbar
 
 ### 2.1 EXAKTE ZITATPFLICHT MIT KLICKBAREN LINKS ???
 
 **Ziel:** Jede Antwort verlinkt auf exakte PDF-Stelle (wie NotebookLM)
 
 **Anforderungen:**
-- PDF-Koordinaten (page, x, y, width, height) für jeden Chunk speichern
+- PDF-Koordinaten (page, x, y, width, height) fï¿½r jeden Chunk speichern
 - Calibre-URI-Schema nutzen: `calibre://view/<book_id>#page=<N>`
 - Klickbarer Link in Ausgabe: `[Josephus, S. 142] (calibre://...)`
-- Alternative: PDF öffnen an exakter Stelle via externe Tools
+- Alternative: PDF ï¿½ffnen an exakter Stelle via externe Tools
 
 **Technische Spezifikation:**
 ```python
@@ -319,36 +319,36 @@ citation_format = "[{author}, {title} ({year}), S. {page}]({calibre_uri})"
 ```
 
 **Spezielle Herausforderungen:**
-- PDF-Koordinaten aus pdfplumber extrahieren (nicht immer verfügbar)
+- PDF-Koordinaten aus pdfplumber extrahieren (nicht immer verfï¿½gbar)
 - Calibre-Annotations haben bereits Koordinaten ? diese nutzen!
 - Fallback: Nur Seitenzahl wenn Koordinaten fehlen
 
 **Deliverables:**
-- [ ] `src/citation_builder.py` – Citation-Generator
-- [ ] `src/pdf_coordinates.py` – Koordinaten-Extraktion
+- [ ] `src/citation_builder.py` ï¿½ Citation-Generator
+- [ ] `src/pdf_coordinates.py` ï¿½ Koordinaten-Extraktion
 - [ ] Update `src/metadata_schema.py`
-- [ ] `docs/CITATION_SYSTEM.md` – Dokumentation
+- [ ] `docs/CITATION_SYSTEM.md` ï¿½ Dokumentation
 
 **Akzeptanzkriterien:**
 - ? 95% der Chunks haben Seitenzahl
-- ? 70% der Chunks haben PDF-Koordinaten (besser: 90% für Calibre-Annotations)
-- ? Calibre-Links funktionieren (öffnet PDF an richtiger Stelle)
+- ? 70% der Chunks haben PDF-Koordinaten (besser: 90% fï¿½r Calibre-Annotations)
+- ? Calibre-Links funktionieren (ï¿½ffnet PDF an richtiger Stelle)
 - ? Citations im Format [Autor, Werk, S. X] in allen Outputs
 
-**Zeitschätzung:** 3-4 Tage
-**Abhängigkeiten:** 1.2 (PDF-Extraktion)
+**Zeitschï¿½tzung:** 3-4 Tage
+**Abhï¿½ngigkeiten:** 1.2 (PDF-Extraktion)
 
 ---
 
 ### 2.2 TRANSPARENTER RETRIEVAL-PROZESS
 
-**Ziel:** Nutzer versteht WARUM diese Chunks ausgewählt wurden
+**Ziel:** Nutzer versteht WARUM diese Chunks ausgewï¿½hlt wurden
 
 **Anforderungen:**
-- Relevance Score (0.0-1.0) für jeden Chunk anzeigen
+- Relevance Score (0.0-1.0) fï¿½r jeden Chunk anzeigen
 - Alternative Passagen zeigen (Rank 6-10)
 - Keyword-Highlighting im Chunk-Text
-- "Warum wurde dieser Chunk gewählt?" Erklärung
+- "Warum wurde dieser Chunk gewï¿½hlt?" Erklï¿½rung
 
 **Technische Spezifikation:**
 ```python
@@ -361,22 +361,22 @@ citation_format = "[{author}, {title} ({year}), S. {page}]({calibre_uri})"
             "metadata": dict,
             "relevance_score": float,
             "matched_keywords": List[str],
-            "explanation": str  # z.B. "Enthält 'Josephus' und 'Könige'"
+            "explanation": str  # z.B. "Enthï¿½lt 'Josephus' und 'Kï¿½nige'"
         }
     ],
     "alternative_chunks": [...]  # Rank 6-10
 }
 ```
 
-**UI-Konzept (für CLI erstmal):**
+**UI-Konzept (fï¿½r CLI erstmal):**
 ```
 ANTWORT:
-Josephus beschreibt die jüdischen Könige als... [Quelle 1, S. 142]
+Josephus beschreibt die jï¿½dischen Kï¿½nige als... [Quelle 1, S. 142]
 
 QUELLEN:
 [1] Josephus, Antiquitates (Bd. 2), S. 142
     Relevanz: 0.87 (sehr hoch)
-    Gefunden wegen: "jüdische Könige", "Herrschaft"
+    Gefunden wegen: "jï¿½dische Kï¿½nige", "Herrschaft"
     [Link zum PDF]
 
 ALTERNATIVE PASSAGEN:
@@ -385,28 +385,28 @@ ALTERNATIVE PASSAGEN:
 ```
 
 **Deliverables:**
-- [ ] `src/retrieval_explainer.py` – Erklärungs-Logik
-- [ ] Update `src/rag_pipeline.py` – Erweiterte Response
-- [ ] `templates/response_format.txt` – Output-Template
+- [ ] `src/retrieval_explainer.py` ï¿½ Erklï¿½rungs-Logik
+- [ ] Update `src/rag_pipeline.py` ï¿½ Erweiterte Response
+- [ ] `templates/response_format.txt` ï¿½ Output-Template
 
 **Akzeptanzkriterien:**
 - ? Alle Responses zeigen Relevance Scores
 - ? Matched Keywords werden highlighted
-- ? Alternative Passagen verfügbar (Rank 6-10)
-- ? Explanations sind verständlich
+- ? Alternative Passagen verfï¿½gbar (Rank 6-10)
+- ? Explanations sind verstï¿½ndlich
 
-**Zeitschätzung:** 2-3 Tage
-**Abhängigkerien:** 1.4 (RAG-Pipeline muss funktionieren)
+**Zeitschï¿½tzung:** 2-3 Tage
+**Abhï¿½ngigkerien:** 1.4 (RAG-Pipeline muss funktionieren)
 
 ---
 
-### 2.3 METADATEN-VOLLSTÄNDIGKEIT AUS CALIBRE
+### 2.3 METADATEN-VOLLSTï¿½NDIGKEIT AUS CALIBRE
 
 **Ziel:** Alle relevanten Calibre-Metadaten nutzen
 
 **Anforderungen:**
 - Author, Title, Year, ISBN, Tags aus Calibre-DB extrahieren
-- Language-Detection (wichtig für multilinguale Sammlungen)
+- Language-Detection (wichtig fï¿½r multilinguale Sammlungen)
 - Custom Columns (falls genutzt)
 - Series-Information (z.B. "Loeb Classical Library, Bd. 4")
 
@@ -441,32 +441,32 @@ ALTERNATIVE PASSAGEN:
 ```
 
 **Deliverables:**
-- [ ] `src/calibre_metadata.py` – Metadaten-Extraktor
-- [ ] Update `src/vector_store.py` – Erweiterte Metadaten speichern
+- [ ] `src/calibre_metadata.py` ï¿½ Metadaten-Extraktor
+- [ ] Update `src/vector_store.py` ï¿½ Erweiterte Metadaten speichern
 - [ ] `tests/test_calibre_metadata.py`
 
 **Akzeptanzkriterien:**
-- ? Alle 2.408 Bücher haben vollständige Metadaten
+- ? Alle 2.408 Bï¿½cher haben vollstï¿½ndige Metadaten
 - ? Tags werden korrekt extrahiert (z.B. "Leit-Literatur")
-- ? Language-Detection funktioniert (wichtig für Filter)
-- ? Filter-Queries möglich: "author='Josephus' AND year<100"
+- ? Language-Detection funktioniert (wichtig fï¿½r Filter)
+- ? Filter-Queries mï¿½glich: "author='Josephus' AND year<100"
 
-**Zeitschätzung:** 2 Tage
-**Abhängigkeiten:** Calibre-DB-Zugriff (bereits vorhanden)
+**Zeitschï¿½tzung:** 2 Tage
+**Abhï¿½ngigkeiten:** Calibre-DB-Zugriff (bereits vorhanden)
 
 ---
 
 ### 2.4 HIERARCHICAL RETRIEVAL (GEISTESWISSENSCHAFTEN-OPTIMIERUNG)
 
-**Ziel:** Argumentative Bögen nicht zerstören (wie von Grok analysiert)
+**Ziel:** Argumentative Bï¿½gen nicht zerstï¿½ren (wie von Grok analysiert)
 
-**Problem:** Standard-Chunking zerstört Kontext bei langen argumentativen Texten
+**Problem:** Standard-Chunking zerstï¿½rt Kontext bei langen argumentativen Texten
 
-**Lösung: Parent-Document-Retrieval**
+**Lï¿½sung: Parent-Document-Retrieval**
 ```
 1. Grob-Retrieval: Kapitel-Ebene
 2. Fein-Retrieval: Absatz-Ebene im relevanten Kapitel
-3. Context-Erweiterung: ±2 Absätze für Kontext
+3. Context-Erweiterung: ï¿½2 Absï¿½tze fï¿½r Kontext
 ```
 
 **Technische Spezifikation:**
@@ -477,28 +477,28 @@ child_chunks = []   # Absatz-Level (256-512 tokens)
 
 # Retrieval-Strategie
 1. Query ? Parent-Embeddings ? Top 3 Kapitel
-2. Query ? Child-Embeddings (nur in Top-3-Kapiteln) ? Top 10 Absätze
-3. Für jeden Absatz: Hole ±2 Nachbar-Absätze (Context-Window)
-4. LLM bekommt: 10 Absätze + jeweils Kontext
+2. Query ? Child-Embeddings (nur in Top-3-Kapiteln) ? Top 10 Absï¿½tze
+3. Fï¿½r jeden Absatz: Hole ï¿½2 Nachbar-Absï¿½tze (Context-Window)
+4. LLM bekommt: 10 Absï¿½tze + jeweils Kontext
 
-# Vorteil für Geschichtswissenschaft
+# Vorteil fï¿½r Geschichtswissenschaft
 - Josephus-Zitat bleibt im Kontext der Argumentation
 - Merowinger-Chroniken behalten narrative Struktur
 ```
 
 **Deliverables:**
-- [ ] `src/hierarchical_retrieval.py` – Parent-Child-Retriever
-- [ ] Update `src/pdf_extractor.py` – TOC-Extraktion für Kapitel
-- [ ] `docs/HIERARCHICAL_RETRIEVAL.md` – Konzept-Doku
+- [ ] `src/hierarchical_retrieval.py` ï¿½ Parent-Child-Retriever
+- [ ] Update `src/pdf_extractor.py` ï¿½ TOC-Extraktion fï¿½r Kapitel
+- [ ] `docs/HIERARCHICAL_RETRIEVAL.md` ï¿½ Konzept-Doku
 
 **Akzeptanzkriterien:**
 - ? TOC (Inhaltsverzeichnis) aus 5 Test-PDFs extrahiert
 - ? Parent-Child-Indexierung funktioniert
-- ? Context-Window (±2 Absätze) wird korrekt geholt
+- ? Context-Window (ï¿½2 Absï¿½tze) wird korrekt geholt
 - ? Test-Query zeigt Verbesserung (manuell: besserer Kontext in Antwort)
 
-**Zeitschätzung:** 3-4 Tage
-**Abhängigkeiten:** 1.2 (PDF-Extraktion), 1.3 (ChromaDB)
+**Zeitschï¿½tzung:** 3-4 Tage
+**Abhï¿½ngigkeiten:** 1.2 (PDF-Extraktion), 1.3 (ChromaDB)
 
 ---
 
@@ -513,7 +513,7 @@ child_chunks = []   # Absatz-Level (256-512 tokens)
    ? Erwartung: Lange Textpassagen bleiben im argumentativen Kontext
 
 3. Filter-Query: "Suche in lateinischen Quellen vor 500 n.Chr."
-   ? Erwartung: Nur relevante Bücher (language='lat', year<500)
+   ? Erwartung: Nur relevante Bï¿½cher (language='lat', year<500)
 ```
 
 **Akzeptanzkriterien Phase 2:**
@@ -526,21 +526,21 @@ child_chunks = []   # Absatz-Level (256-512 tokens)
 **Deliverables:**
 - [ ] `PHASE2_COMPLETION_REPORT.md`
 
-**Zeitschätzung:** 1 Tag (Integration + Testing)
+**Zeitschï¿½tzung:** 1 Tag (Integration + Testing)
 
 ---
 
 ## PHASE 3: PRODUKT-POLISH (WOCHEN 5-6)
-### Priorität: ?? MITTEL – Macht es verkaufbar
+### Prioritï¿½t: ?? MITTEL ï¿½ Macht es verkaufbar
 
 ### 3.1 SIMPLE GUI (GRADIO-PROTOTYP)
 
-**Ziel:** Kein CLI mehr – normale Nutzer können es bedienen
+**Ziel:** Kein CLI mehr ï¿½ normale Nutzer kï¿½nnen es bedienen
 
 **Anforderungen:**
 - Webbasierte GUI mit Gradio (einfachster Weg)
 - Suchfeld + Ergebnis-Anzeige
-- Citations klickbar (öffnet PDF in Calibre)
+- Citations klickbar (ï¿½ffnet PDF in Calibre)
 - Settings: Modell-Wahl, Filter, Retrieval-Parameter
 
 **Technische Spezifikation:**
@@ -567,29 +567,29 @@ gradio==4.10.0
 ```
 
 **Deliverables:**
-- [ ] `app.py` – Gradio-App
-- [ ] `static/` – CSS für Branding (optional)
-- [ ] `docs/USER_GUIDE.md` – Nutzer-Dokumentation
+- [ ] `app.py` ï¿½ Gradio-App
+- [ ] `static/` ï¿½ CSS fï¿½r Branding (optional)
+- [ ] `docs/USER_GUIDE.md` ï¿½ Nutzer-Dokumentation
 
 **Akzeptanzkriterien:**
-- ? GUI läuft auf `localhost:7860`
+- ? GUI lï¿½uft auf `localhost:7860`
 - ? Alle Kern-Funktionen (Search, Settings) funktionieren
-- ? Citations sind klickbar und öffnen Calibre
+- ? Citations sind klickbar und ï¿½ffnen Calibre
 - ? Nicht-technischer Tester kann es bedienen
 
-**Zeitschätzung:** 3-4 Tage
-**Abhängigkeiten:** Phase 1+2 komplett
+**Zeitschï¿½tzung:** 3-4 Tage
+**Abhï¿½ngigkeiten:** Phase 1+2 komplett
 
 ---
 
 ### 3.2 MCP-SERVER (BASIS-IMPLEMENTATION)
 
-**Ziel:** Claude Desktop, AnythingLLM etc. können auf ARCHILLES zugreifen
+**Ziel:** Claude Desktop, AnythingLLM etc. kï¿½nnen auf ARCHILLES zugreifen
 
 **Anforderungen:**
 - MCP-Server exposiert Calibre-Bibliothek
 - Tools: `search_books`, `get_context`, `get_annotations`
-- Resources: Bücher als `file://` oder `calibre://` URIs
+- Resources: Bï¿½cher als `file://` oder `calibre://` URIs
 
 **Technische Spezifikation:**
 ```python
@@ -609,7 +609,7 @@ async def get_book_context(book_id: int, page: int):
 
 @server.resource("calibre://library")
 async def get_library_info():
-    """Übersicht über Bibliothek"""
+    """ï¿½bersicht ï¿½ber Bibliothek"""
     return {
         "total_books": 2408,
         "indexed_chunks": X,
@@ -618,18 +618,18 @@ async def get_library_info():
 ```
 
 **Deliverables:**
-- [ ] `mcp_server.py` – MCP-Server
-- [ ] `config/mcp_config.json` – Claude Desktop Config
-- [ ] `docs/MCP_INTEGRATION.md` – Setup-Anleitung
+- [ ] `mcp_server.py` ï¿½ MCP-Server
+- [ ] `config/mcp_config.json` ï¿½ Claude Desktop Config
+- [ ] `docs/MCP_INTEGRATION.md` ï¿½ Setup-Anleitung
 
 **Akzeptanzkriterien:**
-- ? MCP-Server läuft auf `localhost:8000`
+- ? MCP-Server lï¿½uft auf `localhost:8000`
 - ? Claude Desktop kann Tools sehen und aufrufen
 - ? `search_books` funktioniert aus Claude Desktop
 - ? Keine Daten werden hochgeladen (lokal bleibt lokal)
 
-**Zeitschätzung:** 3-5 Tage
-**Abhängigkeiten:** Phase 1+2, MCP-SDK-Kenntnisse
+**Zeitschï¿½tzung:** 3-5 Tage
+**Abhï¿½ngigkeiten:** Phase 1+2, MCP-SDK-Kenntnisse
 
 ---
 
@@ -651,13 +651,13 @@ INSERT INTO annotations (
 ) VALUES (...)
 
 # Sync-Strategie
-- ARCHILLES hält lokale Kopie der annotations
+- ARCHILLES hï¿½lt lokale Kopie der annotations
 - Periodischer Check (alle 60s): Neue Calibre-Annotations?
 - User markiert in ARCHILLES ? sofort in Calibre schreiben
 ```
 
 **Deliverables:**
-- [ ] `src/calibre_sync.py` – Sync-Engine
+- [ ] `src/calibre_sync.py` ï¿½ Sync-Engine
 - [ ] Background-Task: Periodisches Polling
 - [ ] `docs/CALIBRE_SYNC.md`
 
@@ -665,21 +665,21 @@ INSERT INTO annotations (
 - ? Neue Highlights in ARCHILLES erscheinen in Calibre Viewer
 - ? Neue Calibre-Highlights werden von ARCHILLES erkannt (60s delay)
 - ? Keine Duplikate, keine Datenverluste
-- ? Sync läuft im Hintergrund ohne User-Intervention
+- ? Sync lï¿½uft im Hintergrund ohne User-Intervention
 
-**Zeitschätzung:** 4-5 Tage
-**Abhängigkeiten:** Calibre-DB-Schema-Kenntnisse
+**Zeitschï¿½tzung:** 4-5 Tage
+**Abhï¿½ngigkeiten:** Calibre-DB-Schema-Kenntnisse
 
 ---
 
 ### 3.4 PACKAGING & DISTRIBUTION
 
-**Ziel:** One-Click-Installer für Windows/Mac/Linux
+**Ziel:** One-Click-Installer fï¿½r Windows/Mac/Linux
 
 **Anforderungen:**
-- PyInstaller oder Briefcase für Executable
+- PyInstaller oder Briefcase fï¿½r Executable
 - Ollama automatisch mitinstallieren (oder Installations-Check)
-- Alle Dependencies gebündelt
+- Alle Dependencies gebï¿½ndelt
 - Installer-Wizard mit Calibre-Path-Auswahl
 
 **Technische Spezifikation:**
@@ -687,37 +687,37 @@ INSERT INTO annotations (
 # PyInstaller
 pyinstaller --onefile --windowed app.py
 
-# Erwartete Größe
+# Erwartete Grï¿½ï¿½e
 - Windows: ~300 MB (inkl. Python-Runtime)
 - macOS: ~250 MB
 - Linux: ~200 MB
 
 # Installation Flow
-1. User wählt Calibre-Bibliothek-Pfad
+1. User wï¿½hlt Calibre-Bibliothek-Pfad
 2. ARCHILLES indexiert Bibliothek (Progress-Bar)
 3. Ollama-Check: Installiert? Wenn nein: Download-Link
-4. Fertig: GUI öffnet sich
+4. Fertig: GUI ï¿½ffnet sich
 ```
 
 **Deliverables:**
-- [ ] `build/installers/` – Windows .exe, macOS .dmg, Linux .deb
-- [ ] `INSTALL_GUIDE.md` – Installations-Anleitung
-- [ ] `scripts/build_release.sh` – Build-Skript
+- [ ] `build/installers/` ï¿½ Windows .exe, macOS .dmg, Linux .deb
+- [ ] `INSTALL_GUIDE.md` ï¿½ Installations-Anleitung
+- [ ] `scripts/build_release.sh` ï¿½ Build-Skript
 
 **Akzeptanzkriterien:**
 - ? Installer funktioniert auf allen 3 Plattformen
-- ? Erster Start: Indexierung läuft automatisch
+- ? Erster Start: Indexierung lï¿½uft automatisch
 - ? Ollama-Warning wenn nicht installiert
 - ? Beta-Tester kann installieren ohne Code-Kenntnisse
 
-**Zeitschätzung:** 3-4 Tage
-**Abhängigkerien:** Alle Features von Phase 3 fertig
+**Zeitschï¿½tzung:** 3-4 Tage
+**Abhï¿½ngigkerien:** Alle Features von Phase 3 fertig
 
 ---
 
 ### 3.5 BETA-TESTER-PROGRAMM
 
-**Ziel:** 10-20 Geisteswissenschaftler testen Achilles
+**Ziel:** 10-20 Geisteswissenschaftler testen archilles
 
 **Anforderungen:**
 - Rekrutierung: r/AskHistorians, H-Soz-Kult, Zotero-Forum
@@ -728,53 +728,53 @@ pyinstaller --onefile --windowed app.py
 **Feedback-Fokus:**
 ```
 1. Installation: War es einfach? (1-5)
-2. Retrieval-Qualität: Findet es relevante Stellen? (1-5)
+2. Retrieval-Qualitï¿½t: Findet es relevante Stellen? (1-5)
 3. Citations: Sind sie korrekt und klickbar? (1-5)
-4. Performance: Läuft es flüssig? (1-5)
+4. Performance: Lï¿½uft es flï¿½ssig? (1-5)
 5. Killer-Feature: Was fehlt am meisten?
-6. Zahlungsbereitschaft: Wie viel würden Sie zahlen?
+6. Zahlungsbereitschaft: Wie viel wï¿½rden Sie zahlen?
 ```
 
 **Deliverables:**
 - [ ] Beta-Tester-Email-Template
 - [ ] Feedback-Formular
-- [ ] `BETA_FEEDBACK_REPORT.md` – Zusammenfassung
+- [ ] `BETA_FEEDBACK_REPORT.md` ï¿½ Zusammenfassung
 
 **Akzeptanzkriterien:**
 - ? 10+ Beta-Tester rekrutiert
 - ? Durchschnittliche Zufriedenheit >4.0/5
 - ? Keine kritischen Bugs mehr
-- ? Feature-Requests priorisiert für Phase 4
+- ? Feature-Requests priorisiert fï¿½r Phase 4
 
-**Zeitschätzung:** 2 Wochen (parallel zu 3.1-3.4)
-**Abhängigkeiten:** Installer muss fertig sein
+**Zeitschï¿½tzung:** 2 Wochen (parallel zu 3.1-3.4)
+**Abhï¿½ngigkeiten:** Installer muss fertig sein
 
 ---
 
 ## PHASE 4: LANGFRISTIGE ROADMAP (MONATE 3-12)
-### Priorität: ?? NIEDRIG – Differenzierung & Skalierung
+### Prioritï¿½t: ?? NIEDRIG ï¿½ Differenzierung & Skalierung
 
-**Übersicht (nicht granular):**
+**ï¿½bersicht (nicht granular):**
 
 ### 4.1 Graph RAG (Monate 3-4)
 - Neo4j-Integration
-- Entitäten: Person, Werk, Ort, Konzept, Epoche
+- Entitï¿½ten: Person, Werk, Ort, Konzept, Epoche
 - Relationen: "zitiert", "widerspricht", "beeinflusst"
 - Timeline-Visualisierung
 
 ### 4.2 Altsprachen-Support (Monate 4-5)
-- CLTK für Latein/Griechisch-Lemmatisierung
-- Fine-tuned Embeddings für klassische Sprachen
-- Parallel-Ansicht: Original + Übersetzung
+- CLTK fï¿½r Latein/Griechisch-Lemmatisierung
+- Fine-tuned Embeddings fï¿½r klassische Sprachen
+- Parallel-Ansicht: Original + ï¿½bersetzung
 
 ### 4.3 Multimodal RAG (Monate 5-6)
-- Llama-3.2-Vision für Handschriften/Karten
-- OCR-Layer: Transkribus-API für mittelalterliche Texte
-- Bild-Text-Verknüpfung
+- Llama-3.2-Vision fï¿½r Handschriften/Karten
+- OCR-Layer: Transkribus-API fï¿½r mittelalterliche Texte
+- Bild-Text-Verknï¿½pfung
 
 ### 4.4 Desktop-App Professional (Monate 7-9)
 - Tauri statt Gradio (native Performance)
-- PDF-Viewer integriert (keine externe Calibre-Abhängigkeit)
+- PDF-Viewer integriert (keine externe Calibre-Abhï¿½ngigkeit)
 - Export-Features: BibTeX, Markdown, Word
 
 ### 4.5 Kollaboration & Institutionen (Monate 10-12)
@@ -811,15 +811,15 @@ GUI: Gradio 4.10.0 (Phase 3), Tauri (Phase 4)
 ### Deployment
 ```
 PyInstaller 6.3.0
-Docker (optional für Server-Deployment)
+Docker (optional fï¿½r Server-Deployment)
 ```
 
 ---
 
-## QUALITÄTSSICHERUNG
+## QUALITï¿½TSSICHERUNG
 
 ### Tests
-- Unit-Tests: pytest für alle Module
+- Unit-Tests: pytest fï¿½r alle Module
 - Integration-Tests: Ende-zu-Ende-Szenarien
 - Performance-Tests: <1s Query-Zeit, <15s mit LLM
 - Manual Testing: 10 Test-Queries pro Phase
@@ -829,7 +829,7 @@ Docker (optional für Server-Deployment)
 - User: Markdown-Docs in `docs/`
 - Developer: Architecture Decision Records (ADRs)
 
-### Code-Qualität
+### Code-Qualitï¿½t
 - Linting: ruff
 - Type-Checking: mypy (strict mode)
 - Formatting: black
@@ -842,16 +842,16 @@ Docker (optional für Server-Deployment)
 - ? 10.151 Annotations semantisch durchsuchbar
 - ? Exakte Citations mit klickbaren Links
 - ? Lokales LLM antwortet wissenschaftlich korrekt
-- ? GUI für Nicht-Techniker bedienbar
-- ? MCP-Server für Claude Desktop funktioniert
+- ? GUI fï¿½r Nicht-Techniker bedienbar
+- ? MCP-Server fï¿½r Claude Desktop funktioniert
 
 ### Performance
 - ? Query-Zeit: <1s (Retrieval)
 - ? Response-Zeit: <15s (mit LLM)
-- ? Indexing: <2h für 10k Annotations
+- ? Indexing: <2h fï¿½r 10k Annotations
 - ? RAM: <16 GB
 
-### Qualität
+### Qualitï¿½t
 - ? Keine Halluzinationen bei 10 Test-Queries
 - ? 95%+ korrekte Citations
 - ? Beta-Tester-Zufriedenheit >4.0/5
@@ -859,7 +859,7 @@ Docker (optional für Server-Deployment)
 
 ### Business
 - ? 10+ Beta-Tester
-- ? Pricing validiert (299 € akzeptiert)
+- ? Pricing validiert (299 ï¿½ akzeptiert)
 - ? Go-to-Market-Plan steht (Phase 4)
 
 ---
@@ -885,13 +885,13 @@ Docker (optional für Server-Deployment)
 
 ### Weekly Progress Reports
 - Fertiggestellte Deliverables
-- Nächste Woche Ziele
+- Nï¿½chste Woche Ziele
 - Risiken & Probleme
 
 ### Phase Completion Reports
 - Nach jeder Phase: Umfassender Bericht
 - Demos: User Testing neue Features
-- Go/No-Go-Entscheidung für nächste Phase
+- Go/No-Go-Entscheidung fï¿½r nï¿½chste Phase
 
 ---
 
@@ -916,15 +916,15 @@ python mcp_server.py
 
 ### Wichtigste Dateien
 ```
-achilles/
+archilles/
 +-- src/
-¦   +-- embeddings.py         # BGE-M3 Wrapper
-¦   +-- vector_store.py        # ChromaDB
-¦   +-- pdf_extractor.py       # PDF ? Text
-¦   +-- llm_interface.py       # Ollama
-¦   +-- rag_pipeline.py        # Kern-Pipeline
-¦   +-- citation_builder.py    # Citations
-¦   +-- calibre_sync.py        # Calibre-Integration
+ï¿½   +-- embeddings.py         # BGE-M3 Wrapper
+ï¿½   +-- vector_store.py        # ChromaDB
+ï¿½   +-- pdf_extractor.py       # PDF ? Text
+ï¿½   +-- llm_interface.py       # Ollama
+ï¿½   +-- rag_pipeline.py        # Kern-Pipeline
+ï¿½   +-- citation_builder.py    # Citations
+ï¿½   +-- calibre_sync.py        # Calibre-Integration
 +-- app.py                      # GUI (Gradio)
 +-- mcp_server.py              # MCP-Server
 +-- docs/                       # Dokumentation
@@ -934,9 +934,9 @@ achilles/
 
 **Ende des Pflichtenhefts**
 
-**Nächste Schritte:**
+**Nï¿½chste Schritte:**
 1. Review: Ist das so richtig?
 2. Claude Code: Phase 1, Woche 1 starten!
 3. Daily Check-ins: Fortschritt tracken
 
-**Fragen? Änderungen? Lass uns loslegen! ??**
+**Fragen? ï¿½nderungen? Lass uns loslegen! ??**

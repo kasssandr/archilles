@@ -512,8 +512,8 @@ def main():
     print("="*80 + "\n")
 
     # Initialize
-    client = chromadb.PersistentClient(path="./achilles_rag_db")
-    collection = client.get_collection("achilles_books")
+    client = chromadb.PersistentClient(path="./archilles_rag_db")
+    collection = client.get_collection("archilles_books")
 
     # Get source file path
     print("Step 1: Locating source PDF...")

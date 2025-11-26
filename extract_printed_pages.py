@@ -146,8 +146,8 @@ class PrintedPageExtractor:
 def main():
     """Extract printed page numbers for all chunks."""
 
-    client = chromadb.PersistentClient(path="./achilles_rag_db")
-    collection = client.get_collection("achilles_books")
+    client = chromadb.PersistentClient(path="./archilles_rag_db")
+    collection = client.get_collection("archilles_books")
 
     extractor = PrintedPageExtractor()
 

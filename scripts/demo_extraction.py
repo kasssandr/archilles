@@ -205,7 +205,7 @@ def main():
 
     print("""
     ╔════════════════════════════════════════════════════════════╗
-    ║         ACHILLES UNIVERSAL TEXT EXTRACTOR - DEMO           ║
+    ║         archilles UNIVERSAL TEXT EXTRACTOR - DEMO           ║
     ║                                                            ║
     ║  Extract text from PDF, EPUB, MOBI, DJVU, DOC, and more!  ║
     ╚════════════════════════════════════════════════════════════╝

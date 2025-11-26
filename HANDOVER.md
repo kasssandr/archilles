@@ -1,19 +1,19 @@
-# ARCHILLES - Übergabe-Dokumentation
+# ARCHILLES - ï¿½bergabe-Dokumentation
 **Branch:** `claude/rag-market-analysis-01Lh7DmoCCZdqrvfbtkm3ewD`
 **Stand:** 21. November 2025
 **Letzter Commit:** e8876ea
 
 ---
 
-## ?? PROJEKT-ÜBERBLICK
+## ?? PROJEKT-ï¿½BERBLICK
 
-**Achilles** ist ein lokales RAG-System (Retrieval-Augmented Generation) für deine große Calibre-Bibliotheken (~12.000+ Bücher) mit Schwerpunkt auf Geisteswissenschaften, Sozialwissenschaften und Kulturwissenschaften.
+**archilles** ist ein lokales RAG-System (Retrieval-Augmented Generation) fï¿½r deine groï¿½e Calibre-Bibliotheken (~12.000+ Bï¿½cher) mit Schwerpunkt auf Geisteswissenschaften, Sozialwissenschaften und Kulturwissenschaften.
 
 **Kern-Anforderungen:**
 - ? 100% lokal/offline (GDPR-konform, keine Cloud)
 - ? Multi-Format-Support (PDF, EPUB, DJVU, MOBI, DOCX, etc.)
 - ? Semantische Suche mit exakten Zitatangaben
-- ? Getrennte Such-Modi für Annotations vs. Volltext
+- ? Getrennte Such-Modi fï¿½r Annotations vs. Volltext
 - ? Sprach-Filterung (Deutsch, Englisch, Latein)
 - ? Kein Marketing-Druck - solide Technik zuerst
 
@@ -21,7 +21,7 @@
 
 ## ? WAS FUNKTIONIERT (Getestet & Committed)
 
-### 1. Universal Text Extraction System (VOLLSTÄNDIG)
+### 1. Universal Text Extraction System (VOLLSTï¿½NDIG)
 **Commit:** 6cdfa45 + 38a0a55
 **Location:** `src/extractors/`
 
@@ -31,14 +31,14 @@
   - Calibre-Konvertierung: MOBI, DJVU, AZW3, DOCX, RTF, ODT, etc.
 - **Chunking:** 512 Tokens, 128 Overlap, absatz-bewusst
 - **Metadaten:** Seitenzahlen, Kapitel, Autor, Titel, Format
-- **Sprach-Erkennung:** Automatisch während Extraktion (siehe #3)
+- **Sprach-Erkennung:** Automatisch wï¿½hrend Extraktion (siehe #3)
 
-**Erfolgreich getestet mit deinen Büchern:**
-- ? **Josephus** - Antiquitates (1.021 Seiten PDF, 422k Wörter)
+**Erfolgreich getestet mit deinen Bï¿½chern:**
+- ? **Josephus** - Antiquitates (1.021 Seiten PDF, 422k Wï¿½rter)
 - ? **von Harnack** - Marcion (745 Seiten DJVU, gescannt)
-- ? **Atwill** - Shakespeare's Secret Messiah (MOBI, 137k Wörter)
-- ? **Zuckerman** - Jewish Princedom (DOCX mit Bildern/OCR, 213k Wörter)
-- ? **Csikszentmihalyi** - Flow (AZW3, 152k Wörter)
+- ? **Atwill** - Shakespeare's Secret Messiah (MOBI, 137k Wï¿½rter)
+- ? **Zuckerman** - Jewish Princedom (DOCX mit Bildern/OCR, 213k Wï¿½rter)
+- ? **Csikszentmihalyi** - Flow (AZW3, 152k Wï¿½rter)
 
 **Wichtige Dateien:**
 ```
@@ -53,17 +53,17 @@ src/extractors/
 
 ---
 
-### 2. RAG-System mit BGE-M3 Embeddings (FUNKTIONSFÄHIG)
+### 2. RAG-System mit BGE-M3 Embeddings (FUNKTIONSFï¿½HIG)
 **Commit:** 9e595d8
 **Script:** `scripts/rag_demo.py`
 
 **Features:**
 - **BGE-M3 Embeddings** (1024-dimensional, multilingual)
-  - Optimiert für Deutsch/Latein/Griechisch
-  - Vorteil gegenüber all-mpnet-base-v2: +25-40% Recall bei deutschen Texten
-- **ChromaDB** für lokale Vector Storage
-- **Aktueller Index:** 2 Bücher (Josephus + von Harnack = 1.766 Chunks)
-- **Query-Qualität:** Bestätigt funktionierend
+  - Optimiert fï¿½r Deutsch/Latein/Griechisch
+  - Vorteil gegenï¿½ber all-mpnet-base-v2: +25-40% Recall bei deutschen Texten
+- **ChromaDB** fï¿½r lokale Vector Storage
+- **Aktueller Index:** 2 Bï¿½cher (Josephus + von Harnack = 1.766 Chunks)
+- **Query-Qualitï¿½t:** Bestï¿½tigt funktionierend
   - Relevanz-Scores: 0,6+ = "hoch", 0,8+ = "sehr hoch"
 
 **Verwendung:**
@@ -73,29 +73,29 @@ python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Josephus/Antiquitates.pd
 
 # Suche
 python scripts/rag_demo.py query "David Melchizedek priest King"
-python scripts/rag_demo.py query "Könige" --top-k 10
+python scripts/rag_demo.py query "Kï¿½nige" --top-k 10
 ```
 
 ---
 
 ### 3. Automatische Sprach-Erkennung & Filterung (GERADE FERTIG)
 **Commits:** ae6ed56 ? 005c616 ? e8876ea
-**Implementierung:** 3 Commits, vollständig integriert
+**Implementierung:** 3 Commits, vollstï¿½ndig integriert
 
 **Was ist neu:**
-1. **Lingua-Bibliothek** für Sprach-Erkennung (75+ Sprachen)
-   - Konfiguriert für deine Bibliothek: EN, DE, FR, LA, IT, ES, EL, HE, AR, RU, PT, NL
+1. **Lingua-Bibliothek** fï¿½r Sprach-Erkennung (75+ Sprachen)
+   - Konfiguriert fï¿½r deine Bibliothek: EN, DE, FR, LA, IT, ES, EL, HE, AR, RU, PT, NL
    - Genauigkeit: Deutsch 100%, Latein 96%, Englisch 73%
 
-2. **Automatische Metadaten** während Extraktion
+2. **Automatische Metadaten** wï¿½hrend Extraktion
    - Jeder Chunk bekommt automatisch `language`-Metadatum
    - Minimum Confidence: 0,9 (90%)
    - ISO 639-1 Codes: `en`, `de`, `la`, `fr`, etc.
 
-3. **CLI-Filter für Queries**
+3. **CLI-Filter fï¿½r Queries**
    ```bash
    # Nur Deutsch
-   python scripts/rag_demo.py query "Könige" --language de
+   python scripts/rag_demo.py query "Kï¿½nige" --language de
 
    # Nur Latein
    python scripts/rag_demo.py query "Rex" --language la
@@ -107,12 +107,12 @@ python scripts/rag_demo.py query "Könige" --top-k 10
    python scripts/rag_demo.py query "Marcion" --book-id "Josephus"
    ```
 
-**?? WICHTIG:** Die bereits indexierten Bücher (Josephus, von Harnack) haben KEINE Sprach-Metadaten!
-**Lösung:** Re-indexing erforderlich (siehe "Nächste Schritte")
+**?? WICHTIG:** Die bereits indexierten Bï¿½cher (Josephus, von Harnack) haben KEINE Sprach-Metadaten!
+**Lï¿½sung:** Re-indexing erforderlich (siehe "Nï¿½chste Schritte")
 
 ---
 
-## ?? ABHÄNGIGKEITEN (requirements.txt)
+## ?? ABHï¿½NGIGKEITEN (requirements.txt)
 
 **Installiert:**
 ```bash
@@ -136,7 +136,7 @@ lingua-language-detector==2.1.1
 # python-magic==0.4.27  # Wird durch mimetypes ersetzt
 ```
 
-**Windows-Kompatibilität:**
+**Windows-Kompatibilitï¿½t:**
 - `python-magic` ist optional gemacht (DLL-Probleme)
 - Fallback auf Python's eingebautes `mimetypes`-Modul
 - Alle Extractors funktionieren ohne `python-magic`
@@ -149,58 +149,58 @@ lingua-language-detector==2.1.1
 
 | Feature | Status | Commit | Notes |
 |---------|--------|--------|-------|
-| **BGE-M3 Embeddings** | ? FERTIG | 9e595d8 | Läuft stabil, 2 Bücher indexiert |
-| **Universal Extraction** | ? FERTIG | 6cdfa45 | 30+ Formate, getestet mit 5 Büchern |
+| **BGE-M3 Embeddings** | ? FERTIG | 9e595d8 | Lï¿½uft stabil, 2 Bï¿½cher indexiert |
+| **Universal Extraction** | ? FERTIG | 6cdfa45 | 30+ Formate, getestet mit 5 Bï¿½chern |
 | **Sprach-Erkennung** | ? FERTIG | e8876ea | Lingua integriert, Filterung funktioniert |
 | **ChromaDB Setup** | ? FERTIG | 9e595d8 | Persistent storage, Metadaten-Support |
 | **Clickable Citations** | ? TODO | - | calibre:// und file:// URIs |
 | **Hybrid Search** | ? TODO | - | Semantic + Keyword (z.B. "Herrschaftslegitimation") |
 | **Annotations-Sync** | ? TODO | - | 10.151 Annotations separat indexieren |
 
-### Was fehlt noch für MVP:
+### Was fehlt noch fï¿½r MVP:
 
 1. **Hybrid Search** (Semantic + Keyword)
-   - Du hast erwähnt: "war schon implementiert" (in früherem System?)
-   - Wichtig für deine Custom-Tags und spezifische Fachbegriffe
+   - Du hast erwï¿½hnt: "war schon implementiert" (in frï¿½herem System?)
+   - Wichtig fï¿½r deine Custom-Tags und spezifische Fachbegriffe
    - Du sagtest explizit: "Annotations + Volltext ? getrennt!"
 
 2. **Clickable Citations**
-   - `calibre://` URIs für direkte PDF-Links
+   - `calibre://` URIs fï¿½r direkte PDF-Links
    - `file://` URIs mit exakter Seitenzahl
-   - Sonnet's Empfehlung, von dir bestätigt als wichtig
+   - Sonnet's Empfehlung, von dir bestï¿½tigt als wichtig
 
 3. **Annotations-Index**
-   - Deine 10.151 Annotations aus früherer MCP-Server-Implementierung
+   - Deine 10.151 Annotations aus frï¿½herer MCP-Server-Implementierung
    - Separater Such-Modus (nicht mit Volltext gemischt)
 
 4. **Performance-Optimierung**
-   - Von Prototyp auf Vollbestand skalieren (~12.000+ Bücher)
+   - Von Prototyp auf Vollbestand skalieren (~12.000+ Bï¿½cher)
    - Batch-Indexing
    - Inkrementelle Updates
 
 5. **MCP Server Integration**
    - Wenn MVP stabil ist (deine Anforderung!)
-   - Früher hattest du funktionierenden MCP-Server
+   - Frï¿½her hattest du funktionierenden MCP-Server
 
 ---
 
-## ?? FUTURE ENHANCEMENTS (Für später dokumentiert)
+## ?? FUTURE ENHANCEMENTS (Fï¿½r spï¿½ter dokumentiert)
 
 ### Progressive Indexing (Phase 2b - NACH MCP Server)
-**Idee von CS/Sonnet:** Drei Indexing-Level für unterschiedliche Nutzertypen
+**Idee von CS/Sonnet:** Drei Indexing-Level fï¿½r unterschiedliche Nutzertypen
 
 **Konzept:**
 - **Quick (10 Min):** Nur Metadata + Titel/Autoren indexieren
 - **Standard (1-2h):** Full Indexing mit Embeddings ? **AKTUELL**
-- **Research (2-4h):** + Graph RAG für konzeptionelle Verbindungen
+- **Research (2-4h):** + Graph RAG fï¿½r konzeptionelle Verbindungen
 
 **Warum nicht jetzt?**
 - Keep it simple: Erst EINEN soliden Indexing-Pfad fertig
-- Komplexität schrittweise erhöhen
+- Komplexitï¿½t schrittweise erhï¿½hen
 - Debugging einfacher mit einem Modus
 - Progressive Enhancement ist UX-Feature, nicht Core-Feature
 
-**Implementation Notes (für später):**
+**Implementation Notes (fï¿½r spï¿½ter):**
 ```python
 class IndexingLevel(Enum):
     QUICK = "metadata_only"      # 10 min
@@ -218,25 +218,25 @@ indexing_db = {
 }
 ```
 
-**Priorität:** MEDIUM (nach MCP + Citations + Annotations)
-**Zeitschätzung:** 2-3 Tage
+**Prioritï¿½t:** MEDIUM (nach MCP + Citations + Annotations)
+**Zeitschï¿½tzung:** 2-3 Tage
 **Quelle:** CS-Input 2025-11-21
 
 ---
 
-## ?? NÄCHSTE SCHRITTE (Prioritäts-Reihenfolge)
+## ?? Nï¿½CHSTE SCHRITTE (Prioritï¿½ts-Reihenfolge)
 
-### SOFORT: Re-Indexing für Sprach-Filterung
+### SOFORT: Re-Indexing fï¿½r Sprach-Filterung
 
 **Problem:** Josephus & von Harnack haben keine `language`-Metadaten
 
-**Lösung:**
+**Lï¿½sung:**
 ```bash
 # 1. Lingua installieren (falls noch nicht)
 pip install lingua-language-detector==2.1.1
 
-# 2. Alte Datenbank löschen
-rm -rf achilles_rag_db/
+# 2. Alte Datenbank lï¿½schen
+rm -rf archilles_rag_db/
 
 # 3. Josephus re-indexieren (mit automatischer Sprach-Erkennung)
 python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Flavius Josephus/Judische Altertumer_[PFAD].pdf" --book-id "Josephus"
@@ -245,7 +245,7 @@ python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Flavius Josephus/Judisch
 python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Adolf von Harnack/Marcion (745)/Marcion - Adolf von Harnack.pdf" --book-id "von_Harnack"
 
 # 5. Sprach-Filter testen
-python scripts/rag_demo.py query "Könige" --language de
+python scripts/rag_demo.py query "Kï¿½nige" --language de
 python scripts/rag_demo.py query "Rex" --language la
 python scripts/rag_demo.py query "David Melchizedek" --language en
 ```
@@ -259,81 +259,81 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 
 ### DANN: Feature-Entwicklung (in dieser Reihenfolge)
 
-#### 1. **Hybrid Search** - HÖCHSTE PRIORITÄT
+#### 1. **Hybrid Search** - Hï¿½CHSTE PRIORITï¿½T
 **Warum:** Du hast explizit danach gefragt + "war schon implementiert"
 
 **Was zu tun:**
 - Kombination aus Semantic Search (BGE-M3) + Keyword Search (BM25)
-- Wichtig für Custom-Terms und spezifische Fachbegriffe (deine Begriffsschöpfung)
+- Wichtig fï¿½r Custom-Terms und spezifische Fachbegriffe (deine Begriffsschï¿½pfung)
 - Parameter: `--mode semantic|keyword|hybrid`
 
-**Zeitschätzung:** 1-2 Tage
+**Zeitschï¿½tzung:** 1-2 Tage
 
 ---
 
 #### 2. **Clickable Citations**
-**Warum:** Von Sonnet empfohlen, von dir als wichtig bestätigt
+**Warum:** Von Sonnet empfohlen, von dir als wichtig bestï¿½tigt
 
 **Was zu tun:**
-- `calibre://` URIs für Calibre-Integration
+- `calibre://` URIs fï¿½r Calibre-Integration
 - `file://` URIs mit exakter Seitenzahl
-- Link direkt zur PDF-Stelle (mit Koordinaten wenn möglich)
+- Link direkt zur PDF-Stelle (mit Koordinaten wenn mï¿½glich)
 
-**Zeitschätzung:** 2-3 Tage
+**Zeitschï¿½tzung:** 2-3 Tage
 
 ---
 
 #### 3. **Annotations-Import**
-**Warum:** Du hast 10.151 Annotations aus früherem System
+**Warum:** Du hast 10.151 Annotations aus frï¿½herem System
 
 **Was zu tun:**
 - Separater Index-Modus: `--mode annotations|fulltext`
 - Du sagtest: "Annotations + Volltext ZUSAMMEN? ? getrennt!"
-- Frühere MCP-Server-Implementation reaktivieren?
+- Frï¿½here MCP-Server-Implementation reaktivieren?
 
-**Zeitschätzung:** 3-5 Tage
+**Zeitschï¿½tzung:** 3-5 Tage
 
 ---
 
 #### 4. **Performance-Optimierung**
-**Warum:** Skalierung auf große Bibliotheken (12.000+ Bücher)
+**Warum:** Skalierung auf groï¿½e Bibliotheken (12.000+ Bï¿½cher)
 
 **Was zu tun:**
-- Batch-Indexing (mehrere Bücher parallel)
-- Inkrementelle Updates (nur geänderte Bücher)
+- Batch-Indexing (mehrere Bï¿½cher parallel)
+- Inkrementelle Updates (nur geï¿½nderte Bï¿½cher)
 - Progress-Tracking
 
-**Zeitschätzung:** 2-3 Tage
+**Zeitschï¿½tzung:** 2-3 Tage
 
 ---
 
 #### 5. **MCP Server** - Nur wenn MVP stabil!
-**Warum:** Du sagtest: "Ich hatte ja gewarnt vor der marketinglastigen Perspektive - wir müssen nicht in 3 Wochen auf dem Markt sein"
+**Warum:** Du sagtest: "Ich hatte ja gewarnt vor der marketinglastigen Perspektive - wir mï¿½ssen nicht in 3 Wochen auf dem Markt sein"
 
 **Was zu tun:**
-- MCP-Server für Claude Desktop
-- Frühere Implementation wiederverwenden?
+- MCP-Server fï¿½r Claude Desktop
+- Frï¿½here Implementation wiederverwenden?
 - Erst wenn MVP "wirklich stabil" ist
 
-**Zeitschätzung:** 5-7 Tage
+**Zeitschï¿½tzung:** 5-7 Tage
 
 ---
 
 ## ?? WICHTIGE ERKENNTNISSE (aus Previous Sessions)
 
-### Dein Workflow & Präferenzen
+### Dein Workflow & Prï¿½ferenzen
 - **Hintergrund:** VWL/Marketing, NICHT Software-Entwicklung
-- **Lernstil:** Hands-on, klare Erklärungen
+- **Lernstil:** Hands-on, klare Erklï¿½rungen
 - **Kommunikation:** Direkt, Humor ok, kein Marketing-Druck
 - **Bibliothek:** Mehrsprachige akademische Sammlung (Englisch, Deutsch, Latein)
 - **Fachbereiche:** Geisteswissenschaften, Sozialwissenschaften, Kulturwissenschaften
-- **Netzwerk:** Akademische Kontakte, interdisziplinär
+- **Netzwerk:** Akademische Kontakte, interdisziplinï¿½r
 
 ### Wichtige Lektionen
 1. **Semantische vs. Keyword-Suche**
    - Semantisch findet Konzepte, nicht exakte Begriffe
    - Daher: "Marcion, Josephus and gospels" findet nur von Harnack (weil "Marcion" dort 100x vorkommt)
-   - Lösung: Single-Concept Queries ODER Hybrid Search
+   - Lï¿½sung: Single-Concept Queries ODER Hybrid Search
 
 2. **Query-Formulierung**
    - Besser: "David Melchizedek priest King" (findet Josephus)
@@ -343,12 +343,12 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 3. **BGE-M3 Verhalten**
    - Alte Model (all-mpnet-base-v2): Deutsche Query ? nur deutsche Ergebnisse
    - BGE-M3: Multilingual by design, findet IMMER alle Sprachen
-   - Das ist KORREKT für gemischtsprachige akademische Bibliothek
-   - Daher: Language-Filter implementiert für sprachspezifische Suchen
+   - Das ist KORREKT fï¿½r gemischtsprachige akademische Bibliothek
+   - Daher: Language-Filter implementiert fï¿½r sprachspezifische Suchen
 
-4. **Windows-Kompatibilität**
+4. **Windows-Kompatibilitï¿½t**
    - `python-magic` hat DLL-Probleme auf Windows
-   - Lösung: Optional gemacht, Fallback auf `mimetypes`
+   - Lï¿½sung: Optional gemacht, Fallback auf `mimetypes`
    - Alle Extractors funktionieren ohne
 
 ---
@@ -356,63 +356,63 @@ python scripts/rag_demo.py query "David Melchizedek" --language en
 ## ?? DATEI-STRUKTUR
 
 ```
-achilles/
+archilles/
 +-- README.md                           # Basis-Readme (Calibre Analyzer)
 +-- SPEC.md                             # Umfassendes Pflichtenheft (26 KB, von Sonnet)
-+-- HANDOVER.md                         # DIESE DATEI - Übergabe-Doku
++-- HANDOVER.md                         # DIESE DATEI - ï¿½bergabe-Doku
 +-- requirements.txt                    # Alle Dependencies
 +-- calibre_analyzer.py                 # Original Metadata Analyzer
-¦
+ï¿½
 +-- src/
-¦   +-- __init__.py
-¦   +-- extractors/                     # Universal Extraction System
-¦       +-- __init__.py
-¦       +-- base.py                     # Basis-Klasse mit Chunking + Sprach-Erkennung
-¦       +-- universal_extractor.py      # Haupt-Orchestrator
-¦       +-- pdf_extractor.py            # PDF mit Seitenzahlen
-¦       +-- epub_extractor.py           # EPUB mit TOC
-¦       +-- html_extractor.py           # HTML/TXT
-¦       +-- txt_extractor.py            # Plain Text
-¦       +-- calibre_converter.py        # DJVU/MOBI ? PDF/EPUB
-¦       +-- format_detector.py          # Format-Erkennung
-¦       +-- language_detector.py        # Lingua-basierte Sprach-Erkennung
-¦       +-- models.py                   # Data Models
-¦       +-- exceptions.py               # Custom Exceptions
-¦
+ï¿½   +-- __init__.py
+ï¿½   +-- extractors/                     # Universal Extraction System
+ï¿½       +-- __init__.py
+ï¿½       +-- base.py                     # Basis-Klasse mit Chunking + Sprach-Erkennung
+ï¿½       +-- universal_extractor.py      # Haupt-Orchestrator
+ï¿½       +-- pdf_extractor.py            # PDF mit Seitenzahlen
+ï¿½       +-- epub_extractor.py           # EPUB mit TOC
+ï¿½       +-- html_extractor.py           # HTML/TXT
+ï¿½       +-- txt_extractor.py            # Plain Text
+ï¿½       +-- calibre_converter.py        # DJVU/MOBI ? PDF/EPUB
+ï¿½       +-- format_detector.py          # Format-Erkennung
+ï¿½       +-- language_detector.py        # Lingua-basierte Sprach-Erkennung
+ï¿½       +-- models.py                   # Data Models
+ï¿½       +-- exceptions.py               # Custom Exceptions
+ï¿½
 +-- scripts/
-¦   +-- rag_demo.py                     # HAUPT-SCRIPT: RAG mit BGE-M3
-¦   +-- demo_extraction.py              # Extraction-Demo
-¦
+ï¿½   +-- rag_demo.py                     # HAUPT-SCRIPT: RAG mit BGE-M3
+ï¿½   +-- demo_extraction.py              # Extraction-Demo
+ï¿½
 +-- docs/
-¦   +-- EXTRACTION_GUIDE.md             # Comprehensive Guide (469 Zeilen)
-¦
-+-- achilles_rag_db/                    # ChromaDB Storage (gitignored)
+ï¿½   +-- EXTRACTION_GUIDE.md             # Comprehensive Guide (469 Zeilen)
+ï¿½
++-- archilles_rag_db/                    # ChromaDB Storage (gitignored)
     +-- [lokale Vektoren]
 ```
 
 ---
 
-## ?? BEKANNTE PROBLEME & LÖSUNGEN
+## ?? BEKANNTE PROBLEME & Lï¿½SUNGEN
 
 ### 1. Sprach-Filter funktioniert nicht?
-**Problem:** Bestehende indexierte Bücher haben keine `language`-Metadaten
-**Lösung:** Re-indexing (siehe "Nächste Schritte" oben)
+**Problem:** Bestehende indexierte Bï¿½cher haben keine `language`-Metadaten
+**Lï¿½sung:** Re-indexing (siehe "Nï¿½chste Schritte" oben)
 
 ### 2. `python-magic` ImportError auf Windows
 **Problem:** `ImportError: failed to find libmagic. Check your installation`
-**Lösung:** Bereits gefixt - `python-magic` ist optional, Fallback auf `mimetypes`
+**Lï¿½sung:** Bereits gefixt - `python-magic` ist optional, Fallback auf `mimetypes`
 
 ### 3. Query findet nur von Harnack, nicht Josephus?
 **Problem:** Multi-Concept Queries ("Marcion, Josephus and gospels") finden nur dominant concept
-**Lösung:**
+**Lï¿½sung:**
 - Erwartetes Verhalten bei Semantic Search
 - Single-Concept Queries verwenden
-- ODER: Hybrid Search implementieren (nächster Schritt!)
+- ODER: Hybrid Search implementieren (nï¿½chster Schritt!)
 
 ### 4. BGE-M3 Download dauert lange beim ersten Mal
-**Problem:** Erstes Indexing dauerte ~28 Minuten für Josephus
+**Problem:** Erstes Indexing dauerte ~28 Minuten fï¿½r Josephus
 **Ursache:** BGE-M3 Model-Download (2,27 GB) beim ersten Run
-**Lösung:** Normal, danach nur ~30 Sekunden pro Buch
+**Lï¿½sung:** Normal, danach nur ~30 Sekunden pro Buch
 
 ---
 
@@ -420,7 +420,7 @@ achilles/
 
 ```bash
 Branch: claude/rag-market-analysis-01Lh7DmoCCZdqrvfbtkm3ewD
-Status: Clean (alle Änderungen committed & pushed)
+Status: Clean (alle ï¿½nderungen committed & pushed)
 
 Letzte Commits:
 e8876ea - Switch to Lingua for language detection
@@ -439,37 +439,37 @@ a415005 - Add comprehensive specification document for ARCHILLES RAG system
 
 **Kontakte:**
 - Professor in Basel/Berlin (Neue Musik)
-- Neffe in AI (aktuell São Paulo/Phoenix)
+- Neffe in AI (aktuell Sï¿½o Paulo/Phoenix)
 
-**Deine Aussage:** "Ich habe NULL Erfahrung mit Software-Entwicklung" + "Öffentlich entwickeln?" ? Vorsichtiger Ansatz
+**Deine Aussage:** "Ich habe NULL Erfahrung mit Software-Entwicklung" + "ï¿½ffentlich entwickeln?" ? Vorsichtiger Ansatz
 
 **Strategie:** Erst wenn "MVP wirklich stabil" ist
 
 ---
 
-## ?? ZUSAMMENFASSUNG FÜR NÄCHSTE SESSION
+## ?? ZUSAMMENFASSUNG Fï¿½R Nï¿½CHSTE SESSION
 
 ### Was funktioniert:
 ? Universal Text Extraction (30+ Formate, getestet)
-? BGE-M3 RAG-System (2 Bücher indexiert, funktioniert)
+? BGE-M3 RAG-System (2 Bï¿½cher indexiert, funktioniert)
 ? Automatische Sprach-Erkennung (Lingua integriert)
 ? Sprach-/Buch-Filterung (CLI-Parameter)
 
-### Was als nächstes kommt:
+### Was als nï¿½chstes kommt:
 1. ?? **SOFORT:** Re-index Josephus & von Harnack mit Sprach-Metadaten
-2. ?? **Feature #1:** Hybrid Search (Semantic + Keyword) für spezifische Fachbegriffe und Custom-Terms
+2. ?? **Feature #1:** Hybrid Search (Semantic + Keyword) fï¿½r spezifische Fachbegriffe und Custom-Terms
 3. ?? **Feature #2:** Clickable Citations (calibre:// URIs)
 4. ?? **Feature #3:** Annotations-Import (10.151 Annotations, separater Index)
-5. ? **Optimization:** Batch-Indexing für 8.139 Bücher
+5. ? **Optimization:** Batch-Indexing fï¿½r 8.139 Bï¿½cher
 
 ### Deine klare Ansage:
-> "Ich hatte ja gewarnt vor der marketinglastigen Perspektive - wir müssen nicht in 3 Wochen auf dem Markt sein"
+> "Ich hatte ja gewarnt vor der marketinglastigen Perspektive - wir mï¿½ssen nicht in 3 Wochen auf dem Markt sein"
 
 ? **Fokus auf solide Technik, kein Druck!**
 
 ---
 
-**Fragen für nächste Session:**
+**Fragen fï¿½r nï¿½chste Session:**
 1. Soll ich direkt mit Re-Indexing starten?
-2. Danach Hybrid Search als nächstes Feature?
-3. Oder hast du andere Prioritäten?
+2. Danach Hybrid Search als nï¿½chstes Feature?
+3. Oder hast du andere Prioritï¿½ten?

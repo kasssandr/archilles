@@ -31,10 +31,10 @@ logger = logging.getLogger(__name__)
 
 def load_config() -> Dict[str, Any]:
     """
-    Load configuration from .achilles/config.json if available.
+    Load configuration from .archilles/config.json if available.
 
     Searches in common locations:
-    1. CALIBRE_LIBRARY env var + .achilles/config.json
+    1. CALIBRE_LIBRARY env var + .archilles/config.json
     2. Home directory Calibre Library variants
     3. Current working directory
 
@@ -48,18 +48,18 @@ def load_config() -> Dict[str, Any]:
     # Try CALIBRE_LIBRARY env var
     calibre_lib = os.getenv("CALIBRE_LIBRARY")
     if calibre_lib:
-        possible_paths.append(Path(calibre_lib) / ".achilles" / "config.json")
+        possible_paths.append(Path(calibre_lib) / ".archilles" / "config.json")
 
     # Try common Calibre Library locations
     home = Path.home()
     possible_paths.extend([
-        home / "Calibre Library" / ".achilles" / "config.json",
-        home / "Calibre-Bibliothek" / ".achilles" / "config.json",  # German
-        Path("D:/Calibre-Bibliothek") / ".achilles" / "config.json",  # User's specific path
+        home / "Calibre Library" / ".archilles" / "config.json",
+        home / "Calibre-Bibliothek" / ".archilles" / "config.json",  # German
+        Path("D:/Calibre-Bibliothek") / ".archilles" / "config.json",  # User's specific path
     ])
 
     # Try current directory
-    possible_paths.append(Path.cwd() / ".achilles" / "config.json")
+    possible_paths.append(Path.cwd() / ".archilles" / "config.json")
 
     for config_path in possible_paths:
         if config_path.exists():

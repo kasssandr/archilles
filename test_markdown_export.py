@@ -30,12 +30,12 @@ from datetime import datetime
 query_text = "evangelista et a presbyteris"
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 safe_query = "".join(c if c.isalnum() else "_" for c in query_text[:30])
-output_file = f"achilles_search_{safe_query}_{timestamp}.md"
+output_file = f"archilles_search_{safe_query}_{timestamp}.md"
 
 lines = []
 
 # Header
-lines.append(f"# Achilles RAG - Suchergebnisse")
+lines.append(f"# archilles RAG - Suchergebnisse")
 lines.append(f"")
 lines.append(f"**Query:** `{query_text}`  ")
 lines.append(f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
@@ -86,7 +86,7 @@ for result in test_results:
     lines.append(f"")
 
 # Footer with tags
-tags = ["#achilles", "#rag", "#suche", "#latein"]
+tags = ["#archilles", "#rag", "#suche", "#latein"]
 lines.append(f"")
 lines.append(" ".join(tags))
 

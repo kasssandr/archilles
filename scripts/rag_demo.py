@@ -54,7 +54,7 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
-class AchillesRAG:
+class archillesRAG:
     """
     Simple RAG system for academic books.
 
@@ -67,7 +67,7 @@ class AchillesRAG:
 
     def __init__(
         self,
-        db_path: str = "./achilles_rag_db",
+        db_path: str = "./archilles_rag_db",
         model_name: str = "BAAI/bge-m3"
     ):
         """
@@ -97,7 +97,7 @@ class AchillesRAG:
 
         # Get or create collection
         self.collection = self.chroma_client.get_or_create_collection(
-            name="achilles_books",
+            name="archilles_books",
             metadata={"hnsw:space": "cosine"}
         )
 
@@ -1167,7 +1167,7 @@ class AchillesRAG:
         if not output_file:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             safe_query = "".join(c if c.isalnum() else "_" for c in query_text[:30])
-            output_file = f"achilles_search_{safe_query}_{timestamp}.md"
+            output_file = f"archilles_search_{safe_query}_{timestamp}.md"
 
         # Build markdown content
         lines = []
@@ -1283,7 +1283,7 @@ class AchillesRAG:
             lines.append(f"")
 
         # Footer with tags
-        tags = ["#achilles", "#rag", "#suche"]
+        tags = ["#archilles", "#rag", "#suche"]
         if any(r['metadata'].get('language') == 'la' for r in results):
             tags.append("#latein")
         if any(r['metadata'].get('language') == 'de' for r in results):
@@ -1536,7 +1536,7 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 def main():
     """Main CLI interface."""
     parser = argparse.ArgumentParser(
-        description="Achilles Mini-RAG: Semantic search in academic books",
+        description="archilles Mini-RAG: Semantic search in academic books",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1573,7 +1573,7 @@ Examples:
     index_parser = subparsers.add_parser('index', help='Index a book')
     index_parser.add_argument('book_path', help='Path to book file')
     index_parser.add_argument('--book-id', help='Optional book ID (default: filename)')
-    index_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
+    index_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1586,12 +1586,12 @@ Examples:
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
-    query_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
+    query_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show index statistics')
-    stats_parser.add_argument('--db-path', default='./achilles_rag_db', help='Database path')
+    stats_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
 
     args = parser.parse_args()
 
@@ -1601,7 +1601,7 @@ Examples:
 
     try:
         # Initialize RAG
-        rag = AchillesRAG(db_path=args.db_path)
+        rag = archillesRAG(db_path=args.db_path)
 
         if args.command == 'index':
             # Index a book

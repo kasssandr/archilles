@@ -80,7 +80,7 @@ The ARCHILLES Universal Text Extractor can extract text from **20+ e-book format
 ### 1. Install Python Dependencies
 
 ```bash
-cd achilles
+cd archilles
 pip install -r requirements.txt
 ```
 

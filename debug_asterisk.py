@@ -4,8 +4,8 @@ Debug script to check if asterisks are preserved in metadata.
 
 import chromadb
 
-client = chromadb.PersistentClient(path="./achilles_rag_db")
-collection = client.get_collection("achilles_books")
+client = chromadb.PersistentClient(path="./archilles_rag_db")
+collection = client.get_collection("archilles_books")
 
 # Check PDF page 329 (should have printed_page "11*")
 results = collection.get(

@@ -103,7 +103,7 @@ pip install -r requirements.txt
 **Solution**:
 ```bash
 # Remove corrupted database
-rm -rf achilles_rag_db/
+rm -rf archilles_rag_db/
 
 # Re-index books
 python scripts/rag_demo.py index "path/to/book.epub"

@@ -1,8 +1,8 @@
 import chromadb
 import re
 
-client = chromadb.PersistentClient(path="./achilles_rag_db")
-collection = client.get_collection("achilles_books")
+client = chromadb.PersistentClient(path="./archilles_rag_db")
+collection = client.get_collection("archilles_books")
 
 query = "evangelista et a presbyteris"
 query_normalized = re.sub(r'\s+', ' ', query.lower().strip())

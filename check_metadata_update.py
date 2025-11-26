@@ -1,7 +1,7 @@
 import chromadb
 
-client = chromadb.PersistentClient(path="./achilles_rag_db")
-collection = client.get_collection("achilles_books")
+client = chromadb.PersistentClient(path="./archilles_rag_db")
+collection = client.get_collection("archilles_books")
 
 # Check the specific chunk that matches our query
 chunk = collection.get(

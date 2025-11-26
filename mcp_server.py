@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 
 # Configure logging to file (not stdout, as that's used for MCP communication)
-log_file = Path.home() / ".achilles" / "mcp_server.log"
+log_file = Path.home() / ".archilles" / "mcp_server.log"
 log_file.parent.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -176,7 +176,7 @@ def main():
     """Main entry point."""
     import os
     # Load configuration
-    config_path = Path("D:/Calibre-Bibliothek/.achilles/config.json")
+    config_path = Path("D:/Calibre-Bibliothek/.archilles/config.json")
     config = {}
 
     if config_path.exists():
@@ -188,7 +188,7 @@ def main():
             logger.warning(f"Failed to load config: {e}")
 
     # Get RAG database path from environment or config
-    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', './achilles_rag_db')
+    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', './archilles_rag_db')
     logger.info(f"RAG database path: {rag_db_path}")
 
     # Initialize server
@@ -197,7 +197,7 @@ def main():
         library_path=config.get('calibre_library_path', 'D:/Calibre-Bibliothek'),
         annotations_dir=None,  # Will auto-detect
         enable_semantic_search=True,
-        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.achilles/chroma_db'),
+        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.archilles/chroma_db'),
         rag_db_path=rag_db_path
     )
 

@@ -17,12 +17,12 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.rag_demo import AchillesRAG
+from scripts.rag_demo import archillesRAG
 
 
 def main():
     # Initialize RAG system
-    rag = AchillesRAG(db_path="./achilles_rag_db")
+    rag = archillesRAG(db_path="./archilles_rag_db")
 
     # Example query
     query = sys.argv[1] if len(sys.argv) > 1 else "Was ist Herrschaftslegitimation?"
