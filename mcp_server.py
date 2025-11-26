@@ -174,6 +174,7 @@ async def stdio_server(server: CalibreMCPServer):
 
 def main():
     """Main entry point."""
+    import os
     # Load configuration
     config_path = Path("D:/Calibre-Bibliothek/.achilles/config.json")
     config = {}
@@ -186,12 +187,18 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
+    # Get RAG database path from environment or config
+    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', './achilles_rag_db')
+    logger.info(f"RAG database path: {rag_db_path}")
+
     # Initialize server
+
     server = CalibreMCPServer(
         library_path=config.get('calibre_library_path', 'D:/Calibre-Bibliothek'),
         annotations_dir=None,  # Will auto-detect
         enable_semantic_search=True,
-        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.achilles/chroma_db')
+        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.achilles/chroma_db'),
+        rag_db_path=rag_db_path
     )
 
     logger.info(f"Server initialized with library: {config.get('calibre_library_path', 'D:/Calibre-Bibliothek')}")
