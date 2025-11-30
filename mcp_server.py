@@ -5,16 +5,24 @@ ARCHILLES MCP Server Entry Point
 Starts the Calibre MCP Server with stdio transport for Claude Desktop integration.
 """
 
+# CRITICAL: Redirect stdout to stderr BEFORE any imports
+# This prevents print() statements from RAG/libraries from corrupting JSON-RPC
+import sys
+_original_stdout = sys.stdout
+sys.stdout = sys.stderr
+
 import asyncio
 import json
 import logging
-import sys
 from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
+
+# Restore stdout for JSON-RPC communication
+sys.stdout = _original_stdout
 
 # Configure logging to file (not stdout, as that's used for MCP communication)
 log_file = Path.home() / ".archilles" / "mcp_server.log"
@@ -108,10 +116,21 @@ async def stdio_server(server: CalibreMCPServer):
             logger.info(f"Received request: {request.get('method', 'unknown')}")
 
             # Handle different request types
-            if request.get('method') == 'initialize':
+            request_id = request.get('id')
+            method = request.get('method')
+
+            # Handle notifications (no id, no response needed)
+            if request_id is None:
+                if method == 'notifications/initialized':
+                    logger.info("Client sent initialized notification")
+                else:
+                    logger.warning(f"Received notification: {method}")
+                continue
+
+            if method == 'initialize':
                 response = {
                     'jsonrpc': '2.0',
-                    'id': request.get('id'),
+                    'id': request_id,
                     'result': {
                         'protocolVersion': '2024-11-05',
                         'capabilities': {
@@ -123,13 +142,13 @@ async def stdio_server(server: CalibreMCPServer):
                         }
                     }
                 }
-            elif request.get('method') == 'tools/list':
+            elif method == 'tools/list':
                 response = {
                     'jsonrpc': '2.0',
-                    'id': request.get('id'),
+                    'id': request_id,
                     'result': {'tools': tools}
                 }
-            elif request.get('method') == 'tools/call':
+            elif method == 'tools/call':
                 tool_name = request['params']['name']
                 tool_params = request['params'].get('arguments', {})
 
@@ -137,32 +156,38 @@ async def stdio_server(server: CalibreMCPServer):
 
                 response = {
                     'jsonrpc': '2.0',
-                    'id': request.get('id'),
+                    'id': request_id,
                     'result': result
                 }
             else:
                 response = {
                     'jsonrpc': '2.0',
-                    'id': request.get('id'),
+                    'id': request_id,
                     'error': {
                         'code': -32601,
-                        'message': f'Method not found: {request.get("method")}'
+                        'message': f'Method not found: {method}'
                     }
                 }
 
             # Send response
             sys.stdout.write(json.dumps(response) + '\n')
             sys.stdout.flush()
-            logger.info(f"Sent response for request {request.get('id')}")
+            logger.info(f"Sent response for request {request_id}")
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
+            # Don't send error response - client will timeout and retry
             continue
         except Exception as e:
             logger.error(f"Error processing request: {e}", exc_info=True)
+            # Try to extract id from request, fallback to -1 if not available
+            error_id = -1
+            if 'request' in locals() and isinstance(request, dict):
+                error_id = request.get('id', -1)
+
             error_response = {
                 'jsonrpc': '2.0',
-                'id': request.get('id') if 'request' in locals() else None,
+                'id': error_id,
                 'error': {
                     'code': -32603,
                     'message': str(e)
