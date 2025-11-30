@@ -68,6 +68,7 @@ class CalibreMCPServer:
             annotations_dir: Custom path to annotations directory
             enable_semantic_search: Enable semantic search with ChromaDB
             chroma_persist_dir: Directory to persist ChromaDB data
+            rag_db_path: Path to RAG database (default: ./archilles_rag_db)
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
