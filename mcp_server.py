@@ -214,8 +214,13 @@ async def stdio_server(server: CalibreMCPServer):
 def main():
     """Main entry point."""
     import os
-    # Load configuration
-    config_path = Path("D:/Calibre-Bibliothek/.archilles/config.json")
+
+    # Determine library path from environment or default
+    # This makes the tool portable across different installations
+    default_library = os.getenv('CALIBRE_LIBRARY_PATH', 'D:/Calibre-Bibliothek')
+
+    # Load configuration from .archilles folder within library
+    config_path = Path(default_library) / ".archilles" / "config.json"
     config = {}
 
     if config_path.exists():
@@ -226,17 +231,30 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    # Get RAG database path from environment or config
-    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', './archilles_rag_db')
+    # Get library path (config overrides environment/default)
+    library_path = config.get('calibre_library_path', default_library)
+
+    # Derive paths relative to library - ensures consistency between MCP server and CLI tools
+    archilles_dir = Path(library_path) / ".archilles"
+
+    # RAG database for fulltext search (PDF/EPUB chunks)
+    default_rag_path = str(archilles_dir / "rag_db")
+    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', default_rag_path)
+
+    # ChromaDB for annotations (highlights/notes)
+    default_chroma_path = str(archilles_dir / "chroma_db")
+    chroma_persist_dir = config.get('chroma_persist_dir', default_chroma_path)
+
+    logger.info(f"Library path: {library_path}")
     logger.info(f"RAG database path: {rag_db_path}")
+    logger.info(f"ChromaDB path: {chroma_persist_dir}")
 
     # Initialize server
-
     server = CalibreMCPServer(
-        library_path=config.get('calibre_library_path', 'D:/Calibre-Bibliothek'),
+        library_path=library_path,
         annotations_dir=None,  # Will auto-detect
         enable_semantic_search=True,
-        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.archilles/chroma_db'),
+        chroma_persist_dir=chroma_persist_dir,
         rag_db_path=rag_db_path
     )
 

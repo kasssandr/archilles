@@ -1573,7 +1573,7 @@ Examples:
     index_parser = subparsers.add_parser('index', help='Index a book')
     index_parser.add_argument('book_path', help='Path to book file')
     index_parser.add_argument('--book-id', help='Optional book ID (default: filename)')
-    index_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
+    index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1586,18 +1586,26 @@ Examples:
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
-    query_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
+    query_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show index statistics')
-    stats_parser.add_argument('--db-path', default='./archilles_rag_db', help='Database path')
+    stats_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
 
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
         return
+
+    # Determine default database path if not specified
+    # Uses CALIBRE_LIBRARY_PATH env var or falls back to D:/Calibre-Bibliothek
+    # This ensures consistency with mcp_server.py
+    if args.db_path is None:
+        calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH', 'D:/Calibre-Bibliothek')
+        args.db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
+        print(f"📚 Using default RAG database: {args.db_path}")
 
     try:
         # Initialize RAG
