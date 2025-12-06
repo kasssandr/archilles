@@ -154,11 +154,25 @@ async def stdio_server(server: CalibreMCPServer):
 
                 result = await handle_request(server, tool_name, tool_params)
 
-                response = {
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'result': result
-                }
+                # MCP spec requires result.content array with text/image items
+                # Check if tool returned an error
+                if isinstance(result, dict) and 'error' in result:
+                    response = {
+                        'jsonrpc': '2.0',
+                        'id': request_id,
+                        'result': {
+                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}],
+                            'isError': True
+                        }
+                    }
+                else:
+                    response = {
+                        'jsonrpc': '2.0',
+                        'id': request_id,
+                        'result': {
+                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}]
+                        }
+                    }
             else:
                 response = {
                     'jsonrpc': '2.0',
