@@ -57,14 +57,17 @@ achilles_search_*.md
 test_improved_export_*.md
 
 # Local RAG databases (not for GitHub)
-achilles_rag_db/
+archilles_rag_db/
 chroma_db/
+.archilles/
+
+# Logs
+logs/
+*.log
+batch_index_*.log
 
 # Personal test files
 meine_zitate.md
 test.md
 test_search.py
-achilles_search_results.txt
-*.txt
-achilles_search_results.txt
 *.txt
