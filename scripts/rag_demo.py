@@ -1600,10 +1600,20 @@ Examples:
         return
 
     # Determine default database path if not specified
-    # Uses CALIBRE_LIBRARY_PATH env var or falls back to D:/Calibre-Bibliothek
-    # This ensures consistency with mcp_server.py
+    # Requires CALIBRE_LIBRARY_PATH env var for portable installation
     if args.db_path is None:
-        calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH', 'D:/Calibre-Bibliothek')
+        calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH')
+        if not calibre_library:
+            print("\n" + "="*60)
+            print("ERROR: CALIBRE_LIBRARY_PATH not set")
+            print("="*60 + "\n")
+            print("Please set the environment variable to your Calibre library:\n")
+            print("  Windows (PowerShell):")
+            print('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n')
+            print("  Linux/macOS:")
+            print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
+            print("Or specify the database path directly with --db-path\n")
+            sys.exit(1)
         args.db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
         print(f"📚 Using default RAG database: {args.db_path}")
 

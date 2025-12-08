@@ -215,12 +215,26 @@ def main():
     """Main entry point."""
     import os
 
-    # Determine library path from environment or default
-    # This makes the tool portable across different installations
-    default_library = os.getenv('CALIBRE_LIBRARY_PATH', 'D:/Calibre-Bibliothek')
+    # Check for CALIBRE_LIBRARY_PATH - required for portable installation
+    library_path = os.getenv('CALIBRE_LIBRARY_PATH')
+
+    if not library_path:
+        logger.error("CALIBRE_LIBRARY_PATH environment variable not set")
+        sys.stderr.write("\n" + "="*60 + "\n")
+        sys.stderr.write("ERROR: CALIBRE_LIBRARY_PATH not set\n")
+        sys.stderr.write("="*60 + "\n\n")
+        sys.stderr.write("Please set the environment variable to your Calibre library:\n\n")
+        sys.stderr.write("  Windows (PowerShell):\n")
+        sys.stderr.write('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n\n')
+        sys.stderr.write("  Linux/macOS:\n")
+        sys.stderr.write('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n\n')
+        sys.stderr.write("  Claude Desktop (claude_desktop_config.json):\n")
+        sys.stderr.write('    "env": {"CALIBRE_LIBRARY_PATH": "/path/to/Calibre-Library"}\n\n')
+        sys.stderr.flush()
+        sys.exit(1)
 
     # Load configuration from .archilles folder within library
-    config_path = Path(default_library) / ".archilles" / "config.json"
+    config_path = Path(library_path) / ".archilles" / "config.json"
     config = {}
 
     if config_path.exists():
@@ -231,8 +245,8 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    # Get library path (config overrides environment/default)
-    library_path = config.get('calibre_library_path', default_library)
+    # Config can override the environment variable if specified
+    library_path = config.get('calibre_library_path', library_path)
 
     # Derive paths relative to library - ensures consistency between MCP server and CLI tools
     archilles_dir = Path(library_path) / ".archilles"
@@ -258,7 +272,7 @@ def main():
         rag_db_path=rag_db_path
     )
 
-    logger.info(f"Server initialized with library: {config.get('calibre_library_path', 'D:/Calibre-Bibliothek')}")
+    logger.info(f"Server initialized with library: {library_path}")
     logger.info(f"Semantic search enabled: {server.enable_semantic_search}")
 
     # Run stdio server

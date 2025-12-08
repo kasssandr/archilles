@@ -38,8 +38,23 @@ from scripts.rag_demo import archillesRAG
 
 
 def get_calibre_library_path() -> Path:
-    """Get Calibre library path from environment or default."""
-    return Path(os.environ.get('CALIBRE_LIBRARY_PATH', 'D:/Calibre-Bibliothek'))
+    """Get Calibre library path from environment variable.
+
+    Raises:
+        SystemExit: If CALIBRE_LIBRARY_PATH is not set
+    """
+    library_path = os.environ.get('CALIBRE_LIBRARY_PATH')
+    if not library_path:
+        print("\n" + "="*60)
+        print("ERROR: CALIBRE_LIBRARY_PATH not set")
+        print("="*60 + "\n")
+        print("Please set the environment variable to your Calibre library:\n")
+        print("  Windows (PowerShell):")
+        print('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n')
+        print("  Linux/macOS:")
+        print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
+        sys.exit(1)
+    return Path(library_path)
 
 
 def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
