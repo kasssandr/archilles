@@ -109,6 +109,7 @@ class archillesRAG:
         self.bm25_index = None
         self.bm25_docs = None
         self.bm25_ids = None
+        self.bm25_metadatas = None  # Cache metadata to avoid SQLite variable limit
         self._load_bm25_index()
 
         if BM25_AVAILABLE and self.bm25_index:
@@ -566,6 +567,7 @@ class archillesRAG:
                 self.bm25_index = data['index']
                 self.bm25_docs = data['docs']
                 self.bm25_ids = data['ids']
+                self.bm25_metadatas = data.get('metadatas', None)  # Load cached metadata
         except Exception as e:
             print(f"  ? Could not load BM25 index: {e}")
 
@@ -582,7 +584,8 @@ class archillesRAG:
                 pickle.dump({
                     'index': self.bm25_index,
                     'docs': self.bm25_docs,
-                    'ids': self.bm25_ids
+                    'ids': self.bm25_ids,
+                    'metadatas': self.bm25_metadatas  # Cache metadata to avoid SQLite limit
                 }, f)
         except Exception as e:
             print(f"  ? Could not save BM25 index: {e}")
@@ -598,9 +601,10 @@ class archillesRAG:
         if not all_data['ids']:
             return
 
-        # Store original documents and IDs
+        # Store original documents, IDs, and metadata
         self.bm25_ids = all_data['ids']
         self.bm25_docs = all_data['documents']
+        self.bm25_metadatas = all_data['metadatas']  # Cache for filtering without SQLite limit
 
         # Create enriched documents with metadata for BM25 indexing
         # This makes tags, titles, authors searchable via keyword search
@@ -781,8 +785,8 @@ class archillesRAG:
         # Get top-k indices
         top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k * 10]  # Get more for filtering
 
-        # Get metadata for filtering
-        all_metadata = self.collection.get(ids=self.bm25_ids)['metadatas']
+        # Use cached metadata (avoids SQLite variable limit with large indexes)
+        all_metadata = self.bm25_metadatas
 
         # Filter by language/book_id
         filtered_results = []
@@ -832,15 +836,13 @@ class archillesRAG:
         # Normalize query: lowercase + collapse whitespace (newlines, tabs, multiple spaces ? single space)
         query_normalized = re.sub(r'\s+', ' ', query_text.lower().strip())
 
-        # Get all documents
-        all_data = self.collection.get(ids=self.bm25_ids)
-
+        # Use cached data (avoids SQLite variable limit with large indexes)
         # Find exact matches
         matches = []
         for idx, (doc_id, doc_text, metadata) in enumerate(zip(
-            all_data['ids'],
-            all_data['documents'],
-            all_data['metadatas']
+            self.bm25_ids,
+            self.bm25_docs,
+            self.bm25_metadatas
         )):
             # Apply filters first
             if language:
