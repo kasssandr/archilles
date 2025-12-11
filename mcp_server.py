@@ -154,11 +154,25 @@ async def stdio_server(server: CalibreMCPServer):
 
                 result = await handle_request(server, tool_name, tool_params)
 
-                response = {
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'result': result
-                }
+                # MCP spec requires result.content array with text/image items
+                # Check if tool returned an error
+                if isinstance(result, dict) and 'error' in result:
+                    response = {
+                        'jsonrpc': '2.0',
+                        'id': request_id,
+                        'result': {
+                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}],
+                            'isError': True
+                        }
+                    }
+                else:
+                    response = {
+                        'jsonrpc': '2.0',
+                        'id': request_id,
+                        'result': {
+                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}]
+                        }
+                    }
             else:
                 response = {
                     'jsonrpc': '2.0',
@@ -200,8 +214,27 @@ async def stdio_server(server: CalibreMCPServer):
 def main():
     """Main entry point."""
     import os
-    # Load configuration
-    config_path = Path("D:/Calibre-Bibliothek/.archilles/config.json")
+
+    # Check for CALIBRE_LIBRARY_PATH - required for portable installation
+    library_path = os.getenv('CALIBRE_LIBRARY_PATH')
+
+    if not library_path:
+        logger.error("CALIBRE_LIBRARY_PATH environment variable not set")
+        sys.stderr.write("\n" + "="*60 + "\n")
+        sys.stderr.write("ERROR: CALIBRE_LIBRARY_PATH not set\n")
+        sys.stderr.write("="*60 + "\n\n")
+        sys.stderr.write("Please set the environment variable to your Calibre library:\n\n")
+        sys.stderr.write("  Windows (PowerShell):\n")
+        sys.stderr.write('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n\n')
+        sys.stderr.write("  Linux/macOS:\n")
+        sys.stderr.write('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n\n')
+        sys.stderr.write("  Claude Desktop (claude_desktop_config.json):\n")
+        sys.stderr.write('    "env": {"CALIBRE_LIBRARY_PATH": "/path/to/Calibre-Library"}\n\n')
+        sys.stderr.flush()
+        sys.exit(1)
+
+    # Load configuration from .archilles folder within library
+    config_path = Path(library_path) / ".archilles" / "config.json"
     config = {}
 
     if config_path.exists():
@@ -212,21 +245,34 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    # Get RAG database path from environment or config
-    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', './archilles_rag_db')
+    # Config can override the environment variable if specified
+    library_path = config.get('calibre_library_path', library_path)
+
+    # Derive paths relative to library - ensures consistency between MCP server and CLI tools
+    archilles_dir = Path(library_path) / ".archilles"
+
+    # RAG database for fulltext search (PDF/EPUB chunks)
+    default_rag_path = str(archilles_dir / "rag_db")
+    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', default_rag_path)
+
+    # ChromaDB for annotations (highlights/notes)
+    default_chroma_path = str(archilles_dir / "chroma_db")
+    chroma_persist_dir = config.get('chroma_persist_dir', default_chroma_path)
+
+    logger.info(f"Library path: {library_path}")
     logger.info(f"RAG database path: {rag_db_path}")
+    logger.info(f"ChromaDB path: {chroma_persist_dir}")
 
     # Initialize server
-
     server = CalibreMCPServer(
-        library_path=config.get('calibre_library_path', 'D:/Calibre-Bibliothek'),
+        library_path=library_path,
         annotations_dir=None,  # Will auto-detect
         enable_semantic_search=True,
-        chroma_persist_dir=config.get('chroma_persist_dir', 'D:/Calibre-Bibliothek/.archilles/chroma_db'),
+        chroma_persist_dir=chroma_persist_dir,
         rag_db_path=rag_db_path
     )
 
-    logger.info(f"Server initialized with library: {config.get('calibre_library_path', 'D:/Calibre-Bibliothek')}")
+    logger.info(f"Server initialized with library: {library_path}")
     logger.info(f"Semantic search enabled: {server.enable_semantic_search}")
 
     # Run stdio server

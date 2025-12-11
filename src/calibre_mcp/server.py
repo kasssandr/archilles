@@ -12,9 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-# Add parent directory to path to import calibre_analyzer
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from calibre_analyzer import CalibreAnalyzer
+# Import CalibreAnalyzer from local module
+from .calibre_analyzer import CalibreAnalyzer
 
 # Import RAG system for XML prompt generation
 try:

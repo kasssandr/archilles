@@ -92,14 +92,40 @@ cd archilles
 # Install dependencies
 pip install -r requirements.txt
 
-# Index your first book
-python scripts/rag_demo.py index "/path/to/your/Calibre Library/Author/Book/book.epub"
-
-# Search it
-python scripts/rag_demo.py query "your search query"
+# Set your Calibre library path (optional - defaults to D:/Calibre-Bibliothek)
+# Windows PowerShell:
+$env:CALIBRE_LIBRARY_PATH = "D:\Your-Calibre-Library"
+# Linux/Mac:
+export CALIBRE_LIBRARY_PATH="/path/to/your/Calibre Library"
 ```
 
-### First Search Example
+### Index Your First Book
+
+```bash
+# Index a single book
+python scripts/rag_demo.py index "/path/to/Calibre Library/Author/Book/book.pdf"
+
+# Check your index
+python scripts/rag_demo.py stats
+```
+
+### Batch Index by Tag
+
+```bash
+# Preview what would be indexed (dry run)
+python scripts/batch_index.py --tag "Your-Tag" --dry-run
+
+# Index all books with a specific Calibre tag
+python scripts/batch_index.py --tag "Leit-Literatur"
+
+# Index with progress logging
+python scripts/batch_index.py --tag "History" --log indexing.json
+
+# Resume interrupted indexing (skip already indexed books)
+python scripts/batch_index.py --tag "History" --skip-existing
+```
+
+### Search Your Library
 
 ```bash
 # Hybrid search (recommended - combines semantic + keyword)
@@ -110,7 +136,33 @@ python scripts/rag_demo.py query "Rex" --language la
 
 # Filter by tags
 python scripts/rag_demo.py query "political theory" --tag-filter Philosophy History
+
+# Export results to Markdown (for Joplin/Obsidian)
+python scripts/rag_demo.py query "consciousness" --export results.md
 ```
+
+### Claude Desktop Integration
+
+Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "archilles": {
+      "command": "python",
+      "args": ["C:/Users/YOU/archilles/mcp_server.py"],
+      "env": {
+        "CALIBRE_LIBRARY_PATH": "D:/Your-Calibre-Library"
+      }
+    }
+  }
+}
+```
+
+Then in Claude Desktop, you can use natural language:
+- *"Search my books for discussions of political legitimacy"*
+- *"Find annotations about consciousness"*
+- *"What did I highlight about medieval trade?"*
 
 **📖 [Full Installation Guide →](docs/INSTALLATION.md)**
 
@@ -155,7 +207,7 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 - **Tags**: Your Calibre tags become searchable
 - **Comments**: Calibre's comments field (HTML cleaned automatically)
 - **Custom fields**: Any custom Calibre fields you've defined (reading status, projects, ratings, etc.)
-- **Annotations**: *(Coming in v1.0)* PDF highlights and EPUB notes
+- **Annotations**: Your Calibre highlights and notes (searchable via `search_annotations`)
 
 ### Search Technology
 
