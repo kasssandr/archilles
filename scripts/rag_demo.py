@@ -595,21 +595,40 @@ class archillesRAG:
         if not BM25_AVAILABLE:
             return
 
-        # Get all documents from ChromaDB
-        all_data = self.collection.get()
+        # Get all documents from ChromaDB in batches to avoid SQLite variable limit
+        # ChromaDB's get() without parameters can hit SQLite's ~999 variable limit
+        print("  Fetching documents from ChromaDB...")
+        all_ids = []
+        all_docs = []
+        all_metadatas = []
+        batch_size = 500
+        offset = 0
 
-        if not all_data['ids']:
+        while True:
+            batch = self.collection.get(limit=batch_size, offset=offset)
+            if not batch['ids']:
+                break
+            all_ids.extend(batch['ids'])
+            all_docs.extend(batch['documents'])
+            all_metadatas.extend(batch['metadatas'])
+            offset += batch_size
+            if len(batch['ids']) < batch_size:
+                break  # Last batch
+
+        if not all_ids:
             return
 
+        print(f"  Loaded {len(all_ids)} chunks for BM25 indexing...")
+
         # Store original documents, IDs, and metadata
-        self.bm25_ids = all_data['ids']
-        self.bm25_docs = all_data['documents']
-        self.bm25_metadatas = all_data['metadatas']  # Cache for filtering without SQLite limit
+        self.bm25_ids = all_ids
+        self.bm25_docs = all_docs
+        self.bm25_metadatas = all_metadatas  # Cache for filtering without SQLite limit
 
         # Create enriched documents with metadata for BM25 indexing
         # This makes tags, titles, authors searchable via keyword search
         enriched_docs = []
-        for doc, metadata in zip(self.bm25_docs, all_data['metadatas']):
+        for doc, metadata in zip(self.bm25_docs, self.bm25_metadatas):
             enriched_text = doc
 
             # Add tags to searchable text (if available)
