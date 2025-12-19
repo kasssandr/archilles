@@ -346,18 +346,23 @@ class PDFExtractor(BaseExtractor):
 
         from collections import Counter
 
-        # Extract first 1-2 lines from each page (potential headers)
+        # Extract first 2 lines from each page (potential headers)
+        # Line 1 might be page number, line 2 might be actual header
         first_lines = []
         for page_text in pages_text:
             lines = page_text.strip().split('\n')
-            if lines:
-                # Get first line, normalize whitespace
-                first_line = ' '.join(lines[0].split())
+            # Check first 2 lines for potential headers
+            for line in lines[:2]:
+                if not line.strip():
+                    continue
+                # Normalize whitespace
+                line_normalized = ' '.join(line.split())
                 # Remove page numbers (digits at start or end)
-                first_line_normalized = re.sub(r'^\d+\s*', '', first_line)
-                first_line_normalized = re.sub(r'\s*\d+$', '', first_line_normalized)
-                if first_line_normalized and len(first_line_normalized) > 5:
-                    first_lines.append((first_line, first_line_normalized))
+                line_normalized = re.sub(r'^\d+\s*', '', line_normalized)
+                line_normalized = re.sub(r'\s*\d+$', '', line_normalized)
+                # Skip if too short or just numbers
+                if line_normalized and len(line_normalized) > 5:
+                    first_lines.append((line, line_normalized))
 
         # Count occurrences of normalized headers
         header_counts = Counter(normalized for _, normalized in first_lines)
