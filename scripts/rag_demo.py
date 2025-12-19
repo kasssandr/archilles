@@ -680,7 +680,8 @@ class archillesRAG:
         language: str = None,
         book_id: str = None,
         exact_phrase: bool = False,
-        tag_filter: List[str] = None
+        tag_filter: List[str] = None,
+        section_filter: str = None
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -693,6 +694,8 @@ class archillesRAG:
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
             tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
+            section_filter: Filter by section type ('main_content', 'front_matter', 'back_matter')
+                           Use 'main' to exclude front/back matter from results
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -707,6 +710,8 @@ class archillesRAG:
             filters.append("exact phrase")
         if tag_filter:
             filters.append(f"tags={', '.join(tag_filter)}")
+        if section_filter:
+            filters.append(f"section={section_filter}")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
         mode_emoji = {"semantic": "??", "keyword": "??", "hybrid": "??"}
@@ -734,6 +739,25 @@ class archillesRAG:
                     filter_tag_list = [t.strip().lower() for t in tag_filter]
                     if any(ft in result_tag_list for ft in filter_tag_list):
                         filtered_results.append(result)
+
+            # Re-rank after filtering
+            for i, result in enumerate(filtered_results):
+                result['rank'] = i + 1
+
+            results = filtered_results[:top_k]
+
+        # Post-filter by section type (if specified)
+        if section_filter:
+            filtered_results = []
+            for result in results:
+                section_type = result['metadata'].get('section_type', 'main_content')
+
+                # 'main' is shorthand for main_content only (exclude front/back matter)
+                if section_filter == 'main':
+                    if section_type == 'main_content' or section_type is None:
+                        filtered_results.append(result)
+                elif section_type == section_filter:
+                    filtered_results.append(result)
 
             # Re-rank after filtering
             for i, result in enumerate(filtered_results):
@@ -1607,6 +1631,8 @@ Examples:
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
+    query_parser.add_argument('--section', choices=['main', 'main_content', 'front_matter', 'back_matter'],
+                              help='Filter by section type: main (exclude index/TOC), front_matter, back_matter')
     query_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
@@ -1655,7 +1681,8 @@ Examples:
                 language=args.language,
                 book_id=args.book_id,
                 exact_phrase=args.exact,
-                tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None
+                tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None,
+                section_filter=args.section if hasattr(args, 'section') else None
             )
             rag.print_results(results, query_text=args.query)
 

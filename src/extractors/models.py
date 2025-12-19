@@ -20,6 +20,7 @@ class ChunkMetadata:
     page: Optional[int] = None
     page_label: Optional[str] = None  # e.g., "xiv" for roman numerals
     chapter: Optional[str] = None
+    section_type: Optional[str] = None  # front_matter, main_content, back_matter
     char_start: Optional[int] = None
     char_end: Optional[int] = None
 
