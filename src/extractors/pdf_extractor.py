@@ -411,11 +411,19 @@ class PDFExtractor(BaseExtractor):
             if count >= min_occurrences
         ]
 
-        # Debug output
+        # Debug output - always show what was found
+        print(f"  📊 Header analysis: {len(first_lines)} candidate lines from {len(pages_text)} pages")
+        if header_groups:
+            # Show top 5 header groups by count
+            sorted_groups = sorted(header_groups, key=lambda x: x[1], reverse=True)[:5]
+            print(f"  📋 Top header patterns found:")
+            for h, count in sorted_groups:
+                status = "✓" if count >= min_occurrences else "✗"
+                h_display = f"{h[:50]}..." if len(h) > 50 else h
+                print(f"     {status} ({count}x): \"{h_display}\"")
+
         if running_headers:
-            print(f"  📋 Detected {len(running_headers)} running headers to remove:")
-            for h in running_headers[:5]:  # Show first 5
-                print(f"     - \"{h[:60]}...\"" if len(h) > 60 else f"     - \"{h}\"")
+            print(f"  🧹 Will remove {len(running_headers)} running header patterns (threshold: {min_occurrences}+)")
 
         return running_headers
 
