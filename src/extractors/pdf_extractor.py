@@ -152,7 +152,10 @@ class PDFExtractor(BaseExtractor):
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
+            original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
+            new_lines = sum(len(p.split('\n')) for p in pages_text)
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages")
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -219,7 +222,10 @@ class PDFExtractor(BaseExtractor):
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
+            original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
+            new_lines = sum(len(p.split('\n')) for p in pages_text)
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages")
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -400,6 +406,12 @@ class PDFExtractor(BaseExtractor):
             header for header, count in header_groups
             if count >= min_occurrences
         ]
+
+        # Debug output
+        if running_headers:
+            print(f"  📋 Detected {len(running_headers)} running headers to remove:")
+            for h in running_headers[:5]:  # Show first 5
+                print(f"     - \"{h[:60]}...\"" if len(h) > 60 else f"     - \"{h}\"")
 
         return running_headers
 
