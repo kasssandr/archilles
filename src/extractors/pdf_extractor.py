@@ -155,7 +155,7 @@ class PDFExtractor(BaseExtractor):
             original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
             new_lines = sum(len(p.split('\n')) for p in pages_text)
-            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages")
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages", flush=True)
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -225,7 +225,7 @@ class PDFExtractor(BaseExtractor):
             original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
             new_lines = sum(len(p.split('\n')) for p in pages_text)
-            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages")
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages", flush=True)
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -411,19 +411,19 @@ class PDFExtractor(BaseExtractor):
             if count >= min_occurrences
         ]
 
-        # Debug output - always show what was found
-        print(f"  📊 Header analysis: {len(first_lines)} candidate lines from {len(pages_text)} pages")
+        # Debug output - always show what was found (flush to ensure visibility)
+        print(f"  📊 Header analysis: {len(first_lines)} candidate lines from {len(pages_text)} pages", flush=True)
         if header_groups:
             # Show top 5 header groups by count
             sorted_groups = sorted(header_groups, key=lambda x: x[1], reverse=True)[:5]
-            print(f"  📋 Top header patterns found:")
+            print(f"  📋 Top header patterns found:", flush=True)
             for h, count in sorted_groups:
                 status = "✓" if count >= min_occurrences else "✗"
                 h_display = f"{h[:50]}..." if len(h) > 50 else h
-                print(f"     {status} ({count}x): \"{h_display}\"")
+                print(f"     {status} ({count}x): \"{h_display}\"", flush=True)
 
         if running_headers:
-            print(f"  🧹 Will remove {len(running_headers)} running header patterns (threshold: {min_occurrences}+)")
+            print(f"  🧹 Will remove {len(running_headers)} running header patterns (threshold: {min_occurrences}+)", flush=True)
 
         return running_headers
 
