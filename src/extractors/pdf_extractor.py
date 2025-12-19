@@ -364,15 +364,19 @@ class PDFExtractor(BaseExtractor):
             ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
             return ratio >= similarity_threshold
 
-        # Extract first 2 lines from each page (potential headers)
-        # Line 1 might be page number, line 2 might be actual header
+        # Extract first 3 non-empty lines from each page (potential headers)
+        # Line 1 might be page number, lines 2-3 might be actual headers (verso/recto)
         first_lines = []
         for page_text in pages_text:
             lines = page_text.strip().split('\n')
-            # Check first 2 lines for potential headers
-            for line in lines[:2]:
+            lines_checked = 0
+            # Check first 3 non-empty lines for potential headers
+            for line in lines:
+                if lines_checked >= 3:
+                    break
                 if not line.strip():
                     continue
+                lines_checked += 1
                 # Normalize whitespace
                 line_normalized = ' '.join(line.split())
                 # Remove page numbers (digits at start or end)
@@ -450,19 +454,26 @@ class PDFExtractor(BaseExtractor):
         cleaned_pages = []
 
         for page_text in pages_text:
-            lines = page_text.split('\n')
+            # Use strip().split() to match detection preprocessing exactly
+            lines = page_text.strip().split('\n')
             cleaned_lines = []
+            lines_checked = 0  # Track non-empty lines checked
 
-            # Only check first 2 lines for headers (not the whole page)
-            for i, line in enumerate(lines):
+            for line in lines:
                 # Normalize the line for comparison
-                line_normalized = ' '.join(line.split())
+                line_stripped = line.strip()
+                if not line_stripped:
+                    cleaned_lines.append(line)
+                    continue
+
+                line_normalized = ' '.join(line_stripped.split())
                 line_normalized = re.sub(r'^\d+\s*', '', line_normalized)
                 line_normalized = re.sub(r'\s*\d+$', '', line_normalized)
 
-                # Only check first 2 lines for running headers
+                # Only check first 3 non-empty lines for running headers
                 is_header = False
-                if i < 2 and line_normalized:
+                if lines_checked < 3 and line_normalized:
+                    lines_checked += 1
                     for header in running_headers:
                         if similar(line_normalized, header):
                             is_header = True
