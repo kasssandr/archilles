@@ -524,13 +524,33 @@ class archillesRAG:
             embeddings.append(comment_embedding)
             metadatas.append(comment_metadata)
 
-        # Add to collection
-        self.collection.add(
-            ids=ids,
-            embeddings=embeddings,
-            documents=documents,
-            metadatas=metadatas
-        )
+        # Add to collection in batches (ChromaDB limit for large books)
+        batch_size = 500  # Safe batch size for ChromaDB
+        total_chunks = len(ids)
+
+        if total_chunks <= batch_size:
+            # Small book: single batch
+            self.collection.add(
+                ids=ids,
+                embeddings=embeddings,
+                documents=documents,
+                metadatas=metadatas
+            )
+        else:
+            # Large book: batch processing
+            print(f"    📦 Processing {total_chunks} chunks in batches of {batch_size}...", flush=True)
+            for i in range(0, total_chunks, batch_size):
+                batch_end = min(i + batch_size, total_chunks)
+                batch_num = i // batch_size + 1
+                total_batches = (total_chunks + batch_size - 1) // batch_size
+
+                self.collection.add(
+                    ids=ids[i:batch_end],
+                    embeddings=embeddings[i:batch_end],
+                    documents=documents[i:batch_end],
+                    metadatas=metadatas[i:batch_end]
+                )
+                print(f"      Batch {batch_num}/{total_batches}: {batch_end}/{total_chunks} chunks", flush=True)
 
         index_time = time.time() - start_time
         print(f"    ? Indexed {len(ids)} chunks in {index_time:.1f}s\n")
