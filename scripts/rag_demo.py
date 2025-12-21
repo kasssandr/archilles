@@ -337,13 +337,14 @@ class archillesRAG:
 
         return metadata
 
-    def index_book(self, book_path: str, book_id: str = None) -> Dict[str, Any]:
+    def index_book(self, book_path: str, book_id: str = None, force: bool = False) -> Dict[str, Any]:
         """
         Extract and index a book.
 
         Args:
             book_path: Path to book file
             book_id: Optional book ID (default: filename)
+            force: If True, delete existing chunks before re-indexing
 
         Returns:
             Dictionary with indexing statistics
@@ -355,8 +356,22 @@ class archillesRAG:
 
         book_id = book_id or book_path.stem
 
-        print(f"?? INDEXING BOOK: {book_path.name}")
+        print(f"📚 INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
+
+        # Check for existing chunks and handle force reindex
+        existing = self.collection.get(where={"book_id": book_id})
+        if existing and existing['ids']:
+            if force:
+                print(f"  🗑️  Deleting {len(existing['ids'])} existing chunks...", flush=True)
+                self.collection.delete(ids=existing['ids'])
+            else:
+                print(f"  ⚠️  Book already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
+                return {
+                    'book_id': book_id,
+                    'status': 'already_indexed',
+                    'existing_chunks': len(existing['ids'])
+                }
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
@@ -1619,6 +1634,7 @@ Examples:
     index_parser.add_argument('book_path', help='Path to book file')
     index_parser.add_argument('--book-id', help='Optional book ID (default: filename)')
     index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
+    index_parser.add_argument('--force', action='store_true', help='Force reindex (delete existing chunks first)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1670,7 +1686,7 @@ Examples:
 
         if args.command == 'index':
             # Index a book
-            stats = rag.index_book(args.book_path, args.book_id)
+            stats = rag.index_book(args.book_path, args.book_id, force=args.force)
 
         elif args.command == 'query':
             # Search

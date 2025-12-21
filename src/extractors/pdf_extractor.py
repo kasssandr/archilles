@@ -152,7 +152,10 @@ class PDFExtractor(BaseExtractor):
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
+            original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
+            new_lines = sum(len(p.split('\n')) for p in pages_text)
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages", flush=True)
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -219,7 +222,10 @@ class PDFExtractor(BaseExtractor):
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
+            original_lines = sum(len(p.split('\n')) for p in pages_text)
             pages_text = self._remove_running_headers(pages_text, running_headers)
+            new_lines = sum(len(p.split('\n')) for p in pages_text)
+            print(f"  🧹 Removed {original_lines - new_lines} header lines from {len(pages_text)} pages", flush=True)
 
         # Create chunks with page information and section detection
         chunks = self._create_chunks_with_pages(
@@ -324,7 +330,8 @@ class PDFExtractor(BaseExtractor):
     def _detect_running_headers(
         self,
         pages_text: List[str],
-        min_occurrences: int = 3
+        min_occurrences: int = 3,
+        similarity_threshold: float = 0.85
     ) -> List[str]:
         """
         Detect running headers (Kolumnentitel) that repeat across pages.
@@ -334,9 +341,12 @@ class PDFExtractor(BaseExtractor):
         - Repeat identically (or with only page number changes) across multiple pages
         - Often contain chapter titles or book title
 
+        Uses fuzzy matching to handle OCR errors (e.g., "Narbonne" vs "Narbome").
+
         Args:
             pages_text: List of page texts
             min_occurrences: Minimum times a header must appear to be considered running
+            similarity_threshold: Minimum similarity ratio for fuzzy matching (0.0-1.0)
 
         Returns:
             List of detected running header patterns
@@ -345,16 +355,28 @@ class PDFExtractor(BaseExtractor):
             return []
 
         from collections import Counter
+        from difflib import SequenceMatcher
 
-        # Extract first 2 lines from each page (potential headers)
-        # Line 1 might be page number, line 2 might be actual header
+        def similar(a: str, b: str) -> bool:
+            """Check if two strings are similar enough (handles OCR errors)."""
+            if not a or not b:
+                return False
+            ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+            return ratio >= similarity_threshold
+
+        # Extract first 3 non-empty lines from each page (potential headers)
+        # Line 1 might be page number, lines 2-3 might be actual headers (verso/recto)
         first_lines = []
         for page_text in pages_text:
             lines = page_text.strip().split('\n')
-            # Check first 2 lines for potential headers
-            for line in lines[:2]:
+            lines_checked = 0
+            # Check first 3 non-empty lines for potential headers
+            for line in lines:
+                if lines_checked >= 3:
+                    break
                 if not line.strip():
                     continue
+                lines_checked += 1
                 # Normalize whitespace
                 line_normalized = ' '.join(line.split())
                 # Remove page numbers (digits at start or end)
@@ -364,55 +386,106 @@ class PDFExtractor(BaseExtractor):
                 if line_normalized and len(line_normalized) > 5:
                     first_lines.append((line, line_normalized))
 
-        # Count occurrences of normalized headers
-        header_counts = Counter(normalized for _, normalized in first_lines)
+        # Group similar headers together (handles OCR variations)
+        # Use the most common variant as the canonical form
+        header_groups = []  # List of (canonical_header, count)
 
-        # Headers that appear on multiple pages
+        for _, normalized in first_lines:
+            found_group = False
+            for i, (canonical, count) in enumerate(header_groups):
+                if similar(normalized, canonical):
+                    # Add to existing group, keep the longer variant as canonical
+                    if len(normalized) > len(canonical):
+                        header_groups[i] = (normalized, count + 1)
+                    else:
+                        header_groups[i] = (canonical, count + 1)
+                    found_group = True
+                    break
+
+            if not found_group:
+                header_groups.append((normalized, 1))
+
+        # Headers (or header groups) that appear on multiple pages
         running_headers = [
-            header for header, count in header_counts.items()
+            header for header, count in header_groups
             if count >= min_occurrences
         ]
+
+        # Debug output - always show what was found (flush to ensure visibility)
+        print(f"  📊 Header analysis: {len(first_lines)} candidate lines from {len(pages_text)} pages", flush=True)
+        if header_groups:
+            # Show top 5 header groups by count
+            sorted_groups = sorted(header_groups, key=lambda x: x[1], reverse=True)[:5]
+            print(f"  📋 Top header patterns found:", flush=True)
+            for h, count in sorted_groups:
+                status = "✓" if count >= min_occurrences else "✗"
+                h_display = f"{h[:50]}..." if len(h) > 50 else h
+                print(f"     {status} ({count}x): \"{h_display}\"", flush=True)
+
+        if running_headers:
+            print(f"  🧹 Will remove {len(running_headers)} running header patterns (threshold: {min_occurrences}+)", flush=True)
 
         return running_headers
 
     def _remove_running_headers(
         self,
         pages_text: List[str],
-        running_headers: List[str]
+        running_headers: List[str],
+        similarity_threshold: float = 0.85
     ) -> List[str]:
         """
         Remove detected running headers from page texts.
 
+        Uses fuzzy matching to handle OCR variations.
+
         Args:
             pages_text: List of page texts
             running_headers: List of running header patterns to remove
+            similarity_threshold: Minimum similarity ratio for fuzzy matching
 
         Returns:
             List of page texts with running headers removed
         """
+        from difflib import SequenceMatcher
+
+        def similar(a: str, b: str) -> bool:
+            """Check if two strings are similar enough."""
+            if not a or not b:
+                return False
+            # Exact match or containment
+            if a == b or b in a:
+                return True
+            # Fuzzy match
+            ratio = SequenceMatcher(None, a.lower(), b.lower()).ratio()
+            return ratio >= similarity_threshold
+
         cleaned_pages = []
 
         for page_text in pages_text:
-            lines = page_text.split('\n')
+            # Use strip().split() to match detection preprocessing exactly
+            lines = page_text.strip().split('\n')
             cleaned_lines = []
-            skip_next = 0
+            lines_checked = 0  # Track non-empty lines checked
 
-            for i, line in enumerate(lines):
-                if skip_next > 0:
-                    skip_next -= 1
+            for line in lines:
+                # Normalize the line for comparison
+                line_stripped = line.strip()
+                if not line_stripped:
+                    cleaned_lines.append(line)
                     continue
 
-                # Normalize the line for comparison
-                line_normalized = ' '.join(line.split())
+                line_normalized = ' '.join(line_stripped.split())
                 line_normalized = re.sub(r'^\d+\s*', '', line_normalized)
                 line_normalized = re.sub(r'\s*\d+$', '', line_normalized)
 
-                # Check if this line is a running header
+                # Only check first 3 non-empty lines for running headers
                 is_header = False
-                for header in running_headers:
-                    if line_normalized == header or header in line_normalized:
-                        is_header = True
-                        break
+                if lines_checked < 3 and line_normalized:
+                    lines_checked += 1
+                    for header in running_headers:
+                        if similar(line_normalized, header):
+                            is_header = True
+                            break
 
                 if not is_header:
                     cleaned_lines.append(line)
