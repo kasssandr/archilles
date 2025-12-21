@@ -716,7 +716,8 @@ class archillesRAG:
         book_id: str = None,
         exact_phrase: bool = False,
         tag_filter: List[str] = None,
-        section_filter: str = None
+        section_filter: str = None,
+        max_per_book: int = 3
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -731,6 +732,7 @@ class archillesRAG:
             tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
             section_filter: Filter by section type ('main_content', 'front_matter', 'back_matter')
                            Use 'main' to exclude front/back matter from results
+            max_per_book: Maximum results per book (default: 3, use 999 for unlimited)
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -747,19 +749,27 @@ class archillesRAG:
             filters.append(f"tags={', '.join(tag_filter)}")
         if section_filter:
             filters.append(f"section={section_filter}")
+        if max_per_book < 999:
+            filters.append(f"max {max_per_book}/book")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
         mode_emoji = {"semantic": "??", "keyword": "??", "hybrid": "??"}
         print(f"{mode_emoji.get(mode, '??')} QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
         print(f"  Searching {self.collection.count()} chunks...\n")
 
+        # Oversample to allow for diversity filtering
+        # If max_per_book is set, we need to fetch more results than top_k
+        # to ensure we have enough diverse results after filtering
+        oversample_factor = 3 if max_per_book < 999 else 1
+        search_top_k = top_k * oversample_factor
+
         # Route to appropriate search method
         if mode == 'semantic':
-            results = self._semantic_search(query_text, top_k, language, book_id)
+            results = self._semantic_search(query_text, search_top_k, language, book_id)
         elif mode == 'keyword':
-            results = self._keyword_search(query_text, top_k, language, book_id, exact_phrase=exact_phrase)
+            results = self._keyword_search(query_text, search_top_k, language, book_id, exact_phrase=exact_phrase)
         elif mode == 'hybrid':
-            results = self._hybrid_search(query_text, top_k, language, book_id, exact_phrase=exact_phrase)
+            results = self._hybrid_search(query_text, search_top_k, language, book_id, exact_phrase=exact_phrase)
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
 
@@ -799,6 +809,32 @@ class archillesRAG:
                 result['rank'] = i + 1
 
             results = filtered_results[:top_k]
+
+        # Diversify results by book (max N results per book)
+        if max_per_book < 999 and len(results) > 0:
+            diversified_results = []
+            book_counts = {}  # Track how many results per book
+
+            for result in results:
+                book_id_val = result['metadata'].get('book_id', 'unknown')
+
+                # Count current results from this book
+                current_count = book_counts.get(book_id_val, 0)
+
+                # Add result if under limit
+                if current_count < max_per_book:
+                    diversified_results.append(result)
+                    book_counts[book_id_val] = current_count + 1
+
+                # Stop when we have enough results
+                if len(diversified_results) >= top_k:
+                    break
+
+            # Re-rank after diversification
+            for i, result in enumerate(diversified_results):
+                result['rank'] = i + 1
+
+            results = diversified_results
 
         return results
 
@@ -1642,6 +1678,11 @@ Examples:
   # More results
   python scripts/rag_demo.py query "Jewish kings" --top-k 10
 
+  # Result diversity (max results per book)
+  python scripts/rag_demo.py query "Herrschaftslegitimation" --max-per-book 2  # Max 2 results per book
+  python scripts/rag_demo.py query "Macht" --max-per-book 1                    # Max 1 result per book (max diversity)
+  python scripts/rag_demo.py query "Marcion" --max-per-book 999                # Unlimited (all from one book OK)
+
   # Export to Markdown (for Joplin/Obsidian)
   python scripts/rag_demo.py query "evangelista et a presbyteris" --exact --export zitate.md
         """
@@ -1669,6 +1710,7 @@ Examples:
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
     query_parser.add_argument('--section', choices=['main', 'main_content', 'front_matter', 'back_matter'],
                               help='Filter by section type: main (exclude index/TOC), front_matter, back_matter')
+    query_parser.add_argument('--max-per-book', type=int, default=3, help='Maximum results per book (default: 3, use 999 for unlimited)')
     query_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
@@ -1718,7 +1760,8 @@ Examples:
                 book_id=args.book_id,
                 exact_phrase=args.exact,
                 tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None,
-                section_filter=args.section if hasattr(args, 'section') else None
+                section_filter=args.section if hasattr(args, 'section') else None,
+                max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 3
             )
             rag.print_results(results, query_text=args.query)
 
