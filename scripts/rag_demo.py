@@ -760,7 +760,8 @@ class archillesRAG:
         # Oversample to allow for diversity filtering
         # If max_per_book is set, we need to fetch more results than top_k
         # to ensure we have enough diverse results after filtering
-        oversample_factor = 3 if max_per_book < 999 else 1
+        # Higher factor (5) enables finding more diverse books in large libraries
+        oversample_factor = 5 if max_per_book < 999 else 1
         search_top_k = top_k * oversample_factor
 
         # Route to appropriate search method
