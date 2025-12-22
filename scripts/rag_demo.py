@@ -789,7 +789,7 @@ class archillesRAG:
             for i, result in enumerate(filtered_results):
                 result['rank'] = i + 1
 
-            results = filtered_results[:top_k]
+            results = filtered_results  # Don't truncate yet - need data for diversification
 
         # Post-filter by section type (if specified)
         if section_filter:
@@ -808,7 +808,7 @@ class archillesRAG:
             for i, result in enumerate(filtered_results):
                 result['rank'] = i + 1
 
-            results = filtered_results[:top_k]
+            results = filtered_results  # Don't truncate yet - need data for diversification
 
         # Diversify results by book (max N results per book)
         if max_per_book < 999 and len(results) > 0:
@@ -835,6 +835,9 @@ class archillesRAG:
                 result['rank'] = i + 1
 
             results = diversified_results
+        else:
+            # No diversification - just truncate to top_k
+            results = results[:top_k]
 
         return results
 
