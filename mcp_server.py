@@ -84,21 +84,22 @@ async def stdio_server(server: CalibreMCPServer):
     """
     logger.info("Starting ARCHILLES MCP Server (stdio mode)")
 
+    # Ensure stdin/stdout are in proper mode for MCP protocol
+    # This is especially important on Windows where buffering can cause issues
+    import io
+
+    # Reconfigure stdin for line-buffered text mode
+    if hasattr(sys.stdin, 'reconfigure'):
+        sys.stdin.reconfigure(line_buffering=True)
+
+    # Reconfigure stdout for line-buffered text mode with explicit flushing
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(line_buffering=True)
+
+    logger.info("Configured stdio for MCP protocol (line-buffered mode)")
+
     # Get tool definitions
     tools = create_mcp_tools(server)
-
-    # Send server info on startup
-    server_info = {
-        'jsonrpc': '2.0',
-        'method': 'server/info',
-        'params': {
-            'name': 'archilles',
-            'version': '1.0.0',
-            'capabilities': {
-                'tools': tools
-            }
-        }
-    }
 
     # Log available tools
     logger.info(f"Registered {len(tools)} tools")
