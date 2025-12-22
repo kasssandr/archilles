@@ -101,30 +101,53 @@ class CalibreMCPServer:
                 )
                 self.enable_semantic_search = False
 
-        # Initialize RAG system for XML prompt generation
+        # Initialize RAG system for XML prompt generation (lazy loading)
+        # RAG initialization is deferred until first use to avoid blocking server startup
         self.rag = None
-        if RAG_AVAILABLE:
+        self.rag_db_path = rag_db_path or "./archilles_rag_db"
+        self.rag_initialization_attempted = False
+
+    def _ensure_rag_initialized(self) -> bool:
+        """
+        Ensure RAG system is initialized (lazy loading).
+
+        Returns:
+            True if RAG is available, False otherwise
+        """
+        if self.rag is not None:
+            return True  # Already initialized
+
+        if self.rag_initialization_attempted:
+            return False  # Already tried and failed
+
+        self.rag_initialization_attempted = True
+
+        if not RAG_AVAILABLE:
+            logger.warning("RAG system not available (archillesRAG not imported)")
+            return False
+
+        try:
+            logger.info("Initializing RAG system (lazy loading)...")
+
+            # Redirect stdout during RAG initialization to prevent MCP protocol interference
+            # archillesRAG prints status messages that would corrupt JSON-RPC communication
+            old_stdout = sys.stdout
+            sys.stdout = sys.stderr  # Redirect prints to stderr
+
             try:
-                import io
+                self.rag = archillesRAG(db_path=self.rag_db_path)
+                logger.info(f"RAG system initialized: {self.rag_db_path}")
+                return True
+            finally:
+                sys.stdout = old_stdout  # Restore stdout
 
-                # Redirect stdout during RAG initialization to prevent MCP protocol interference
-                # archillesRAG prints status messages that would corrupt JSON-RPC communication
-                old_stdout = sys.stdout
-                sys.stdout = sys.stderr  # Redirect prints to stderr
-
-                try:
-                    rag_path = rag_db_path or "./archilles_rag_db"
-                    self.rag = archillesRAG(db_path=rag_path)
-                    logger.info(f"RAG system initialized: {rag_path}")
-                finally:
-                    sys.stdout = old_stdout  # Restore stdout
-
-            except Exception as e:
-                # Ensure stdout is restored even if initialization fails
-                if 'old_stdout' in locals():
-                    sys.stdout = old_stdout
-                logger.warning(f"Failed to initialize RAG system: {e}")
-                self.rag = None
+        except Exception as e:
+            # Ensure stdout is restored even if initialization fails
+            if 'old_stdout' in locals():
+                sys.stdout = old_stdout
+            logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
+            self.rag = None
+            return False
 
     def get_book_annotations_tool(
         self,
@@ -478,10 +501,12 @@ class CalibreMCPServer:
         Returns:
             Dictionary with XML prompts and search results
         """
-        if not self.rag:
+        # Lazy initialization of RAG system
+        if not self._ensure_rag_initialized():
             return {
                 'error': 'RAG system not available',
-                'help': 'RAG system requires archillesRAG to be installed and initialized'
+                'help': 'RAG system requires archillesRAG to be installed and initialized',
+                'initialization_log': 'Check ~/.archilles/mcp_server.log for details'
             }
 
         try:
