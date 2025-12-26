@@ -91,7 +91,8 @@ class CalibreMCPServer:
                 from .annotations_indexer import AnnotationsIndexer
                 self.indexer = AnnotationsIndexer(
                     chroma_persist_dir=chroma_persist_dir,
-                    annotations_dir=annotations_dir
+                    annotations_dir=annotations_dir,
+                    library_path=library_path
                 )
                 logger.info("Semantic search enabled")
             except ImportError:
@@ -475,12 +476,59 @@ class CalibreMCPServer:
                 'error': f'Failed to export bibliography: {str(e)}'
             }
 
+    def list_tags_tool(
+        self,
+        min_books: int = 1,
+        max_tags: int = 100
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: List all tags in the Calibre library with book counts.
+
+        Args:
+            min_books: Only show tags with at least this many books (default: 1)
+            max_tags: Maximum number of tags to return (default: 100)
+
+        Returns:
+            Dictionary with tag list and statistics
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available',
+                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                tags_stats = analyzer.get_tags_stats()
+
+                # Filter by min_books
+                filtered_tags = [
+                    tag for tag in tags_stats
+                    if tag['book_count'] >= min_books
+                ]
+
+                # Limit results
+                limited_tags = filtered_tags[:max_tags]
+
+                return {
+                    'total_tags': len(tags_stats),
+                    'filtered_tags': len(filtered_tags),
+                    'returned_tags': len(limited_tags),
+                    'tags': limited_tags,
+                    'usage': 'Use these tag names in the "tags" parameter of search_books_with_citations'
+                }
+        except Exception as e:
+            return {
+                'error': f'Failed to list tags: {str(e)}'
+            }
+
     def search_books_with_citations_tool(
         self,
         query: str,
         top_k: int = 5,
         mode: str = 'hybrid',
         language: Optional[str] = None,
+        tags: Optional[list[str]] = None,
         expand_context: bool = False
     ) -> dict[str, Any]:
         """
@@ -496,6 +544,7 @@ class CalibreMCPServer:
             top_k: Number of results to return (default: 5)
             mode: Search mode - 'hybrid', 'semantic', or 'keyword' (default: 'hybrid')
             language: Filter by language (e.g., 'de', 'en', 'la')
+            tags: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
             expand_context: Enable context expansion (Small-to-Big) if char_offsets available
 
         Returns:
@@ -521,7 +570,8 @@ class CalibreMCPServer:
                     query_text=query,
                     top_k=top_k,
                     mode=mode,
-                    language=language
+                    language=language,
+                    tag_filter=tags
                 )
             finally:
                 sys.stdout = old_stdout
@@ -795,6 +845,25 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
             }
         },
         {
+            'name': 'list_tags',
+            'description': 'List all tags in the Calibre library with book counts. Useful for discovering available tags before filtering search results.',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'min_books': {
+                        'type': 'integer',
+                        'description': 'Only show tags with at least this many books (default: 1)',
+                        'default': 1
+                    },
+                    'max_tags': {
+                        'type': 'integer',
+                        'description': 'Maximum number of tags to return (default: 100)',
+                        'default': 100
+                    }
+                }
+            }
+        },
+        {
             'name': 'search_books_with_citations',
             'description': 'Search books with RAG and generate XML-structured prompts with citation support. Returns system prompt + user prompt ready for Claude Desktop. Claude will cite sources as [doc_1], [doc_2], etc.',
             'inputSchema': {
@@ -818,6 +887,11 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     'language': {
                         'type': 'string',
                         'description': 'Filter by language code (e.g., "de" for German, "en" for English, "la" for Latin)'
+                    },
+                    'tags': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': 'Filter by Calibre tags (e.g., ["Geschichte", "Philosophie"]). Results must match ALL tags (AND logic).'
                     },
                     'expand_context': {
                         'type': 'boolean',

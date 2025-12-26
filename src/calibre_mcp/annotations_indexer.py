@@ -89,7 +89,8 @@ class AnnotationsIndexer:
         chroma_persist_dir: Optional[str] = None,
         annotations_dir: Optional[str] = None,
         collection_name: str = "calibre_annotations",
-        embedding_model: Optional[str] = None
+        embedding_model: Optional[str] = None,
+        library_path: Optional[str] = None
     ):
         """
         Initialize the annotations indexer.
@@ -99,6 +100,7 @@ class AnnotationsIndexer:
             annotations_dir: Calibre annotations directory
             collection_name: Name of ChromaDB collection
             embedding_model: Embedding model name (default: from config or all-mpnet-base-v2)
+            library_path: Path to Calibre library (needed for hash mapping)
         """
         if not CHROMADB_AVAILABLE:
             raise ImportError(
@@ -111,6 +113,7 @@ class AnnotationsIndexer:
 
         self.annotations_dir = annotations_dir or str(get_annotations_dir())
         self.collection_name = collection_name
+        self.library_path = library_path
 
         # Determine embedding model
         if embedding_model is None:
@@ -145,6 +148,81 @@ class AnnotationsIndexer:
                 "embedding_model": self.embedding_model
             }
         )
+
+    def _create_hash_to_book_mapping(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Create mapping from annotation hash to book metadata.
+
+        This function:
+        1. Reads all books from Calibre's metadata.db
+        2. Constructs full paths for each book file
+        3. Computes annotation hashes
+        4. Returns mapping: hash → {title, author, path, format}
+
+        Returns:
+            Dictionary mapping annotation hash to book metadata
+        """
+        if not self.library_path:
+            logger.warning("No library_path provided, cannot create hash mapping")
+            return {}
+
+        import sqlite3
+        from .annotations import compute_book_hash
+
+        db_path = Path(self.library_path) / "metadata.db"
+        if not db_path.exists():
+            logger.warning(f"metadata.db not found at {db_path}")
+            return {}
+
+        hash_mapping = {}
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+
+            # Query to get all books with their paths and metadata
+            query = """
+            SELECT
+                books.id,
+                books.title,
+                books.path,
+                data.name as filename,
+                data.format,
+                (SELECT name FROM authors
+                 JOIN books_authors_link ON authors.id = books_authors_link.author
+                 WHERE books_authors_link.book = books.id
+                 LIMIT 1) as author
+            FROM books
+            JOIN data ON books.id = data.book
+            WHERE data.format IN ('EPUB', 'PDF', 'MOBI', 'AZW3')
+            ORDER BY books.id
+            """
+
+            cursor = conn.execute(query)
+
+            for row in cursor:
+                # Construct full path: library_path / book_path / filename.format
+                book_path = Path(self.library_path) / row['path'] / f"{row['filename']}.{row['format']}"
+
+                # Compute annotation hash
+                book_hash = compute_book_hash(str(book_path))
+
+                # Store metadata
+                hash_mapping[book_hash] = {
+                    'book_id': row['id'],
+                    'title': row['title'],
+                    'author': row['author'] or 'Unknown',
+                    'path': str(book_path),
+                    'format': row['format']
+                }
+
+            conn.close()
+            logger.info(f"Created hash mapping for {len(hash_mapping)} books")
+
+        except Exception as e:
+            logger.error(f"Failed to create hash mapping: {e}")
+
+        return hash_mapping
 
     def _create_annotation_id(self, book_hash: str, index: int) -> str:
         """Create unique ID for annotation."""
@@ -181,7 +259,10 @@ class AnnotationsIndexer:
         self,
         annotation: Dict[str, Any],
         book_hash: str,
-        book_path: str
+        book_path: str,
+        book_title: Optional[str] = None,
+        book_author: Optional[str] = None,
+        book_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Prepare metadata for annotation.
@@ -194,6 +275,16 @@ class AnnotationsIndexer:
             'type': annotation.get('type', 'unknown'),
             'source': annotation.get('source', 'unknown'),
         }
+
+        # Add book metadata if available
+        if book_title:
+            metadata['book_title'] = str(book_title)
+
+        if book_author:
+            metadata['book_author'] = str(book_author)
+
+        if book_id is not None:
+            metadata['book_id'] = int(book_id)
 
         # Add timestamp if available
         timestamp = annotation.get('timestamp', '')
@@ -311,7 +402,8 @@ class AnnotationsIndexer:
             'total_books': 0,
             'total_annotations': 0,
             'skipped_books': 0,
-            'errors': 0
+            'errors': 0,
+            'books_without_metadata': 0
         }
 
         # Get all annotated books
@@ -323,12 +415,16 @@ class AnnotationsIndexer:
 
         stats['total_books'] = len(annotated_books)
 
-        # For each book, we need to find the actual book path
-        # Since we only have the hash, we need to scan the library
-        # This is a limitation - ideally we'd have a mapping
+        # Create hash-to-book mapping from Calibre library
+        logger.info("Creating hash-to-book mapping from Calibre library...")
+        hash_mapping = self._create_hash_to_book_mapping()
 
-        # For now, we'll use a workaround:
-        # Read annotations directly and use hash as identifier
+        if hash_mapping:
+            logger.info(f"Mapped {len(hash_mapping)} books from library")
+        else:
+            logger.warning("No hash mapping available - will use placeholder paths")
+
+        # Index annotations for each book
         for book_info in annotated_books:
             book_hash = book_info['hash']
 
@@ -343,7 +439,20 @@ class AnnotationsIndexer:
                         stats['skipped_books'] += 1
                         continue
 
-                # Read annotations file directly
+                # Get book metadata from hash mapping
+                book_meta = hash_mapping.get(book_hash, {})
+
+                if not book_meta:
+                    # No metadata found - use placeholder
+                    book_meta = {
+                        'title': f'Unknown (hash: {book_hash[:12]}...)',
+                        'author': 'Unknown',
+                        'path': f'hash:{book_hash}',
+                        'book_id': None
+                    }
+                    stats['books_without_metadata'] += 1
+
+                # Read annotations file
                 anno_file = Path(self.annotations_dir) / f"{book_hash}.json"
                 if not anno_file.exists():
                     continue
@@ -374,7 +483,10 @@ class AnnotationsIndexer:
                     metadata = self._prepare_annotation_metadata(
                         annotation,
                         book_hash,
-                        f"hash:{book_hash}"  # Placeholder path
+                        book_meta.get('path', f'hash:{book_hash}'),
+                        book_title=book_meta.get('title'),
+                        book_author=book_meta.get('author'),
+                        book_id=book_meta.get('book_id')
                     )
 
                     ids.append(anno_id)
@@ -389,7 +501,10 @@ class AnnotationsIndexer:
                         metadatas=metadatas
                     )
                     stats['total_annotations'] += len(ids)
-                    logger.info(f"Indexed {len(ids)} annotations from {book_hash}")
+
+                    # Log with book title if available
+                    book_title = book_meta.get('title', book_hash[:12])
+                    logger.info(f"Indexed {len(ids)} annotations from '{book_title}'")
 
             except Exception as e:
                 logger.error(f"Error indexing book {book_hash}: {e}")
@@ -580,9 +695,19 @@ def main():
             print("(Unlimited results per book)\n")
 
         for i, result in enumerate(results, 1):
+            metadata = result['metadata']
             print(f"{i}. {result['text'][:200]}...")
-            print(f"   Book: {result['metadata'].get('book_path', 'N/A')}")
-            print(f"   Type: {result['metadata'].get('type')}")
+
+            # Show book title and author if available
+            book_title = metadata.get('book_title', 'Unknown Title')
+            book_author = metadata.get('book_author', 'Unknown Author')
+            print(f"   Book: {book_title} by {book_author}")
+
+            # Show annotation type and page if available
+            anno_type = metadata.get('type', 'unknown')
+            page_info = f" (page {metadata['page']})" if 'page' in metadata else ""
+            print(f"   Type: {anno_type}{page_info}")
+
             if result['distance'] is not None:
                 print(f"   Distance: {result['distance']:.4f}")
             print()

@@ -328,6 +328,8 @@ class archillesRAG:
                         metadata['calibre_id'] = book_data['calibre_id']
                     if book_data.get('tags'):
                         metadata['tags'] = book_data['tags']
+                    if book_data.get('comments'):
+                        metadata['comments'] = book_data['comments']
                     if book_data.get('custom_fields'):
                         metadata['custom_fields'] = book_data['custom_fields']
 
