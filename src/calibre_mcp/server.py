@@ -91,7 +91,8 @@ class CalibreMCPServer:
                 from .annotations_indexer import AnnotationsIndexer
                 self.indexer = AnnotationsIndexer(
                     chroma_persist_dir=chroma_persist_dir,
-                    annotations_dir=annotations_dir
+                    annotations_dir=annotations_dir,
+                    library_path=library_path
                 )
                 logger.info("Semantic search enabled")
             except ImportError:
