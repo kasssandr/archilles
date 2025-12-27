@@ -153,16 +153,18 @@ class AnnotationsIndexer:
         """
         Create mapping from annotation hash to book metadata.
 
-        This function:
-        1. Reads all books from Calibre's metadata.db
-        2. Constructs full paths for each book file
-        3. Computes annotation hashes with multi-path fallback
-        4. Returns mapping: hash → {title, author, path, format}
+        Uses comprehensive path variant testing to handle library migrations.
 
-        Multi-path strategy handles library migrations:
-        - Tries current path
-        - Tries common drive letters (C:, D:, E:, F:)
-        - Tries common library names
+        Strategy:
+        1. Get all books from Calibre metadata.db (including stable book IDs)
+        2. For each book, test MANY path variants (different drives, locations)
+        3. Use the book ID in the path as a stable identifier
+        4. Test 100+ path combinations per book to maximize match probability
+
+        This handles cases where:
+        - Library was moved between drives (E: → D:)
+        - Library was moved between folders
+        - Drive letters changed
 
         Returns:
             Dictionary mapping annotation hash to book metadata
@@ -181,25 +183,54 @@ class AnnotationsIndexer:
 
         hash_mapping = {}
 
-        # Common library path variants to try
-        library_variants = [str(self.library_path)]
+        # Generate comprehensive path variants
+        path_bases = []
 
-        # Add common drive letter variants (Windows)
-        if self.library_path.startswith(('C:', 'D:', 'E:', 'F:')):
-            base_path = str(self.library_path)[2:]  # Remove drive letter
-            for drive in ['C:', 'D:', 'E:', 'F:']:
-                variant = drive + base_path
-                if variant not in library_variants:
-                    library_variants.append(variant)
+        # 1. Current library path
+        path_bases.append(str(self.library_path))
 
-        # Add common library name variants
+        # 2. All drive letters (A: through Z:) - comprehensive search
+        current_path_without_drive = str(self.library_path)[2:] if len(str(self.library_path)) > 2 else ""
+
+        if current_path_without_drive:
+            for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
+                path_bases.append(f"{letter}:{current_path_without_drive}")
+
+        # 3. Common library locations with all drives
+        library_name = Path(self.library_path).name  # e.g., "Calibre-Bibliothek"
+        common_parent_paths = [
+            "",  # Root
+            "\\Users\\tomra",
+            "\\Users\\tomra\\Documents",
+            "\\Users\\tomra\\OneDrive",
+            "\\Users\\tomra\\Desktop",
+            "\\",
+            "\\Books",
+            "\\eBooks",
+            "\\Documents"
+        ]
+
         library_name_variants = [
-            'Calibre Library',
+            library_name,  # Current name
             'Calibre-Bibliothek',
+            'Calibre Library',
             'Calibre',
             'calibre',
-            'Books'
+            'Books',
+            'eBooks'
         ]
+
+        # Combine drives + parents + library names
+        for letter in 'CDEFGH':  # Most common drives for testing
+            for parent in common_parent_paths[:4]:  # Limit combinations
+                for lib_name in library_name_variants[:3]:
+                    path_bases.append(f"{letter}:{parent}\\{lib_name}")
+
+        # Remove duplicates while preserving order
+        seen = set()
+        path_bases = [x for x in path_bases if not (x in seen or seen.add(x))]
+
+        logger.info(f"Testing {len(path_bases)} path base variants for hash matching...")
 
         try:
             conn = sqlite3.connect(str(db_path))
@@ -226,8 +257,10 @@ class AnnotationsIndexer:
             cursor = conn.execute(query)
             rows = cursor.fetchall()
 
+            books_matched = 0
+
             for row in rows:
-                relative_path = row['path']
+                relative_path = row['path']  # e.g., "Author\Title (123)"
                 filename = f"{row['filename']}.{row['format']}"
 
                 book_metadata = {
@@ -237,29 +270,42 @@ class AnnotationsIndexer:
                     'format': row['format']
                 }
 
-                # Try current path first
                 current_path = Path(self.library_path) / relative_path / filename
-                current_hash = compute_book_hash(str(current_path))
+                book_matched = False
 
-                if current_hash not in hash_mapping:
-                    hash_mapping[current_hash] = {
-                        **book_metadata,
-                        'path': str(current_path)
-                    }
+                # Test all path variants for this book
+                for base_path in path_bases:
+                    try:
+                        # Construct full path with this base
+                        test_path_str = f"{base_path}\\{relative_path}\\{filename}"
 
-                # Try path variants for robustness
-                for lib_variant in library_variants[:5]:  # Limit to avoid too many variants
-                    variant_path = Path(lib_variant) / relative_path / filename
-                    variant_hash = compute_book_hash(str(variant_path))
+                        # Test multiple slash variants (Windows path normalization)
+                        path_variants = [
+                            test_path_str,  # Original with backslashes
+                            test_path_str.replace('\\', '/'),  # Forward slashes
+                            str(Path(test_path_str)),  # Platform normalized
+                        ]
 
-                    if variant_hash not in hash_mapping:
-                        hash_mapping[variant_hash] = {
-                            **book_metadata,
-                            'path': str(current_path)  # Use current path, not variant
-                        }
+                        for path_variant in set(path_variants):  # Remove duplicates
+                            test_hash = compute_book_hash(path_variant)
+
+                            if test_hash not in hash_mapping:
+                                hash_mapping[test_hash] = {
+                                    **book_metadata,
+                                    'path': str(current_path),  # Store current path
+                                    'original_path_base': base_path  # Track which base worked
+                                }
+                                book_matched = True
+                    except Exception as e:
+                        # Skip invalid path combinations
+                        continue
+
+                if book_matched:
+                    books_matched += 1
 
             conn.close()
-            logger.info(f"Created hash mapping for {len(hash_mapping)} hash variants ({len(rows)} books)")
+            logger.info(f"Created hash mapping: {len(hash_mapping)} hash variants from {len(rows)} books")
+            logger.info(f"Books with at least one hash variant: {books_matched}/{len(rows)}")
 
         except Exception as e:
             logger.error(f"Failed to create hash mapping: {e}")
@@ -591,6 +637,28 @@ class AnnotationsIndexer:
                     conn.close()
             except Exception as e:
                 logger.debug(f"Could not load Calibre books for fuzzy matching: {e}")
+
+        # Report hash matching effectiveness
+        if hash_mapping:
+            # Count how many actual annotation files we have
+            annots_dir_path = Path(self.annotations_dir)
+            actual_anno_hashes = {f.stem for f in annots_dir_path.glob("*.json")}
+            matched_hashes = actual_anno_hashes & set(hash_mapping.keys())
+
+            logger.info(f"Annotation files: {len(actual_anno_hashes)}")
+            logger.info(f"Hash mapping size: {len(hash_mapping)}")
+            logger.info(f"Direct hash matches: {len(matched_hashes)}/{len(actual_anno_hashes)}")
+
+            if len(matched_hashes) > 0:
+                # Show sample matches with their path bases
+                sample_matches = list(matched_hashes)[:3]
+                logger.info("Sample matched annotation hashes:")
+                for anno_hash in sample_matches:
+                    book_info = hash_mapping[anno_hash]
+                    original_base = book_info.get('original_path_base', 'unknown')
+                    logger.info(f"  {anno_hash[:16]}... → '{book_info['title']}' (base: {original_base})")
+            else:
+                logger.warning("No direct hash matches found - will use fuzzy matching for all books")
 
         # Index annotations for each book
         for book_info in annotated_books:
