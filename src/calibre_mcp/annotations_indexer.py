@@ -266,6 +266,51 @@ class AnnotationsIndexer:
 
         return hash_mapping
 
+    def _fuzzy_match_book(
+        self,
+        annotation_hash: str,
+        annotation_file: Path,
+        calibre_books: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fallback: Try to match annotation to book using fuzzy matching.
+
+        When hash-matching fails (library path changed), try to match based on:
+        1. Annotation file metadata (if readable)
+        2. First annotation text content matching
+        3. Filename similarity
+
+        Args:
+            annotation_hash: Hash of annotation file
+            annotation_file: Path to annotation JSON file
+            calibre_books: List of all Calibre books with metadata
+
+        Returns:
+            Best matching book metadata or None
+        """
+        try:
+            # Read annotation file to get any clues
+            with open(annotation_file, 'r', encoding='utf-8') as f:
+                annotations = json.load(f)
+
+            if not isinstance(annotations, list) or not annotations:
+                return None
+
+            # Get first annotation text (might help identify book)
+            first_annotation_text = annotations[0].get('highlighted_text', '')[:100]
+
+            # Try to find best match based on annotation content
+            # This is a simple heuristic - could be improved with actual content search
+
+            # For now, return None to avoid false matches
+            # A proper implementation would search book content for the annotation text
+            logger.debug(f"Fuzzy matching not yet implemented for {annotation_hash[:12]}")
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not fuzzy match {annotation_hash[:12]}: {e}")
+            return None
+
     def _create_annotation_id(self, book_hash: str, index: int) -> str:
         """Create unique ID for annotation."""
         return f"{book_hash}_anno_{index}"
@@ -462,9 +507,35 @@ class AnnotationsIndexer:
         hash_mapping = self._create_hash_to_book_mapping()
 
         if hash_mapping:
-            logger.info(f"Mapped {len(hash_mapping)} books from library")
+            logger.info(f"Mapped {len(hash_mapping)} hash variants from library")
         else:
             logger.warning("No hash mapping available - will use placeholder paths")
+
+        # Get all Calibre books for fuzzy matching fallback
+        calibre_books = []
+        if self.library_path:
+            try:
+                import sqlite3
+                db_path = Path(self.library_path) / "metadata.db"
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    conn.row_factory = sqlite3.Row
+                    query = """
+                    SELECT books.id, books.title, books.path,
+                           data.name as filename, data.format,
+                           (SELECT name FROM authors
+                            JOIN books_authors_link ON authors.id = books_authors_link.author
+                            WHERE books_authors_link.book = books.id
+                            LIMIT 1) as author
+                    FROM books
+                    JOIN data ON books.id = data.book
+                    WHERE data.format IN ('EPUB', 'PDF', 'MOBI', 'AZW3')
+                    """
+                    cursor = conn.execute(query)
+                    calibre_books = [dict(row) for row in cursor.fetchall()]
+                    conn.close()
+            except Exception as e:
+                logger.debug(f"Could not load Calibre books for fuzzy matching: {e}")
 
         # Index annotations for each book
         for book_info in annotated_books:
@@ -483,6 +554,13 @@ class AnnotationsIndexer:
 
                 # Get book metadata from hash mapping
                 book_meta = hash_mapping.get(book_hash, {})
+
+                # If hash didn't match, try fuzzy matching
+                if not book_meta and calibre_books:
+                    anno_file = Path(self.annotations_dir) / f"{book_hash}.json"
+                    book_meta = self._fuzzy_match_book(book_hash, anno_file, calibre_books)
+                    if book_meta:
+                        logger.info(f"Fuzzy matched annotation {book_hash[:12]} to '{book_meta.get('title', 'Unknown')}'")
 
                 if not book_meta:
                     # No metadata found - use placeholder
