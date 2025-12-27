@@ -156,8 +156,13 @@ class AnnotationsIndexer:
         This function:
         1. Reads all books from Calibre's metadata.db
         2. Constructs full paths for each book file
-        3. Computes annotation hashes
+        3. Computes annotation hashes with multi-path fallback
         4. Returns mapping: hash → {title, author, path, format}
+
+        Multi-path strategy handles library migrations:
+        - Tries current path
+        - Tries common drive letters (C:, D:, E:, F:)
+        - Tries common library names
 
         Returns:
             Dictionary mapping annotation hash to book metadata
@@ -175,6 +180,26 @@ class AnnotationsIndexer:
             return {}
 
         hash_mapping = {}
+
+        # Common library path variants to try
+        library_variants = [str(self.library_path)]
+
+        # Add common drive letter variants (Windows)
+        if self.library_path.startswith(('C:', 'D:', 'E:', 'F:')):
+            base_path = str(self.library_path)[2:]  # Remove drive letter
+            for drive in ['C:', 'D:', 'E:', 'F:']:
+                variant = drive + base_path
+                if variant not in library_variants:
+                    library_variants.append(variant)
+
+        # Add common library name variants
+        library_name_variants = [
+            'Calibre Library',
+            'Calibre-Bibliothek',
+            'Calibre',
+            'calibre',
+            'Books'
+        ]
 
         try:
             conn = sqlite3.connect(str(db_path))
@@ -199,25 +224,42 @@ class AnnotationsIndexer:
             """
 
             cursor = conn.execute(query)
+            rows = cursor.fetchall()
 
-            for row in cursor:
-                # Construct full path: library_path / book_path / filename.format
-                book_path = Path(self.library_path) / row['path'] / f"{row['filename']}.{row['format']}"
+            for row in rows:
+                relative_path = row['path']
+                filename = f"{row['filename']}.{row['format']}"
 
-                # Compute annotation hash
-                book_hash = compute_book_hash(str(book_path))
-
-                # Store metadata
-                hash_mapping[book_hash] = {
+                book_metadata = {
                     'book_id': row['id'],
                     'title': row['title'],
                     'author': row['author'] or 'Unknown',
-                    'path': str(book_path),
                     'format': row['format']
                 }
 
+                # Try current path first
+                current_path = Path(self.library_path) / relative_path / filename
+                current_hash = compute_book_hash(str(current_path))
+
+                if current_hash not in hash_mapping:
+                    hash_mapping[current_hash] = {
+                        **book_metadata,
+                        'path': str(current_path)
+                    }
+
+                # Try path variants for robustness
+                for lib_variant in library_variants[:5]:  # Limit to avoid too many variants
+                    variant_path = Path(lib_variant) / relative_path / filename
+                    variant_hash = compute_book_hash(str(variant_path))
+
+                    if variant_hash not in hash_mapping:
+                        hash_mapping[variant_hash] = {
+                            **book_metadata,
+                            'path': str(current_path)  # Use current path, not variant
+                        }
+
             conn.close()
-            logger.info(f"Created hash mapping for {len(hash_mapping)} books")
+            logger.info(f"Created hash mapping for {len(hash_mapping)} hash variants ({len(rows)} books)")
 
         except Exception as e:
             logger.error(f"Failed to create hash mapping: {e}")
