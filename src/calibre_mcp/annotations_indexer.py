@@ -276,9 +276,9 @@ class AnnotationsIndexer:
         Fallback: Try to match annotation to book using fuzzy matching.
 
         When hash-matching fails (library path changed), try to match based on:
-        1. Annotation file metadata (if readable)
-        2. First annotation text content matching
-        3. Filename similarity
+        1. Title/author similarity to annotation text
+        2. Filename keyword matching
+        3. Content-based matching
 
         Args:
             annotation_hash: Hash of annotation file
@@ -289,22 +289,77 @@ class AnnotationsIndexer:
             Best matching book metadata or None
         """
         try:
-            # Read annotation file to get any clues
+            # Read annotation file to get clues
             with open(annotation_file, 'r', encoding='utf-8') as f:
                 annotations = json.load(f)
 
             if not isinstance(annotations, list) or not annotations:
                 return None
 
-            # Get first annotation text (might help identify book)
-            first_annotation_text = annotations[0].get('highlighted_text', '')[:100]
+            # Strategy: Use difflib for fuzzy string matching
+            from difflib import SequenceMatcher
 
-            # Try to find best match based on annotation content
-            # This is a simple heuristic - could be improved with actual content search
+            best_match = None
+            best_score = 0.0
+            min_score = 0.6  # Minimum similarity threshold
 
-            # For now, return None to avoid false matches
-            # A proper implementation would search book content for the annotation text
-            logger.debug(f"Fuzzy matching not yet implemented for {annotation_hash[:12]}")
+            # Collect text snippets from annotations for matching
+            annotation_texts = []
+            for anno in annotations[:5]:  # Use first 5 annotations
+                text = anno.get('highlighted_text', '')
+                if text:
+                    annotation_texts.append(text.lower())
+
+            combined_text = ' '.join(annotation_texts)[:500]
+
+            # Try matching against each Calibre book
+            for book in calibre_books:
+                score = 0.0
+
+                # 1. Match based on title similarity
+                if book.get('title'):
+                    title = book['title'].lower()
+                    # Check if title appears in annotation text
+                    if title in combined_text:
+                        score += 0.8
+                    else:
+                        # Fuzzy match title
+                        title_sim = SequenceMatcher(None, title, combined_text[:len(title)*3]).ratio()
+                        score += title_sim * 0.3
+
+                # 2. Match based on author similarity
+                if book.get('author'):
+                    author = book['author'].lower()
+                    if author in combined_text:
+                        score += 0.5
+                    else:
+                        author_sim = SequenceMatcher(None, author, combined_text[:len(author)*3]).ratio()
+                        score += author_sim * 0.2
+
+                # 3. Match based on filename similarity
+                if book.get('filename'):
+                    filename = book['filename'].lower()
+                    filename_parts = filename.split()
+                    for part in filename_parts:
+                        if len(part) > 3 and part in combined_text:
+                            score += 0.1
+
+                # Update best match if this score is higher
+                if score > best_score and score >= min_score:
+                    best_score = score
+                    best_match = {
+                        'book_id': book['id'],
+                        'title': book['title'],
+                        'author': book.get('author', 'Unknown'),
+                        'path': str(Path(self.library_path) / book['path'] / f"{book['filename']}.{book['format']}"),
+                        'format': book['format'],
+                        'match_score': score
+                    }
+
+            if best_match:
+                logger.info(f"Fuzzy matched {annotation_hash[:12]} to '{best_match['title']}' (score: {best_score:.2f})")
+                return best_match
+
             return None
 
         except Exception as e:
