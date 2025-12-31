@@ -19,6 +19,9 @@ Usage:
 
     # Continue from where you left off (skip already indexed)
     python scripts/batch_index.py --tag "Leit-Literatur" --skip-existing
+
+    # Recover from corrupted database (e.g., after CTRL+C during indexing)
+    python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
 """
 
 import sys
@@ -34,7 +37,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.rag_demo import archillesRAG
+from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
 
 
 def get_calibre_library_path() -> Path:
@@ -394,6 +397,9 @@ Examples:
 
   # Index all books by an author
   python scripts/batch_index.py --author "Arendt"
+
+  # Recover from corrupted database (after CTRL+C)
+  python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
         """
     )
 
@@ -413,6 +419,8 @@ Examples:
                         help='Write detailed log to JSON file')
     parser.add_argument('--db-path', default=None,
                         help='RAG database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
+    parser.add_argument('--reset-db', action='store_true',
+                        help='Reset corrupted database (WARNING: deletes all indexed data)')
 
     args = parser.parse_args()
 
@@ -453,7 +461,16 @@ Examples:
                 self.collection = type('obj', (object,), {'count': lambda: 0})()
         rag = DummyRAG()
     else:
-        rag = archillesRAG(db_path=args.db_path)
+        try:
+            rag = archillesRAG(db_path=args.db_path, reset_db=args.reset_db)
+        except ChromaDBCorruptionError as e:
+            # ChromaDB is corrupted - show helpful error message
+            print(f"\n{'='*60}")
+            print(f"❌ DATABASE CORRUPTION DETECTED")
+            print(f"{'='*60}\n")
+            print(str(e))
+            print(f"\n{'='*60}\n")
+            sys.exit(1)
 
     # Run batch indexing
     log_file = Path(args.log) if args.log else None

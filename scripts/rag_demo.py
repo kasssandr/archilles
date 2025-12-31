@@ -54,6 +54,11 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
+class ChromaDBCorruptionError(Exception):
+    """Raised when ChromaDB index is corrupted and needs to be reset."""
+    pass
+
+
 class archillesRAG:
     """
     Simple RAG system for academic books.
@@ -68,7 +73,8 @@ class archillesRAG:
     def __init__(
         self,
         db_path: str = "./archilles_rag_db",
-        model_name: str = "BAAI/bge-m3"
+        model_name: str = "BAAI/bge-m3",
+        reset_db: bool = False
     ):
         """
         Initialize RAG system.
@@ -76,6 +82,7 @@ class archillesRAG:
         Args:
             db_path: Path to ChromaDB storage
             model_name: Sentence transformer model (default: BGE-M3)
+            reset_db: If True, delete and recreate the database (use for recovery from corruption)
         """
         print(f"?? Initializing ARCHILLES RAG...")
         print(f"  Database: {db_path}")
@@ -92,17 +99,54 @@ class archillesRAG:
         self.embedding_model = SentenceTransformer(model_name)
         print(f"  ? Model loaded: {model_name}")
 
-        # Initialize ChromaDB
-        self.chroma_client = chromadb.PersistentClient(path=db_path)
+        # Handle database reset if requested
+        if reset_db:
+            print(f"  ? Resetting database (deleting corrupted data)...")
+            import shutil
+            db_path_obj = Path(db_path)
+            if db_path_obj.exists():
+                shutil.rmtree(db_path_obj)
+                print(f"    ? Deleted {db_path}")
 
-        # Get or create collection
-        self.collection = self.chroma_client.get_or_create_collection(
-            name="archilles_books",
-            metadata={"hnsw:space": "cosine"}
-        )
+        # Initialize ChromaDB with error handling for corruption
+        try:
+            self.chroma_client = chromadb.PersistentClient(path=db_path)
 
-        print(f"  ? ChromaDB ready")
-        print(f"  Current index: {self.collection.count()} chunks")
+            # Get or create collection
+            self.collection = self.chroma_client.get_or_create_collection(
+                name="archilles_books",
+                metadata={"hnsw:space": "cosine"}
+            )
+
+            print(f"  ? ChromaDB ready")
+
+            # Try to count chunks - this will fail if database is corrupted
+            try:
+                chunk_count = self.collection.count()
+                print(f"  Current index: {chunk_count} chunks")
+            except Exception as count_error:
+                # ChromaDB corruption detected
+                raise ChromaDBCorruptionError(
+                    f"ChromaDB index is corrupted (likely from interrupted indexing).\n"
+                    f"Error: {count_error}\n\n"
+                    f"To recover, run with --reset-db flag:\n"
+                    f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
+                    f"WARNING: This will delete the entire index. You'll need to re-index all books."
+                )
+
+        except Exception as e:
+            # Check if this is a known corruption error
+            if "hnsw" in str(e).lower() or "compactor" in str(e).lower():
+                raise ChromaDBCorruptionError(
+                    f"ChromaDB index is corrupted (likely from interrupted indexing).\n"
+                    f"Error: {e}\n\n"
+                    f"To recover, run with --reset-db flag:\n"
+                    f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
+                    f"WARNING: This will delete the entire index. You'll need to re-index all books."
+                )
+            else:
+                # Re-raise other errors
+                raise
 
         # Initialize BM25 index for hybrid search
         self.db_path = Path(db_path)
@@ -110,7 +154,12 @@ class archillesRAG:
         self.bm25_docs = None
         self.bm25_ids = None
         self.bm25_metadatas = None  # Cache metadata to avoid SQLite variable limit
-        self._load_bm25_index()
+
+        # Load BM25 index (skip if database was just reset)
+        if not reset_db:
+            self._load_bm25_index()
+        else:
+            print(f"  ? BM25 index will be built on first indexing")
 
         if BM25_AVAILABLE and self.bm25_index:
             print(f"  ? BM25 keyword search ready\n")
@@ -1665,6 +1714,9 @@ Examples:
   # Index Josephus Antiquitates
   python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Flavius Josephus/Judische Altertumer_...pdf"
 
+  # Recover from corrupted database (after CTRL+C during indexing)
+  python scripts/rag_demo.py index "book.pdf" --reset-db
+
   # Query (hybrid mode by default - combines semantic + keyword)
   python scripts/rag_demo.py query "evangelista et a presbyteris"
 
@@ -1702,6 +1754,7 @@ Examples:
     index_parser.add_argument('--book-id', help='Optional book ID (default: filename)')
     index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     index_parser.add_argument('--force', action='store_true', help='Force reindex (delete existing chunks first)')
+    index_parser.add_argument('--reset-db', action='store_true', help='Reset corrupted database (WARNING: deletes all indexed data)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1750,7 +1803,8 @@ Examples:
 
     try:
         # Initialize RAG
-        rag = archillesRAG(db_path=args.db_path)
+        reset_db = getattr(args, 'reset_db', False)
+        rag = archillesRAG(db_path=args.db_path, reset_db=reset_db)
 
         if args.command == 'index':
             # Index a book
@@ -1782,6 +1836,14 @@ Examples:
             print(f"  Total chunks: {rag.collection.count()}")
             print(f"  Database path: {args.db_path}\n")
 
+    except ChromaDBCorruptionError as e:
+        # ChromaDB is corrupted - show helpful error message
+        print(f"\n{'='*60}")
+        print(f"❌ DATABASE CORRUPTION DETECTED")
+        print(f"{'='*60}\n")
+        print(str(e))
+        print(f"\n{'='*60}\n")
+        sys.exit(1)
     except Exception as e:
         print(f"? Error: {e}")
         import traceback
