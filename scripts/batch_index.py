@@ -22,6 +22,9 @@ Usage:
 
     # Recover from corrupted database (e.g., after CTRL+C during indexing)
     python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
+
+    # Re-index books that were indexed before a certain date (with improved code)
+    python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
 """
 
 import sys
@@ -221,22 +224,58 @@ def create_book_id(book: Dict[str, Any]) -> str:
     return f"{last_name}_{short_title}_{book['id']}"
 
 
-def get_indexed_book_ids(rag: archillesRAG) -> set:
+def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> set:
     """
     Get set of already indexed book IDs from RAG database.
 
+    Args:
+        rag: Initialized archillesRAG instance
+        reindex_before: If provided, exclude books indexed before this date
+                       (so they will be re-indexed)
+
     Returns:
         Set of book_id strings that are already in the index
+        (excluding books that should be re-indexed)
     """
     try:
-        # Get all metadata from collection
-        all_data = rag.collection.get()
+        # Get all metadata from collection in batches
+        all_metadatas = []
+        batch_size = 500
+        offset = 0
+
+        while True:
+            batch = rag.collection.get(limit=batch_size, offset=offset)
+            if not batch['ids']:
+                break
+            all_metadatas.extend(batch['metadatas'])
+            offset += batch_size
+            if len(batch['ids']) < batch_size:
+                break
 
         # Extract unique book_ids
         book_ids = set()
-        for metadata in all_data.get('metadatas', []):
+        for metadata in all_metadatas:
             if metadata and 'book_id' in metadata:
-                book_ids.add(metadata['book_id'])
+                book_id = metadata['book_id']
+
+                # Check if this book should be re-indexed based on date
+                if reindex_before:
+                    indexed_at_str = metadata.get('indexed_at')
+                    if indexed_at_str:
+                        try:
+                            indexed_at = datetime.fromisoformat(indexed_at_str)
+                            # If book was indexed before the cutoff date, don't add to set
+                            # (so it will be re-indexed)
+                            if indexed_at < reindex_before:
+                                continue
+                        except (ValueError, AttributeError):
+                            # If we can't parse the date, treat as old (re-index)
+                            continue
+                    else:
+                        # No timestamp = old book (re-index)
+                        continue
+
+                book_ids.add(book_id)
 
         return book_ids
     except Exception as e:
@@ -249,6 +288,7 @@ def batch_index(
     rag: archillesRAG,
     dry_run: bool = False,
     skip_existing: bool = False,
+    reindex_before: datetime = None,
     log_file: Optional[Path] = None
 ) -> Dict[str, Any]:
     """
@@ -259,6 +299,7 @@ def batch_index(
         rag: Initialized archillesRAG instance
         dry_run: If True, only show what would be indexed
         skip_existing: If True, skip books that are already indexed
+        reindex_before: If provided, re-index books indexed before this date
         log_file: Optional path to write detailed log
 
     Returns:
@@ -275,7 +316,8 @@ def batch_index(
     }
 
     # Get already indexed books if skip_existing is enabled
-    existing_ids = get_indexed_book_ids(rag) if skip_existing else set()
+    # If reindex_before is set, exclude old books from the existing set
+    existing_ids = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
 
     print(f"\n{'='*60}")
     print(f"📚 ARCHILLES BATCH INDEXER")
@@ -283,6 +325,10 @@ def batch_index(
     print(f"  Books to process: {len(books)}")
     if skip_existing:
         print(f"  Already indexed: {len(existing_ids)}")
+    if reindex_before:
+        reindex_count = len(books) - len(existing_ids)
+        print(f"  📅 Re-indexing books indexed before: {reindex_before.strftime('%Y-%m-%d')}")
+        print(f"     → {reindex_count} books will be re-indexed")
     print(f"  Mode: {'DRY RUN' if dry_run else 'INDEXING'}")
     print(f"{'='*60}\n")
 
@@ -319,10 +365,15 @@ def batch_index(
         # Actually index the book
         try:
             start_time = time.time()
-            result = rag.index_book(file_path, book_id)
+            # Use force=True when re-indexing old books
+            force_reindex = reindex_before is not None
+            result = rag.index_book(file_path, book_id, force=force_reindex)
             elapsed = time.time() - start_time
 
-            print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
+            if force_reindex and result.get('status') != 'already_indexed':
+                print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
+            else:
+                print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
 
             stats['indexed'] += 1
             stats['books_processed'].append({
@@ -400,6 +451,9 @@ Examples:
 
   # Recover from corrupted database (after CTRL+C)
   python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
+
+  # Re-index old books (e.g., indexed before Dec 1st with old code)
+  python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
         """
     )
 
@@ -413,6 +467,9 @@ Examples:
                         help='Show what would be indexed without actually indexing')
     parser.add_argument('--skip-existing', action='store_true',
                         help='Skip books that are already in the index')
+    parser.add_argument('--reindex-before', metavar='DATE',
+                        help='Re-index books indexed before this date (YYYY-MM-DD). '
+                             'Useful for re-indexing old books with improved code.')
     parser.add_argument('--limit', type=int,
                         help='Limit number of books to index (for testing)')
     parser.add_argument('--log', metavar='FILE',
@@ -423,6 +480,16 @@ Examples:
                         help='Reset corrupted database (WARNING: deletes all indexed data)')
 
     args = parser.parse_args()
+
+    # Parse reindex-before date if specified
+    reindex_before = None
+    if args.reindex_before:
+        try:
+            reindex_before = datetime.strptime(args.reindex_before, '%Y-%m-%d')
+        except ValueError:
+            print(f"❌ Invalid date format: {args.reindex_before}")
+            print("   Use YYYY-MM-DD format (e.g., 2024-12-01)")
+            sys.exit(1)
 
     # Get library path
     library_path = get_calibre_library_path()
@@ -479,6 +546,7 @@ Examples:
         rag=rag,
         dry_run=args.dry_run,
         skip_existing=args.skip_existing,
+        reindex_before=reindex_before,
         log_file=log_file
     )
 

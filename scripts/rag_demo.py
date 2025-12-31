@@ -36,6 +36,7 @@ from typing import List, Dict, Any, Literal
 import time
 import pickle
 import re
+from datetime import datetime
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -478,6 +479,7 @@ class archillesRAG:
                 'book_title': extracted.metadata.file_path.stem,
                 'chunk_index': i,
                 'format': extracted.metadata.detected_format,
+                'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
             }
 
             # Add book metadata (author, title, year, ISBN, publisher, etc.)
@@ -552,6 +554,7 @@ class archillesRAG:
                 'chunk_index': -1,  # Special index for comments
                 'chunk_type': 'calibre_comment',
                 'format': extracted.metadata.detected_format,
+                'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
             }
 
             # Copy book metadata to comment chunk
