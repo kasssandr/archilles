@@ -83,6 +83,16 @@ try:
             if book_file:
                 print(f"    Book file: {book_file}")
 
+                # DEBUG: Show what get_book_by_path will search for
+                try:
+                    rel_path = book_file.relative_to(library_path)
+                    book_folder_search = str(Path(rel_path.parts[0]) / rel_path.parts[1])
+                    print(f"    Will search for: '{book_folder_search}'")
+                    print(f"    DB has path: '{path}'")
+                    print(f"    Match: {book_folder_search == path}")
+                except Exception as e:
+                    print(f"    Error constructing search path: {e}")
+
                 # Try to find it using get_book_by_path
                 book_data = calibre.get_book_by_path(book_file)
 
