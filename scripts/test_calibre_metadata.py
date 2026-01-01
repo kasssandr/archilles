@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.rag_demo import archillesRAG
-from scripts.calibre_db import CalibreDB
+from src.calibre_db import CalibreDB
 import os
 
 # Get Calibre library path
