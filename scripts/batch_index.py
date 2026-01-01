@@ -393,7 +393,7 @@ def batch_index(
             start_time = time.time()
             # Use force=True when re-indexing old books
             force_reindex = reindex_before is not None
-            result = rag.index_book(file_path, book_id, force=force_reindex)
+            result = rag.index_book(file_path, book_id, force=force_reindex, phase=phase)
             elapsed = time.time() - start_time
 
             if force_reindex and result.get('status') != 'already_indexed':
@@ -523,6 +523,8 @@ Examples:
                         help='RAG database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     parser.add_argument('--reset-db', action='store_true',
                         help='Reset corrupted database (WARNING: deletes all indexed data)')
+    parser.add_argument('--phase1-only', action='store_true',
+                        help='Phase 1: Quick indexing of metadata, comments, and annotations only (5-10 min)')
 
     args = parser.parse_args()
 
@@ -584,6 +586,21 @@ Examples:
             print(f"\n{'='*60}\n")
             sys.exit(1)
 
+    # Initialize SafeIndexer for crash-safety
+    safe_indexer = None
+    if not args.dry_run:
+        safe_indexer = SafeIndexer(
+            db_path=Path(args.db_path),
+            backup_interval=10,  # Backup every 10 books
+            max_backups=5        # Keep 5 most recent backups
+        )
+
+        # Determine phase
+        phase = 'phase1' if args.phase1_only else 'phase2'
+
+        # Start indexing session
+        session_id = safe_indexer.start_session(phase)
+
     # Run batch indexing
     log_file = Path(args.log) if args.log else None
     stats = batch_index(
@@ -592,8 +609,15 @@ Examples:
         dry_run=args.dry_run,
         skip_existing=args.skip_existing,
         reindex_before=reindex_before,
-        log_file=log_file
+        log_file=log_file,
+        safe_indexer=safe_indexer,
+        phase=phase if safe_indexer else 'phase2'
     )
+
+    # End session (if not dry run)
+    if safe_indexer:
+        status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
+        safe_indexer.end_session(status)
 
     # Exit with error code if any failures
     if stats['failed'] > 0:
