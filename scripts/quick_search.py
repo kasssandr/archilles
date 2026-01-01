@@ -42,10 +42,10 @@ def main():
     total_chunks = rag.collection.count()
     print(f"✅ Database loaded: {total_chunks} chunks indexed\n")
 
-    # Test search
+    # Test search (using KEYWORD mode - most reliable)
     print(f"🔍 Searching for: '{query}'\n")
 
-    results = rag.query(query, top_k=5, mode='hybrid')
+    results = rag.query(query, top_k=5, mode='keyword')
 
     if not results:
         print("❌ No results found")
@@ -55,13 +55,18 @@ def main():
     print("="*70)
 
     for i, result in enumerate(results, 1):
-        print(f"\n[{i}] {result.get('book_title', 'Unknown')}")
-        if result.get('author'):
-            print(f"    Author: {result['author']}")
-        if result.get('tags'):
-            print(f"    Tags: {result['tags']}")
-        if result.get('chunk_type'):
-            print(f"    Type: {result['chunk_type']}")
+        # Extract metadata from nested dict
+        metadata = result.get('metadata', {})
+
+        print(f"\n[{i}] {metadata.get('book_title', 'Unknown')}")
+        if metadata.get('author'):
+            print(f"    Author: {metadata['author']}")
+        if metadata.get('tags'):
+            print(f"    Tags: {metadata['tags']}")
+        if metadata.get('year'):
+            print(f"    Year: {metadata['year']}")
+        if metadata.get('chunk_type'):
+            print(f"    Type: {metadata['chunk_type']}")
         print(f"    Score: {result.get('score', 0):.4f}")
 
         # Show snippet
