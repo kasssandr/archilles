@@ -64,19 +64,38 @@ try:
         print("="*70)
 
         for book_id, title, path, author, comments in books[:3]:
-            # Construct full path
-            book_path = library_path / path
-
-            # Try to find it using get_book_by_path
-            book_data = calibre.get_book_by_path(book_path)
+            # Construct book folder path
+            book_folder = library_path / path
 
             print(f"\n[{book_id}] {title}")
-            print(f"    Looking for path: {book_path}")
-            if book_data:
-                print(f"    ✅ FOUND via get_book_by_path!")
-                print(f"    Has comments: {'Yes' if book_data.get('comments') else 'No'}")
+            print(f"    Book folder: {book_folder}")
+
+            # Find actual book file (look for epub, pdf, etc.)
+            book_file = None
+            if book_folder.exists():
+                for ext in ['.epub', '.pdf', '.mobi', '.azw3']:
+                    # Try different possible filenames
+                    possible_files = list(book_folder.glob(f"*{ext}"))
+                    if possible_files:
+                        book_file = possible_files[0]
+                        break
+
+            if book_file:
+                print(f"    Book file: {book_file}")
+
+                # Try to find it using get_book_by_path
+                book_data = calibre.get_book_by_path(book_file)
+
+                if book_data:
+                    print(f"    ✅ FOUND via get_book_by_path!")
+                    print(f"    Has comments: {'Yes' if book_data.get('comments') else 'No'}")
+                    if book_data.get('comments'):
+                        comment_preview = book_data['comments'][:150].replace('\n', ' ')
+                        print(f"    Comments preview: {comment_preview}...")
+                else:
+                    print(f"    ❌ NOT FOUND via get_book_by_path!")
             else:
-                print(f"    ❌ NOT FOUND via get_book_by_path!")
+                print(f"    ❌ No book file found in folder!")
             print("-"*70)
 
 except Exception as e:
