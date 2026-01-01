@@ -196,7 +196,8 @@ class CalibreDB:
         if len(rel_path.parts) < 2:
             return None
 
-        book_folder = str(Path(rel_path.parts[0]) / rel_path.parts[1])
+        # Calibre always uses forward slashes in DB, even on Windows
+        book_folder = str(Path(rel_path.parts[0]) / rel_path.parts[1]).replace('\\', '/')
         filename_stem = file_path.stem
 
         # Query database
