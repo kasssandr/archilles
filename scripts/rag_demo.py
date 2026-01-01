@@ -555,6 +555,7 @@ class archillesRAG:
                 return {
                     'book_id': book_id,
                     'status': 'already_indexed',
+                    'chunks_indexed': len(existing['ids']),  # Fix: Add missing key for batch_index.py
                     'existing_chunks': len(existing['ids'])
                 }
 

@@ -396,7 +396,22 @@ def batch_index(
             result = rag.index_book(file_path, book_id, force=force_reindex, phase=phase)
             elapsed = time.time() - start_time
 
-            if force_reindex and result.get('status') != 'already_indexed':
+            # Handle already-indexed books (from ChromaDB check, not progress tracker)
+            if result.get('status') == 'already_indexed':
+                print(f"         ⏭️  SKIPPED (already in ChromaDB: {result['chunks_indexed']} chunks)")
+                stats['skipped'] += 1
+                if safe_indexer:
+                    safe_indexer.record_book(book_id, phase, 'skipped')
+                stats['books_processed'].append({
+                    'id': book_id,
+                    'title': book['title'],
+                    'status': 'skipped',
+                    'reason': 'already in ChromaDB'
+                })
+                continue
+
+            # Regular indexing completed
+            if force_reindex:
                 print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
             else:
                 print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
