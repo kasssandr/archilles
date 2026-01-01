@@ -196,19 +196,20 @@ class archillesRAG:
         # Try Calibre database for missing fields (especially ISBN)
         calibre_metadata = self._extract_calibre_metadata(file_path)
 
-        # Merge: File metadata takes priority, Calibre fills gaps
+        # Merge: Calibre metadata takes priority (user-curated), file fills gaps
         merged = {}
 
-        # Always prefer file metadata
-        merged.update(calibre_metadata)  # Calibre first (lower priority)
-        merged.update(file_metadata)     # File second (higher priority)
+        # File metadata first (fallback)
+        merged.update(file_metadata)
+        # Calibre metadata second (preferred - overwrites file metadata)
+        merged.update(calibre_metadata)
 
         # Track ISBN source
         if merged.get('isbn'):
-            if file_metadata.get('isbn'):
-                merged['isbn_source'] = 'file'
-            elif calibre_metadata.get('isbn'):
+            if calibre_metadata.get('isbn'):
                 merged['isbn_source'] = 'calibre'
+            elif file_metadata.get('isbn'):
+                merged['isbn_source'] = 'file'
 
         return merged
 
@@ -1225,7 +1226,10 @@ class archillesRAG:
 
         # Add semantic scores
         for result in semantic_results:
-            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
+            book_id_key = result['metadata'].get('book_id', '')
+            chunk_idx = result['metadata'].get('chunk_index', 0)
+            doc_id = f"{book_id_key}_{chunk_idx}"
             rrf_scores[doc_id] = {
                 'score': 1 / (k + result['rank']),
                 'result': result
@@ -1233,7 +1237,10 @@ class archillesRAG:
 
         # Add keyword scores (accumulate if already present)
         for result in keyword_results:
-            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
+            book_id_key = result['metadata'].get('book_id', '')
+            chunk_idx = result['metadata'].get('chunk_index', 0)
+            doc_id = f"{book_id_key}_{chunk_idx}"
             if doc_id in rrf_scores:
                 rrf_scores[doc_id]['score'] += 1 / (k + result['rank'])
             else:

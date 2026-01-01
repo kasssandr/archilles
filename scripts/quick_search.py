@@ -42,10 +42,10 @@ def main():
     total_chunks = rag.collection.count()
     print(f"✅ Database loaded: {total_chunks} chunks indexed\n")
 
-    # Test search (using KEYWORD mode - most reliable)
+    # Test search (using HYBRID mode - combines keyword + semantic)
     print(f"🔍 Searching for: '{query}'\n")
 
-    results = rag.query(query, top_k=5, mode='keyword')
+    results = rag.query(query, top_k=5, mode='hybrid')
 
     if not results:
         print("❌ No results found")
