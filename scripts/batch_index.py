@@ -360,13 +360,14 @@ def batch_index(
         print(f"         Format: {format_type} | ID: {book_id}")
 
         # Check if already indexed (skip or progress tracker)
-        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase):
+        # BUT: Don't skip if reindex_before is set (force reindex mode)
+        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not reindex_before:
             print(f"         ⏭️  SKIPPED (already indexed in {phase})")
             stats['skipped'] += 1
             if safe_indexer:
                 safe_indexer.record_book(book_id, phase, 'skipped')
             continue
-        elif skip_existing and book_id in existing_ids:
+        elif skip_existing and book_id in existing_ids and not reindex_before:
             print(f"         ⏭️  SKIPPED (already indexed)")
             stats['skipped'] += 1
             stats['books_processed'].append({
