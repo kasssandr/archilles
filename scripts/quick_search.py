@@ -45,7 +45,7 @@ def main():
     # Test search
     print(f"🔍 Searching for: '{query}'\n")
 
-    results = rag.search(query, top_k=5)
+    results = rag.query(query, top_k=5, mode='hybrid')
 
     if not results:
         print("❌ No results found")
