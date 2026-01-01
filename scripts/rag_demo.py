@@ -389,7 +389,139 @@ class archillesRAG:
 
         return metadata
 
-    def index_book(self, book_path: str, book_id: str = None, force: bool = False) -> Dict[str, Any]:
+    def _index_book_phase1(self, book_path: Path, book_id: str, book_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Phase 1 indexing: Metadata + comments only (fast).
+
+        Creates a single searchable chunk with all metadata fields.
+
+        Args:
+            book_path: Path to book file
+            book_id: Book identifier
+            book_metadata: Extracted metadata dictionary
+
+        Returns:
+            Dictionary with indexing statistics
+        """
+        print("  [Phase 1: Metadata + Comments only]")
+        start_time = time.time()
+
+        # Build searchable metadata text
+        metadata_parts = []
+
+        # Title
+        title = book_metadata.get('title', book_path.stem)
+        metadata_parts.append(f"Title: {title}")
+
+        # Author
+        if book_metadata.get('author'):
+            metadata_parts.append(f"Author: {book_metadata['author']}")
+
+        # Publisher
+        if book_metadata.get('publisher'):
+            metadata_parts.append(f"Publisher: {book_metadata['publisher']}")
+
+        # ISBN
+        if book_metadata.get('isbn'):
+            metadata_parts.append(f"ISBN: {book_metadata['isbn']}")
+
+        # Year
+        if book_metadata.get('year'):
+            metadata_parts.append(f"Year: {book_metadata['year']}")
+
+        # Tags
+        if book_metadata.get('tags'):
+            tags_str = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+            metadata_parts.append(f"Tags: {tags_str}")
+
+        # Subject/Keywords
+        if book_metadata.get('subject'):
+            metadata_parts.append(f"Subject: {book_metadata['subject']}")
+        if book_metadata.get('keywords'):
+            metadata_parts.append(f"Keywords: {book_metadata['keywords']}")
+
+        # Description
+        if book_metadata.get('description'):
+            metadata_parts.append(f"Description: {book_metadata['description']}")
+
+        # Calibre comments (most important for search!)
+        if book_metadata.get('comments'):
+            metadata_parts.append(f"\n[CALIBRE COMMENT]\n{book_metadata['comments']}")
+
+        # Combine into single searchable text
+        searchable_text = "\n".join(metadata_parts)
+
+        # Generate embedding
+        print("  [1/2] Generating metadata embedding...")
+        embedding = self.embedding_model.encode(
+            searchable_text,
+            show_progress_bar=False,
+            convert_to_numpy=True
+        ).tolist()
+
+        # Prepare metadata for ChromaDB
+        chunk_metadata = {
+            'book_id': book_id,
+            'book_title': title,
+            'chunk_index': 0,  # Single chunk for metadata
+            'chunk_type': 'phase1_metadata',
+            'format': book_path.suffix.lower().replace('.', ''),
+            'indexed_at': datetime.now().isoformat(),
+            'phase': 'phase1'
+        }
+
+        # Add all book metadata fields
+        if book_metadata.get('author'):
+            chunk_metadata['author'] = book_metadata['author']
+        if book_metadata.get('publisher'):
+            chunk_metadata['publisher'] = book_metadata['publisher']
+        if book_metadata.get('isbn'):
+            chunk_metadata['isbn'] = book_metadata['isbn']
+            if book_metadata.get('isbn_source'):
+                chunk_metadata['isbn_source'] = book_metadata['isbn_source']
+        if book_metadata.get('year'):
+            chunk_metadata['year'] = book_metadata['year']
+        if book_metadata.get('calibre_id'):
+            chunk_metadata['calibre_id'] = book_metadata['calibre_id']
+        if book_metadata.get('tags'):
+            chunk_metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+        if book_metadata.get('custom_fields'):
+            import json
+            chunk_metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
+
+        chunk_metadata['source_file'] = str(book_path)
+
+        # Index in ChromaDB
+        print("  [2/2] Indexing metadata chunk...")
+        self.collection.add(
+            ids=[f"{book_id}_metadata"],
+            embeddings=[embedding],
+            documents=[searchable_text],
+            metadatas=[chunk_metadata]
+        )
+
+        index_time = time.time() - start_time
+
+        # Update BM25 index
+        if BM25_AVAILABLE:
+            self._rebuild_bm25_index()
+
+        print(f"  ✅ Phase 1 complete ({index_time:.1f}s)")
+        print(f"     Collection size: {self.collection.count()} chunks\n")
+
+        return {
+            'book_id': book_id,
+            'chunks_indexed': 1,
+            'total_words': len(searchable_text.split()),
+            'total_pages': None,
+            'extraction_time': 0,
+            'embedding_time': index_time,
+            'indexing_time': index_time,
+            'total_time': index_time,
+            'phase': 'phase1'
+        }
+
+    def index_book(self, book_path: str, book_id: str = None, force: bool = False, phase: str = 'phase2') -> Dict[str, Any]:
         """
         Extract and index a book.
 
@@ -397,6 +529,7 @@ class archillesRAG:
             book_path: Path to book file
             book_id: Optional book ID (default: filename)
             force: If True, delete existing chunks before re-indexing
+            phase: 'phase1' (metadata + comments only, fast) or 'phase2' (full content, slow)
 
         Returns:
             Dictionary with indexing statistics
@@ -422,6 +555,7 @@ class archillesRAG:
                 return {
                     'book_id': book_id,
                     'status': 'already_indexed',
+                    'chunks_indexed': len(existing['ids']),  # Fix: Add missing key for batch_index.py
                     'existing_chunks': len(existing['ids'])
                 }
 
@@ -429,6 +563,11 @@ class archillesRAG:
         # Works for PDF, EPUB, and other formats
         book_metadata = self._extract_metadata(book_path)
 
+        # PHASE 1: Metadata + Comments only (fast indexing)
+        if phase == 'phase1':
+            return self._index_book_phase1(book_path, book_id, book_metadata)
+
+        # PHASE 2: Full content indexing (default)
         # Step 1: Extract text
         print("  [1/3] Extracting text...")
         start_time = time.time()

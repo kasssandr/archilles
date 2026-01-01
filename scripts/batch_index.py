@@ -41,6 +41,8 @@ import os
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
+from scripts.safe_indexer import SafeIndexer
+from scripts.import_calibre_annotations import import_annotations, find_latest_export
 
 
 def get_calibre_library_path() -> Path:
@@ -289,7 +291,9 @@ def batch_index(
     dry_run: bool = False,
     skip_existing: bool = False,
     reindex_before: datetime = None,
-    log_file: Optional[Path] = None
+    log_file: Optional[Path] = None,
+    safe_indexer: Optional[SafeIndexer] = None,
+    phase: str = 'phase2'
 ) -> Dict[str, Any]:
     """
     Index multiple books into the RAG database.
@@ -301,6 +305,8 @@ def batch_index(
         skip_existing: If True, skip books that are already indexed
         reindex_before: If provided, re-index books indexed before this date
         log_file: Optional path to write detailed log
+        safe_indexer: Optional SafeIndexer for crash-safety and progress tracking
+        phase: 'phase1' (metadata only) or 'phase2' (full content)
 
     Returns:
         Dictionary with indexing statistics
@@ -317,7 +323,14 @@ def batch_index(
 
     # Get already indexed books if skip_existing is enabled
     # If reindex_before is set, exclude old books from the existing set
-    existing_ids = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+    # Also check progress tracker if available
+    if safe_indexer:
+        # Check progress tracker for indexed books
+        existing_ids_from_tracker = set(safe_indexer.tracker.get_indexed_books(phase))
+        existing_ids_from_chromadb = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+        existing_ids = existing_ids_from_tracker | existing_ids_from_chromadb
+    else:
+        existing_ids = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
 
     print(f"\n{'='*60}")
     print(f"📚 ARCHILLES BATCH INDEXER")
@@ -333,6 +346,11 @@ def batch_index(
     print(f"{'='*60}\n")
 
     for i, book in enumerate(books, 1):
+        # Check for shutdown request
+        if safe_indexer and safe_indexer.should_shutdown():
+            print(f"\n⏸️  Shutdown requested - stopping after {stats['indexed']} books")
+            break
+
         book_id = create_book_id(book)
         file_path = book['best_format']['path']
         format_type = book['best_format']['format']
@@ -341,8 +359,14 @@ def batch_index(
         print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
         print(f"         Format: {format_type} | ID: {book_id}")
 
-        # Check if already indexed
-        if skip_existing and book_id in existing_ids:
+        # Check if already indexed (skip or progress tracker)
+        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase):
+            print(f"         ⏭️  SKIPPED (already indexed in {phase})")
+            stats['skipped'] += 1
+            if safe_indexer:
+                safe_indexer.record_book(book_id, phase, 'skipped')
+            continue
+        elif skip_existing and book_id in existing_ids:
             print(f"         ⏭️  SKIPPED (already indexed)")
             stats['skipped'] += 1
             stats['books_processed'].append({
@@ -351,6 +375,8 @@ def batch_index(
                 'status': 'skipped',
                 'reason': 'already indexed'
             })
+            if safe_indexer:
+                safe_indexer.record_book(book_id, phase, 'skipped')
             continue
 
         if dry_run:
@@ -367,13 +393,38 @@ def batch_index(
             start_time = time.time()
             # Use force=True when re-indexing old books
             force_reindex = reindex_before is not None
-            result = rag.index_book(file_path, book_id, force=force_reindex)
+            result = rag.index_book(file_path, book_id, force=force_reindex, phase=phase)
             elapsed = time.time() - start_time
 
-            if force_reindex and result.get('status') != 'already_indexed':
+            # Handle already-indexed books (from ChromaDB check, not progress tracker)
+            if result.get('status') == 'already_indexed':
+                print(f"         ⏭️  SKIPPED (already in ChromaDB: {result['chunks_indexed']} chunks)")
+                stats['skipped'] += 1
+                if safe_indexer:
+                    safe_indexer.record_book(book_id, phase, 'skipped')
+                stats['books_processed'].append({
+                    'id': book_id,
+                    'title': book['title'],
+                    'status': 'skipped',
+                    'reason': 'already in ChromaDB'
+                })
+                continue
+
+            # Regular indexing completed
+            if force_reindex:
                 print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
             else:
                 print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
+
+            # Record success in progress tracker
+            if safe_indexer:
+                safe_indexer.record_book(
+                    book_id=book_id,
+                    phase=phase,
+                    status='success',
+                    chunks=result.get('chunks_indexed', 0),
+                    duration=elapsed
+                )
 
             stats['indexed'] += 1
             stats['books_processed'].append({
@@ -387,6 +438,15 @@ def batch_index(
         except Exception as e:
             error_msg = str(e)
             print(f"         ❌ FAILED: {error_msg}")
+
+            # Record failure in progress tracker
+            if safe_indexer:
+                safe_indexer.record_book(
+                    book_id=book_id,
+                    phase=phase,
+                    status='failed',
+                    error=error_msg[:500]  # Limit error message length
+                )
 
             stats['failed'] += 1
             stats['errors'].append({
@@ -478,6 +538,8 @@ Examples:
                         help='RAG database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     parser.add_argument('--reset-db', action='store_true',
                         help='Reset corrupted database (WARNING: deletes all indexed data)')
+    parser.add_argument('--phase1-only', action='store_true',
+                        help='Phase 1: Quick indexing of metadata, comments, and annotations only (5-10 min)')
 
     args = parser.parse_args()
 
@@ -539,6 +601,21 @@ Examples:
             print(f"\n{'='*60}\n")
             sys.exit(1)
 
+    # Initialize SafeIndexer for crash-safety
+    safe_indexer = None
+    if not args.dry_run:
+        safe_indexer = SafeIndexer(
+            db_path=Path(args.db_path),
+            backup_interval=10,  # Backup every 10 books
+            max_backups=5        # Keep 5 most recent backups
+        )
+
+        # Determine phase
+        phase = 'phase1' if args.phase1_only else 'phase2'
+
+        # Start indexing session
+        session_id = safe_indexer.start_session(phase)
+
     # Run batch indexing
     log_file = Path(args.log) if args.log else None
     stats = batch_index(
@@ -547,8 +624,15 @@ Examples:
         dry_run=args.dry_run,
         skip_existing=args.skip_existing,
         reindex_before=reindex_before,
-        log_file=log_file
+        log_file=log_file,
+        safe_indexer=safe_indexer,
+        phase=phase if safe_indexer else 'phase2'
     )
+
+    # End session (if not dry run)
+    if safe_indexer:
+        status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
+        safe_indexer.end_session(status)
 
     # Exit with error code if any failures
     if stats['failed'] > 0:
