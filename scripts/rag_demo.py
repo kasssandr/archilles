@@ -548,17 +548,57 @@ class archillesRAG:
         # Check for existing chunks and handle force reindex
         existing = self.collection.get(where={"book_id": book_id})
         if existing and existing['ids']:
-            if force:
+            # Check what types of chunks exist
+            existing_types = set()
+            for metadata in existing['metadatas']:
+                chunk_type = metadata.get('chunk_type', 'content')
+                existing_types.add(chunk_type)
+
+            has_phase1 = 'phase1_metadata' in existing_types
+            has_content = 'content' in existing_types or any(t not in ['phase1_metadata', 'calibre_comment'] for t in existing_types)
+
+            # Phase 1: Skip if already has Phase 1 chunks
+            if phase == 'phase1' and has_phase1:
+                if force:
+                    print(f"  🗑️  Deleting {len(existing['ids'])} existing Phase 1 chunks...", flush=True)
+                    self.collection.delete(ids=existing['ids'])
+                else:
+                    print(f"  ⚠️  Phase 1 already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
+                    return {
+                        'book_id': book_id,
+                        'status': 'already_indexed',
+                        'chunks_indexed': len(existing['ids']),
+                        'existing_chunks': len(existing['ids'])
+                    }
+
+            # Phase 2: Skip if already has content chunks
+            elif phase == 'phase2' and has_content:
+                if force:
+                    # Delete only content chunks, keep Phase 1 chunks
+                    content_chunk_ids = [
+                        existing['ids'][i] for i, meta in enumerate(existing['metadatas'])
+                        if meta.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']
+                    ]
+                    if content_chunk_ids:
+                        print(f"  🗑️  Deleting {len(content_chunk_ids)} existing content chunks...", flush=True)
+                        self.collection.delete(ids=content_chunk_ids)
+                else:
+                    print(f"  ⚠️  Phase 2 already indexed ({len([m for m in existing['metadatas'] if m.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']])} content chunks). Use --force to reindex.")
+                    return {
+                        'book_id': book_id,
+                        'status': 'already_indexed',
+                        'chunks_indexed': len(existing['ids']),
+                        'existing_chunks': len(existing['ids'])
+                    }
+
+            # Phase 2 + only Phase 1 chunks = OK to add content!
+            elif phase == 'phase2' and has_phase1 and not has_content:
+                print(f"  ℹ️  Found Phase 1 chunks, adding Phase 2 content chunks alongside...")
+
+            # Old chunks without phase info - handle with force flag
+            elif force:
                 print(f"  🗑️  Deleting {len(existing['ids'])} existing chunks...", flush=True)
                 self.collection.delete(ids=existing['ids'])
-            else:
-                print(f"  ⚠️  Book already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
-                return {
-                    'book_id': book_id,
-                    'status': 'already_indexed',
-                    'chunks_indexed': len(existing['ids']),  # Fix: Add missing key for batch_index.py
-                    'existing_chunks': len(existing['ids'])
-                }
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
@@ -618,8 +658,10 @@ class archillesRAG:
                 'book_id': book_id,
                 'book_title': extracted.metadata.file_path.stem,
                 'chunk_index': i,
+                'chunk_type': 'content',  # Phase 2 content chunks
                 'format': extracted.metadata.detected_format,
                 'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
+                'phase': 'phase2'
             }
 
             # Add book metadata (author, title, year, ISBN, publisher, etc.)
