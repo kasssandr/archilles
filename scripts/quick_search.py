@@ -15,12 +15,23 @@ from scripts.snippet_extractor import extract_context_snippet, highlight_terms
 import os
 
 def main():
-    # Get query from command line or use default
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
-    else:
+    # Parse command line arguments
+    # Usage: python quick_search.py "query" [mode] [top_k]
+    if len(sys.argv) < 2:
         query = "Arendt Totalitarismus"
+        mode = "hybrid"
+        top_k = 5
         print(f"ℹ️  No query provided, using default: '{query}'\n")
+    else:
+        query = sys.argv[1]
+        mode = sys.argv[2] if len(sys.argv) > 2 else "hybrid"
+        top_k = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+
+        # Validate mode
+        if mode not in ['semantic', 'keyword', 'hybrid']:
+            print(f"❌ Invalid mode: {mode}")
+            print("   Valid modes: semantic, keyword, hybrid")
+            sys.exit(1)
 
     # Get Calibre library path
     library_path = os.getenv('CALIBRE_LIBRARY')
@@ -43,10 +54,10 @@ def main():
     total_chunks = rag.collection.count()
     print(f"✅ Database loaded: {total_chunks} chunks indexed\n")
 
-    # Test search (using HYBRID mode - combines keyword + semantic)
-    print(f"🔍 Searching for: '{query}'\n")
+    # Test search with specified mode
+    print(f"🔍 Searching for: '{query}' (mode: {mode}, top_k: {top_k})\n")
 
-    results = rag.query(query, top_k=5, mode='hybrid')
+    results = rag.query(query, top_k=top_k, mode=mode)
 
     if not results:
         print("❌ No results found")
