@@ -37,7 +37,7 @@ try:
     )
 
     # Get the collection
-    collection = client.get_collection("archilles")
+    collection = client.get_collection("archilles_books")
 
     print(f"Collection loaded: {collection.count()} documents\n")
 
