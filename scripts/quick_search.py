@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.rag_demo import archillesRAG
+from scripts.snippet_extractor import extract_context_snippet, highlight_terms
 import os
 
 def main():
@@ -54,6 +55,9 @@ def main():
     print(f"Found {len(results)} results:\n")
     print("="*70)
 
+    # Extract query terms for context snippets
+    query_terms = query.split()
+
     for i, result in enumerate(results, 1):
         # Extract metadata from nested dict
         metadata = result.get('metadata', {})
@@ -69,9 +73,15 @@ def main():
             print(f"    Type: {metadata['chunk_type']}")
         print(f"    Score: {result.get('score', 0):.4f}")
 
-        # Show snippet
+        # Extract relevant context snippet
         text = result.get('text', '')
-        snippet = text[:300] + "..." if len(text) > 300 else text
+        snippet, found_terms = extract_context_snippet(text, query_terms, context_chars=200)
+
+        # Highlight found terms
+        if found_terms:
+            snippet = highlight_terms(snippet, found_terms)
+            print(f"    Matched: {', '.join(found_terms)}")
+
         print(f"\n    {snippet}")
         print("-"*70)
 
