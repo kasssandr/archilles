@@ -241,6 +241,19 @@ class CalibreDB:
         isbn_row = cursor.fetchone()
         isbn = isbn_row['val'] if isbn_row else row['legacy_isbn']
 
+        # Get all authors (books can have multiple authors)
+        authors_query = """
+        SELECT authors.name
+        FROM authors
+        INNER JOIN books_authors_link ON authors.id = books_authors_link.author
+        WHERE books_authors_link.book = ?
+        ORDER BY books_authors_link.id
+        """
+        cursor = self.conn.execute(authors_query, (book_id,))
+        author_rows = cursor.fetchall()
+        # Join multiple authors with " & "
+        authors = ' & '.join([author_row['name'] for author_row in author_rows]) if author_rows else row['author']
+
         # Get tags
         tags_query = """
         SELECT tags.name
@@ -277,7 +290,7 @@ class CalibreDB:
         result = {
             'calibre_id': book_id,
             'title': row['title'],
-            'author': row['author'],
+            'author': authors,  # All authors joined with " & "
             'publisher': row['publisher'],
             'language': row['language'],
             'isbn': isbn,
