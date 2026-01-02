@@ -1316,7 +1316,9 @@ class archillesRAG:
         for i, (doc_id, data) in enumerate(sorted_results[:top_k]):
             result = data['result'].copy()
             result['rank'] = i + 1
-            result['similarity'] = min(data['score'], 1.0)  # Normalize
+            rrf_score = min(data['score'], 1.0)  # Normalize
+            result['similarity'] = rrf_score
+            result['score'] = rrf_score  # Add score field for consistency
             final_results.append(result)
 
         return final_results
@@ -1354,12 +1356,14 @@ class archillesRAG:
             return formatted_results
 
         for i in range(len(results['ids'][0])):
+            similarity = 1 - results['distances'][0][i]  # Convert distance to similarity
             result = {
                 'rank': i + 1,
                 'text': results['documents'][0][i],
                 'metadata': results['metadatas'][0][i],
                 'distance': results['distances'][0][i],
-                'similarity': 1 - results['distances'][0][i],  # Convert distance to similarity
+                'similarity': similarity,
+                'score': similarity,  # Add score field (using similarity for semantic)
                 'score_type': score_type
             }
             formatted_results.append(result)
