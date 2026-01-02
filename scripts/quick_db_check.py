@@ -5,6 +5,7 @@ Minimal dependencies - just needs chromadb package
 """
 
 import os
+import re
 from pathlib import Path
 
 try:
@@ -71,15 +72,23 @@ for doc_id, document, metadata in zip(all_data['ids'], all_data['documents'], al
     chunk_type = metadata.get('chunk_type', 'unknown')
     chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
 
-    # Check for terms
+    # Check for terms (using word boundaries to avoid substring matches)
+    # FIXED: Use regex word boundaries so "lehen" doesn't match "flehen"!
     for term in search_terms.keys():
-        if term in doc_lower:
+        # \b = word boundary - matches whole words only
+        # This prevents "lehen" from matching "flehen", "belehnen", "Lehensystem"
+        pattern = r'\b' + re.escape(term) + r'\b'
+        match = re.search(pattern, doc_lower, re.IGNORECASE)
+
+        if match:
+            match_pos = match.start()
             search_terms[term].append({
                 'id': doc_id,
                 'title': metadata.get('book_title', 'Unknown'),
                 'author': metadata.get('author', 'N/A'),
                 'chunk_type': chunk_type,
-                'snippet': document[:200] if term in document[:200].lower() else f"...{document[max(0, doc_lower.find(term)-50):doc_lower.find(term)+100]}..."
+                'snippet': document[:200] if match_pos < 200
+                          else f"...{document[max(0, match_pos-50):match_pos+100]}..."
             })
 
 print("="*70)
