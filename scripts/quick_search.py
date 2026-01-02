@@ -16,21 +16,29 @@ import os
 
 def main():
     # Parse command line arguments
-    # Usage: python quick_search.py "query" [mode] [top_k]
+    # Usage: python quick_search.py "query" [mode] [top_k] [chunk_type]
     if len(sys.argv) < 2:
         query = "Arendt Totalitarismus"
         mode = "hybrid"
         top_k = 5
+        chunk_type = None
         print(f"ℹ️  No query provided, using default: '{query}'\n")
     else:
         query = sys.argv[1]
         mode = sys.argv[2] if len(sys.argv) > 2 else "hybrid"
         top_k = int(sys.argv[3]) if len(sys.argv) > 3 else 5
+        chunk_type = sys.argv[4] if len(sys.argv) > 4 else None
 
         # Validate mode
         if mode not in ['semantic', 'keyword', 'hybrid']:
             print(f"❌ Invalid mode: {mode}")
             print("   Valid modes: semantic, keyword, hybrid")
+            sys.exit(1)
+
+        # Validate chunk_type if provided
+        if chunk_type and chunk_type not in ['phase1_metadata', 'content', 'calibre_comment']:
+            print(f"❌ Invalid chunk_type: {chunk_type}")
+            print("   Valid chunk types: phase1_metadata, content, calibre_comment")
             sys.exit(1)
 
     # Get Calibre library path
@@ -55,9 +63,10 @@ def main():
     print(f"✅ Database loaded: {total_chunks} chunks indexed\n")
 
     # Test search with specified mode
-    print(f"🔍 Searching for: '{query}' (mode: {mode}, top_k: {top_k})\n")
+    chunk_filter_msg = f", chunk_type: {chunk_type}" if chunk_type else ""
+    print(f"🔍 Searching for: '{query}' (mode: {mode}, top_k: {top_k}{chunk_filter_msg})\n")
 
-    results = rag.query(query, top_k=top_k, mode=mode)
+    results = rag.query(query, top_k=top_k, mode=mode, chunk_type_filter=chunk_type)
 
     if not results:
         print("❌ No results found")
