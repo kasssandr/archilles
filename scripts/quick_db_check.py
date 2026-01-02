@@ -27,10 +27,26 @@ print(f"📊 Analyzing ChromaDB at: {db_path}\n")
 conn = sqlite3.connect(db_path)
 cursor = conn.cursor()
 
+# First, let's see what tables exist
+cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+tables = cursor.fetchall()
+print("Available tables:", [t[0] for t in tables])
+
+# Check schema of embeddings table
+cursor.execute("PRAGMA table_info(embeddings)")
+columns = cursor.fetchall()
+print("\nEmbeddings table schema:")
+for col in columns:
+    print(f"  - {col[1]} ({col[2]})")
+print()
+
 # Get all documents with metadata
+# ChromaDB stores documents in the 'embeddings' table with 'string_value' column
 cursor.execute("""
-SELECT id, document, metadata
-FROM embeddings
+SELECT e.id, e.string_value, m.string_value as metadata
+FROM embeddings e
+LEFT JOIN embedding_metadata m ON e.id = m.id AND m.key = 'metadata'
+WHERE e.string_value IS NOT NULL
 """)
 
 rows = cursor.fetchall()
