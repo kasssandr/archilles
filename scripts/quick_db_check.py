@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 """
-Quick diagnostic using direct SQLite access to ChromaDB
-No heavy dependencies needed!
+Quick diagnostic using ChromaDB API
+Minimal dependencies - just needs chromadb package
 """
 
-import sqlite3
-import json
 import os
 from pathlib import Path
+
+try:
+    import chromadb
+    from chromadb.config import Settings
+except ImportError:
+    print("❌ chromadb package not installed")
+    print("   Install with: pip install chromadb==0.4.22")
+    exit(1)
 
 # Get library path
 library_path = os.getenv('CALIBRE_LIBRARY')
@@ -15,42 +21,35 @@ if not library_path:
     print("❌ CALIBRE_LIBRARY not set")
     exit(1)
 
-db_path = Path(library_path) / ".archilles" / "rag_db" / "chroma.sqlite3"
+db_path = str(Path(library_path) / ".archilles" / "rag_db")
 
-if not db_path.exists():
+if not Path(db_path).exists():
     print(f"❌ Database not found at: {db_path}")
     exit(1)
 
 print(f"📊 Analyzing ChromaDB at: {db_path}\n")
 
-# Connect to SQLite
-conn = sqlite3.connect(db_path)
-cursor = conn.cursor()
+# Initialize ChromaDB client
+try:
+    client = chromadb.PersistentClient(
+        path=db_path,
+        settings=Settings(anonymized_telemetry=False)
+    )
 
-# First, let's see what tables exist
-cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-tables = cursor.fetchall()
-print("Available tables:", [t[0] for t in tables])
+    # Get the collection
+    collection = client.get_collection("archilles")
 
-# Check schema of embeddings table
-cursor.execute("PRAGMA table_info(embeddings)")
-columns = cursor.fetchall()
-print("\nEmbeddings table schema:")
-for col in columns:
-    print(f"  - {col[1]} ({col[2]})")
-print()
+    print(f"Collection loaded: {collection.count()} documents\n")
 
-# Get all documents with metadata
-# ChromaDB stores documents in the 'embeddings' table with 'string_value' column
-cursor.execute("""
-SELECT e.id, e.string_value, m.string_value as metadata
-FROM embeddings e
-LEFT JOIN embedding_metadata m ON e.id = m.id AND m.key = 'metadata'
-WHERE e.string_value IS NOT NULL
-""")
+except Exception as e:
+    print(f"❌ Error loading collection: {e}")
+    exit(1)
 
-rows = cursor.fetchall()
-print(f"Total documents in database: {len(rows)}\n")
+# Get all documents
+print("Fetching all documents...")
+all_data = collection.get(include=['documents', 'metadatas'])
+
+print(f"Retrieved {len(all_data['ids'])} documents\n")
 
 # Search for German medieval terms
 search_terms = {
@@ -63,17 +62,11 @@ search_terms = {
 
 chunk_types = {}
 
-for doc_id, document, metadata_json in rows:
+for doc_id, document, metadata in zip(all_data['ids'], all_data['documents'], all_data['metadatas']):
     if document is None:
         continue
 
     doc_lower = document.lower()
-
-    # Parse metadata
-    try:
-        metadata = json.loads(metadata_json) if metadata_json else {}
-    except:
-        metadata = {}
 
     chunk_type = metadata.get('chunk_type', 'unknown')
     chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
@@ -82,6 +75,7 @@ for doc_id, document, metadata_json in rows:
     for term in search_terms.keys():
         if term in doc_lower:
             search_terms[term].append({
+                'id': doc_id,
                 'title': metadata.get('book_title', 'Unknown'),
                 'author': metadata.get('author', 'N/A'),
                 'chunk_type': chunk_type,
@@ -118,14 +112,48 @@ for term, matches in search_terms.items():
             print(f"   ... and {len(unique_books) - 5} more books")
     print()
 
-conn.close()
-
 print("="*70)
 print("CONCLUSION:")
 print("="*70)
-print("""
-If terms are found in the data but not appearing in semantic search:
-- BGE-M3 embeddings may not capture German domain-specific terminology
-- Consider using keyword-only or hybrid search for these terms
-- Or filter search to specific chunk_types (e.g., phase1_metadata)
+
+# Calculate findings
+total_with_terms = sum(len(set(m['title'] for m in matches)) for matches in search_terms.values())
+
+if total_with_terms > 0:
+    print(f"""
+✅ Found {total_with_terms} unique books containing German medieval terms
+
+DIAGNOSIS: The data exists in your ChromaDB!
+
+This means your search for "Lehen" should have found these books.
+The issue is likely:
+
+1. **Semantic Search Problem**: BGE-M3 embeddings don't capture German
+   domain-specific medieval legal terminology well enough
+
+2. **Hybrid Search Weights**: The keyword component might be weighted too low
+
+RECOMMENDED SOLUTIONS:
+
+A. Use keyword-only search for German medieval terms:
+   results = rag.query("Lehen", mode='keyword')
+
+B. Filter to metadata chunks only (where comments are):
+   # Search only in phase1_metadata chunks
+
+C. Boost hybrid search keyword weight (if implemented)
+
+D. Try compound queries:
+   Search for: "Lehen OR mittelalter OR feudal"
+""")
+else:
+    print("""
+❌ No German medieval terms found in the database
+
+This could mean:
+1. The terms aren't in your Calibre comments
+2. The books haven't been indexed yet (only {chunk_types.get('phase1_metadata', 0)} Phase 1 chunks)
+3. The terms are spelled differently
+
+Check your Calibre comments to verify they contain these terms.
 """)
