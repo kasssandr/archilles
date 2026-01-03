@@ -196,19 +196,20 @@ class archillesRAG:
         # Try Calibre database for missing fields (especially ISBN)
         calibre_metadata = self._extract_calibre_metadata(file_path)
 
-        # Merge: File metadata takes priority, Calibre fills gaps
+        # Merge: Calibre metadata takes priority (user-curated), file fills gaps
         merged = {}
 
-        # Always prefer file metadata
-        merged.update(calibre_metadata)  # Calibre first (lower priority)
-        merged.update(file_metadata)     # File second (higher priority)
+        # File metadata first (fallback)
+        merged.update(file_metadata)
+        # Calibre metadata second (preferred - overwrites file metadata)
+        merged.update(calibre_metadata)
 
         # Track ISBN source
         if merged.get('isbn'):
-            if file_metadata.get('isbn'):
-                merged['isbn_source'] = 'file'
-            elif calibre_metadata.get('isbn'):
+            if calibre_metadata.get('isbn'):
                 merged['isbn_source'] = 'calibre'
+            elif file_metadata.get('isbn'):
+                merged['isbn_source'] = 'file'
 
         return merged
 
@@ -547,17 +548,57 @@ class archillesRAG:
         # Check for existing chunks and handle force reindex
         existing = self.collection.get(where={"book_id": book_id})
         if existing and existing['ids']:
-            if force:
+            # Check what types of chunks exist
+            existing_types = set()
+            for metadata in existing['metadatas']:
+                chunk_type = metadata.get('chunk_type', 'content')
+                existing_types.add(chunk_type)
+
+            has_phase1 = 'phase1_metadata' in existing_types
+            has_content = 'content' in existing_types or any(t not in ['phase1_metadata', 'calibre_comment'] for t in existing_types)
+
+            # Phase 1: Skip if already has Phase 1 chunks
+            if phase == 'phase1' and has_phase1:
+                if force:
+                    print(f"  🗑️  Deleting {len(existing['ids'])} existing Phase 1 chunks...", flush=True)
+                    self.collection.delete(ids=existing['ids'])
+                else:
+                    print(f"  ⚠️  Phase 1 already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
+                    return {
+                        'book_id': book_id,
+                        'status': 'already_indexed',
+                        'chunks_indexed': len(existing['ids']),
+                        'existing_chunks': len(existing['ids'])
+                    }
+
+            # Phase 2: Skip if already has content chunks
+            elif phase == 'phase2' and has_content:
+                if force:
+                    # Delete only content chunks, keep Phase 1 chunks
+                    content_chunk_ids = [
+                        existing['ids'][i] for i, meta in enumerate(existing['metadatas'])
+                        if meta.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']
+                    ]
+                    if content_chunk_ids:
+                        print(f"  🗑️  Deleting {len(content_chunk_ids)} existing content chunks...", flush=True)
+                        self.collection.delete(ids=content_chunk_ids)
+                else:
+                    print(f"  ⚠️  Phase 2 already indexed ({len([m for m in existing['metadatas'] if m.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']])} content chunks). Use --force to reindex.")
+                    return {
+                        'book_id': book_id,
+                        'status': 'already_indexed',
+                        'chunks_indexed': len(existing['ids']),
+                        'existing_chunks': len(existing['ids'])
+                    }
+
+            # Phase 2 + only Phase 1 chunks = OK to add content!
+            elif phase == 'phase2' and has_phase1 and not has_content:
+                print(f"  ℹ️  Found Phase 1 chunks, adding Phase 2 content chunks alongside...")
+
+            # Old chunks without phase info - handle with force flag
+            elif force:
                 print(f"  🗑️  Deleting {len(existing['ids'])} existing chunks...", flush=True)
                 self.collection.delete(ids=existing['ids'])
-            else:
-                print(f"  ⚠️  Book already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
-                return {
-                    'book_id': book_id,
-                    'status': 'already_indexed',
-                    'chunks_indexed': len(existing['ids']),  # Fix: Add missing key for batch_index.py
-                    'existing_chunks': len(existing['ids'])
-                }
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
@@ -617,8 +658,10 @@ class archillesRAG:
                 'book_id': book_id,
                 'book_title': extracted.metadata.file_path.stem,
                 'chunk_index': i,
+                'chunk_type': 'content',  # Phase 2 content chunks
                 'format': extracted.metadata.detected_format,
                 'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
+                'phase': 'phase2'
             }
 
             # Add book metadata (author, title, year, ISBN, publisher, etc.)
@@ -910,6 +953,7 @@ class archillesRAG:
         exact_phrase: bool = False,
         tag_filter: List[str] = None,
         section_filter: str = None,
+        chunk_type_filter: str = None,
         max_per_book: int = 3
     ) -> List[Dict[str, Any]]:
         """
@@ -925,6 +969,9 @@ class archillesRAG:
             tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
             section_filter: Filter by section type ('main_content', 'front_matter', 'back_matter')
                            Use 'main' to exclude front/back matter from results
+            chunk_type_filter: Filter by chunk type ('phase1_metadata', 'content', 'calibre_comment')
+                              Use 'phase1_metadata' to search only Calibre comments/metadata
+                              Use 'content' to search only book text (excludes comments)
             max_per_book: Maximum results per book (default: 3, use 999 for unlimited)
 
         Returns:
@@ -942,6 +989,8 @@ class archillesRAG:
             filters.append(f"tags={', '.join(tag_filter)}")
         if section_filter:
             filters.append(f"section={section_filter}")
+        if chunk_type_filter:
+            filters.append(f"chunk_type={chunk_type_filter}")
         if max_per_book < 999:
             filters.append(f"max {max_per_book}/book")
 
@@ -959,11 +1008,11 @@ class archillesRAG:
 
         # Route to appropriate search method
         if mode == 'semantic':
-            results = self._semantic_search(query_text, search_top_k, language, book_id)
+            results = self._semantic_search(query_text, search_top_k, language, book_id, chunk_type_filter)
         elif mode == 'keyword':
-            results = self._keyword_search(query_text, search_top_k, language, book_id, exact_phrase=exact_phrase)
+            results = self._keyword_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase)
         elif mode == 'hybrid':
-            results = self._hybrid_search(query_text, search_top_k, language, book_id, exact_phrase=exact_phrase)
+            results = self._hybrid_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase)
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
 
@@ -1040,7 +1089,8 @@ class archillesRAG:
         query_text: str,
         top_k: int,
         language: str = None,
-        book_id: str = None
+        book_id: str = None,
+        chunk_type_filter: str = None
     ) -> List[Dict[str, Any]]:
         """Semantic search using BGE-M3 embeddings."""
         # Generate query embedding
@@ -1050,7 +1100,7 @@ class archillesRAG:
         ).tolist()
 
         # Build where clause for filtering
-        where_clause = self._build_where_clause(language, book_id)
+        where_clause = self._build_where_clause(language, book_id, chunk_type_filter)
 
         # Search in ChromaDB
         results = self.collection.query(
@@ -1068,6 +1118,7 @@ class archillesRAG:
         top_k: int,
         language: str = None,
         book_id: str = None,
+        chunk_type_filter: str = None,
         exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """Keyword search using BM25 or exact phrase matching."""
@@ -1085,7 +1136,7 @@ class archillesRAG:
 
         # For exact phrase matching, use different approach
         if exact_phrase:
-            return self._exact_phrase_search(query_text, top_k, language, book_id)
+            return self._exact_phrase_search(query_text, top_k, language, book_id, chunk_type_filter)
 
         # Tokenize query
         query_tokens = self._tokenize(query_text)
@@ -1113,6 +1164,9 @@ class archillesRAG:
             if book_id and metadata.get('book_id') != book_id:
                 continue
 
+            if chunk_type_filter and metadata.get('chunk_type') != chunk_type_filter:
+                continue
+
             filtered_results.append({
                 'rank': len(filtered_results) + 1,
                 'text': self.bm25_docs[idx],
@@ -1131,7 +1185,8 @@ class archillesRAG:
         query_text: str,
         top_k: int,
         language: str = None,
-        book_id: str = None
+        book_id: str = None,
+        chunk_type_filter: str = None
     ) -> List[Dict[str, Any]]:
         """
         Exact phrase matching (case-insensitive).
@@ -1162,6 +1217,9 @@ class archillesRAG:
                     continue
 
             if book_id and metadata.get('book_id') != book_id:
+                continue
+
+            if chunk_type_filter and metadata.get('chunk_type') != chunk_type_filter:
                 continue
 
             # Normalize document text: lowercase + collapse whitespace
@@ -1196,6 +1254,7 @@ class archillesRAG:
         top_k: int,
         language: str = None,
         book_id: str = None,
+        chunk_type_filter: str = None,
         exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """
@@ -1208,11 +1267,11 @@ class archillesRAG:
         # For exact phrase matching, skip semantic search entirely
         # We want ONLY exact matches, not semantically similar results!
         if exact_phrase:
-            return self._keyword_search(query_text, top_k, language, book_id, exact_phrase=True)
+            return self._keyword_search(query_text, top_k, language, book_id, chunk_type_filter, exact_phrase=True)
 
         # Get results from both methods (request more to have enough after fusion)
-        semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id)
-        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, exact_phrase=False)
+        semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id, chunk_type_filter)
+        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, chunk_type_filter, exact_phrase=False)
 
         if not BM25_AVAILABLE or not keyword_results:
             # Fallback to semantic-only
@@ -1225,7 +1284,10 @@ class archillesRAG:
 
         # Add semantic scores
         for result in semantic_results:
-            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
+            book_id_key = result['metadata'].get('book_id', '')
+            chunk_idx = result['metadata'].get('chunk_index', 0)
+            doc_id = f"{book_id_key}_{chunk_idx}"
             rrf_scores[doc_id] = {
                 'score': 1 / (k + result['rank']),
                 'result': result
@@ -1233,7 +1295,10 @@ class archillesRAG:
 
         # Add keyword scores (accumulate if already present)
         for result in keyword_results:
-            doc_id = result['metadata'].get('chunk_index', id(result['text']))
+            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
+            book_id_key = result['metadata'].get('book_id', '')
+            chunk_idx = result['metadata'].get('chunk_index', 0)
+            doc_id = f"{book_id_key}_{chunk_idx}"
             if doc_id in rrf_scores:
                 rrf_scores[doc_id]['score'] += 1 / (k + result['rank'])
             else:
@@ -1267,14 +1332,16 @@ class archillesRAG:
         for i, (doc_id, data) in enumerate(sorted_results[:top_k]):
             result = data['result'].copy()
             result['rank'] = i + 1
-            result['similarity'] = min(data['score'], 1.0)  # Normalize
+            rrf_score = min(data['score'], 1.0)  # Normalize
+            result['similarity'] = rrf_score
+            result['score'] = rrf_score  # Add score field for consistency
             final_results.append(result)
 
         return final_results
 
-    def _build_where_clause(self, language: str = None, book_id: str = None):
+    def _build_where_clause(self, language: str = None, book_id: str = None, chunk_type_filter: str = None):
         """Build ChromaDB where clause for filtering."""
-        if not (language or book_id):
+        if not (language or book_id or chunk_type_filter):
             return None
 
         where_conditions = {}
@@ -1289,6 +1356,9 @@ class archillesRAG:
 
         if book_id:
             where_conditions['book_id'] = book_id
+
+        if chunk_type_filter:
+            where_conditions['chunk_type'] = chunk_type_filter
 
         # Combine conditions with AND
         if len(where_conditions) > 1:
@@ -1305,12 +1375,14 @@ class archillesRAG:
             return formatted_results
 
         for i in range(len(results['ids'][0])):
+            similarity = 1 - results['distances'][0][i]  # Convert distance to similarity
             result = {
                 'rank': i + 1,
                 'text': results['documents'][0][i],
                 'metadata': results['metadatas'][0][i],
                 'distance': results['distances'][0][i],
-                'similarity': 1 - results['distances'][0][i],  # Convert distance to similarity
+                'similarity': similarity,
+                'score': similarity,  # Add score field (using similarity for semantic)
                 'score_type': score_type
             }
             formatted_results.append(result)
@@ -1911,6 +1983,8 @@ Examples:
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
     query_parser.add_argument('--section', choices=['main', 'main_content', 'front_matter', 'back_matter'],
                               help='Filter by section type: main (exclude index/TOC), front_matter, back_matter')
+    query_parser.add_argument('--chunk-type', choices=['phase1_metadata', 'content', 'calibre_comment'],
+                              help='Filter by chunk type: phase1_metadata (Calibre comments/metadata), content (book text), calibre_comment')
     query_parser.add_argument('--max-per-book', type=int, default=3, help='Maximum results per book (default: 3, use 999 for unlimited)')
     query_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
@@ -1963,6 +2037,7 @@ Examples:
                 exact_phrase=args.exact,
                 tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None,
                 section_filter=args.section if hasattr(args, 'section') else None,
+                chunk_type_filter=args.chunk_type if hasattr(args, 'chunk_type') else None,
                 max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 3
             )
             rag.print_results(results, query_text=args.query)
