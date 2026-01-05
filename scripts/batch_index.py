@@ -25,6 +25,9 @@ Usage:
 
     # Re-index books that were indexed before a certain date (with improved code)
     python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
+
+    # Run in non-interactive mode (auto-resume sessions, no prompts)
+    python scripts/batch_index.py --tag "Leit-Literatur" --non-interactive
 """
 
 import sys
@@ -541,6 +544,8 @@ Examples:
                         help='Reset corrupted database (WARNING: deletes all indexed data)')
     parser.add_argument('--phase1-only', action='store_true',
                         help='Phase 1: Quick indexing of metadata, comments, and annotations only (5-10 min)')
+    parser.add_argument('--non-interactive', action='store_true',
+                        help='Run in non-interactive mode (auto-resume sessions, no prompts)')
 
     args = parser.parse_args()
 
@@ -614,8 +619,9 @@ Examples:
         # Determine phase
         phase = 'phase1' if args.phase1_only else 'phase2'
 
-        # Start indexing session
-        session_id = safe_indexer.start_session(phase)
+        # Start indexing session (auto-detect interactive mode unless --non-interactive)
+        interactive = None if not args.non_interactive else False
+        session_id = safe_indexer.start_session(phase, interactive=interactive)
 
     # Run batch indexing
     log_file = Path(args.log) if args.log else None
