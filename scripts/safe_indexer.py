@@ -88,16 +88,22 @@ class SafeIndexer:
         if hasattr(signal, 'SIGTERM'):
             signal.signal(signal.SIGTERM, signal_handler)
 
-    def start_session(self, phase: str = 'both') -> str:
+    def start_session(self, phase: str = 'both', interactive: bool = None) -> str:
         """
         Start a new indexing session.
 
         Args:
             phase: 'phase1', 'phase2', or 'both'
+            interactive: If True, prompt user for resume. If False, auto-resume.
+                        If None, auto-detect based on stdin.
 
         Returns:
             session_id
         """
+        # Auto-detect interactive mode if not specified
+        if interactive is None:
+            interactive = sys.stdin.isatty()
+
         # Check for interrupted sessions
         resume_info = self.tracker.get_resume_info()
         if resume_info:
@@ -110,11 +116,27 @@ class SafeIndexer:
             print(f"  Progress: {resume_info['successful']}/{resume_info['total_processed']} books")
             print(f"{'='*60}\n")
 
-            response = input("Resume this session? [Y/n]: ").strip().lower()
-            if response in ['', 'y', 'yes']:
+            # In interactive mode, ask user
+            if interactive:
+                try:
+                    response = input("Resume this session? [Y/n]: ").strip().lower()
+                    should_resume = response in ['', 'y', 'yes']
+                except (EOFError, KeyboardInterrupt):
+                    # If input fails, default to resuming
+                    print("(Auto-resuming due to input error)")
+                    should_resume = True
+            else:
+                # In non-interactive mode, auto-resume
+                print("🔄 Auto-resuming session (non-interactive mode)\n")
+                should_resume = True
+
+            if should_resume:
                 self.current_session_id = resume_info['session_id']
                 print(f"✅ Resuming session {self.current_session_id}\n")
                 return self.current_session_id
+            else:
+                # Mark old session as abandoned and start new one
+                print(f"⏭️  Starting new session (old session abandoned)\n")
 
         # Start new session
         self.current_session_id = self.tracker.start_session(phase)
