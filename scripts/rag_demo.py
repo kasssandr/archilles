@@ -37,6 +37,7 @@ import time
 import pickle
 import re
 from datetime import datetime
+import threading
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -121,14 +122,29 @@ class archillesRAG:
 
             print(f"  ? ChromaDB ready")
 
-            # Try to count chunks - this will fail if database is corrupted
+            # Try to count chunks with timeout (may hang on corrupted DB)
             print(f"  🔍 DEBUG: About to call collection.count()")
-            try:
-                chunk_count = self.collection.count()
-                print(f"  🔍 DEBUG: collection.count() returned: {chunk_count}")
-                print(f"  Current index: {chunk_count} chunks")
-            except Exception as count_error:
-                # ChromaDB corruption detected
+            chunk_count = None
+            count_error = None
+
+            def count_with_timeout():
+                nonlocal chunk_count, count_error
+                try:
+                    chunk_count = self.collection.count()
+                except Exception as e:
+                    count_error = e
+
+            # Run count in a thread with 5 second timeout
+            count_thread = threading.Thread(target=count_with_timeout, daemon=True)
+            count_thread.start()
+            count_thread.join(timeout=5.0)
+
+            if count_thread.is_alive():
+                # count() is hanging - skip it and continue
+                print(f"  ⚠️  WARNING: collection.count() is hanging (likely corrupted index)")
+                print(f"  ℹ️  Continuing without count - indexing will still work")
+            elif count_error:
+                # count() threw an exception
                 raise ChromaDBCorruptionError(
                     f"ChromaDB index is corrupted (likely from interrupted indexing).\n"
                     f"Error: {count_error}\n\n"
@@ -136,6 +152,10 @@ class archillesRAG:
                     f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
                     f"WARNING: This will delete the entire index. You'll need to re-index all books."
                 )
+            else:
+                # count() succeeded
+                print(f"  🔍 DEBUG: collection.count() returned: {chunk_count}")
+                print(f"  Current index: {chunk_count} chunks")
 
         except Exception as e:
             # Check if this is a known corruption error
