@@ -122,8 +122,10 @@ class archillesRAG:
             print(f"  ? ChromaDB ready")
 
             # Try to count chunks - this will fail if database is corrupted
+            print(f"  🔍 DEBUG: About to call collection.count()")
             try:
                 chunk_count = self.collection.count()
+                print(f"  🔍 DEBUG: collection.count() returned: {chunk_count}")
                 print(f"  Current index: {chunk_count} chunks")
             except Exception as count_error:
                 # ChromaDB corruption detected
@@ -149,6 +151,8 @@ class archillesRAG:
                 # Re-raise other errors
                 raise
 
+        print(f"  🔍 DEBUG: ChromaDB initialization complete, loading BM25...")
+
         # Initialize BM25 index for hybrid search
         self.db_path = Path(db_path)
         self.bm25_index = None
@@ -158,7 +162,9 @@ class archillesRAG:
 
         # Load BM25 index (skip if database was just reset)
         if not reset_db:
+            print(f"  🔍 DEBUG: Calling _load_bm25_index()...")
             self._load_bm25_index()
+            print(f"  🔍 DEBUG: _load_bm25_index() complete")
         else:
             print(f"  ? BM25 index will be built on first indexing")
 
@@ -168,6 +174,8 @@ class archillesRAG:
             print(f"  ? BM25 not available (install: pip install rank-bm25)\n")
         else:
             print(f"  ? BM25 index empty (will be built on first indexing)\n")
+
+        print(f"  🔍 DEBUG: __init__ complete!")
 
     def _extract_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
