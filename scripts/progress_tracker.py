@@ -252,6 +252,87 @@ class ProgressTracker:
 
             return [row['book_id'] for row in cursor.fetchall()]
 
+    def get_failed_books(self, phase: Optional[str] = None, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get list of failed books with their error messages.
+
+        Args:
+            phase: Filter by phase ('phase1' or 'phase2'), or None for all
+            session_id: Filter by session, or None for all sessions
+
+        Returns:
+            List of dicts with book_id, error_message, phase, indexed_at
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            conditions = ["status = 'failed'"]
+            params = []
+
+            if phase:
+                conditions.append("phase = ?")
+                params.append(phase)
+
+            if session_id:
+                conditions.append("session_id = ?")
+                params.append(session_id)
+
+            query = f"""
+                SELECT book_id, error_message, phase, indexed_at, session_id
+                FROM books
+                WHERE {' AND '.join(conditions)}
+                ORDER BY indexed_at DESC
+            """
+            cursor.execute(query, params)
+
+            return [
+                {
+                    'book_id': row['book_id'],
+                    'error': row['error_message'],
+                    'phase': row['phase'],
+                    'indexed_at': row['indexed_at'],
+                    'session_id': row['session_id']
+                }
+                for row in cursor.fetchall()
+            ]
+
+    def clear_failed_status(self, book_ids: List[str], phase: Optional[str] = None) -> int:
+        """
+        Clear failed status for specific books (to allow retry).
+
+        Args:
+            book_ids: List of book IDs to clear
+            phase: Phase to clear, or None for all phases
+
+        Returns:
+            Number of records deleted
+        """
+        if not book_ids:
+            return 0
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            placeholders = ','.join('?' * len(book_ids))
+
+            if phase:
+                cursor.execute(f"""
+                    DELETE FROM books
+                    WHERE book_id IN ({placeholders})
+                    AND phase = ?
+                    AND status = 'failed'
+                """, (*book_ids, phase))
+            else:
+                cursor.execute(f"""
+                    DELETE FROM books
+                    WHERE book_id IN ({placeholders})
+                    AND status = 'failed'
+                """, book_ids)
+
+            deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+
     def get_session_stats(self, session_id: str) -> Dict[str, Any]:
         """Get statistics for a session."""
         with self._get_connection() as conn:

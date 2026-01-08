@@ -214,6 +214,141 @@ def create_index_metadata(
         return IndexMetadata.from_profile(profile=profile, version=version)
 
 
+def save_index_metadata(db_path: str, metadata: IndexMetadata) -> None:
+    """
+    Save index metadata to a JSON file alongside the database.
+
+    Args:
+        db_path: Path to the ChromaDB directory
+        metadata: IndexMetadata to save
+    """
+    from pathlib import Path
+    metadata_path = Path(db_path) / "index_metadata.json"
+    with open(metadata_path, 'w') as f:
+        json.dump(metadata.to_dict(), f, indent=2)
+
+
+def load_index_metadata(db_path: str) -> Optional[IndexMetadata]:
+    """
+    Load index metadata from JSON file.
+
+    Args:
+        db_path: Path to the ChromaDB directory
+
+    Returns:
+        IndexMetadata if file exists, None otherwise
+    """
+    from pathlib import Path
+    metadata_path = Path(db_path) / "index_metadata.json"
+
+    if not metadata_path.exists():
+        return None
+
+    try:
+        with open(metadata_path, 'r') as f:
+            data = json.load(f)
+
+        return IndexMetadata(
+            archilles_version=data.get('archilles_version', 'unknown'),
+            profile_name=data.get('profile_name', 'unknown'),
+            embedding_model=data.get('embedding_model', 'unknown'),
+            chunk_size=data.get('chunk_size', 0),
+            chunk_overlap=data.get('chunk_overlap', 0),
+            created_at=data.get('created_at', ''),
+            hardware_gpu=data.get('hardware_gpu', 'unknown'),
+            hardware_vram_gb=data.get('hardware_vram_gb', 0.0),
+            hardware_ram_gb=data.get('hardware_ram_gb', 0.0)
+        )
+    except (json.JSONDecodeError, KeyError) as e:
+        import logging
+        logging.warning(f"Could not load index metadata: {e}")
+        return None
+
+
+def check_index_compatibility(db_path: str, current_profile: IndexingProfile) -> Dict[str, Any]:
+    """
+    Check if existing index is compatible with current profile.
+
+    Returns compatibility info and warnings.
+
+    Args:
+        db_path: Path to the ChromaDB directory
+        current_profile: Profile we want to use now
+
+    Returns:
+        Dict with 'compatible' (bool), 'warnings' (list), and 'existing_metadata' (if any)
+    """
+    from pathlib import Path
+
+    result = {
+        'compatible': True,
+        'warnings': [],
+        'existing_metadata': None
+    }
+
+    existing = load_index_metadata(db_path)
+    if not existing:
+        # No existing metadata - this is a new index
+        return result
+
+    result['existing_metadata'] = existing
+
+    # Check embedding model compatibility (CRITICAL - must match!)
+    if existing.embedding_model != current_profile.embedding_model:
+        result['compatible'] = False
+        result['warnings'].append(
+            f"INCOMPATIBLE: Index uses '{existing.embedding_model}' but "
+            f"current profile uses '{current_profile.embedding_model}'. "
+            f"Cannot mix embeddings from different models!"
+        )
+
+    # Check chunk size (warning only - can add to existing index)
+    if existing.chunk_size != current_profile.chunk_size:
+        result['warnings'].append(
+            f"NOTICE: Index chunk size ({existing.chunk_size}) differs from "
+            f"current profile ({current_profile.chunk_size}). New chunks will use new size."
+        )
+
+    # Check profile name
+    if existing.profile_name != current_profile.name:
+        result['warnings'].append(
+            f"NOTICE: Index was created with '{existing.profile_name}' profile, "
+            f"but current profile is '{current_profile.name}'."
+        )
+
+    return result
+
+
+def print_index_info(db_path: str) -> None:
+    """Print information about existing index."""
+    from pathlib import Path
+
+    existing = load_index_metadata(db_path)
+
+    print()
+    print("=" * 64)
+    print("  INDEX METADATA")
+    print("=" * 64)
+
+    if not existing:
+        print("  No metadata found (legacy index or new database)")
+    else:
+        print(f"  ARCHILLES Version: {existing.archilles_version}")
+        print(f"  Profile:           {existing.profile_name}")
+        print(f"  Embedding Model:   {existing.embedding_model}")
+        print(f"  Chunk Size:        {existing.chunk_size} tokens")
+        print(f"  Chunk Overlap:     {existing.chunk_overlap} tokens")
+        print(f"  Created:           {existing.created_at[:19] if existing.created_at else 'unknown'}")
+        print()
+        print(f"  Hardware Snapshot:")
+        print(f"    GPU:  {existing.hardware_gpu}")
+        print(f"    VRAM: {existing.hardware_vram_gb:.1f} GB")
+        print(f"    RAM:  {existing.hardware_ram_gb:.1f} GB")
+
+    print("=" * 64)
+    print()
+
+
 # Quick test
 if __name__ == "__main__":
     list_profiles()
