@@ -2,9 +2,12 @@
 """
 ARCHILLES Batch Indexer
 
-Index multiple books from Calibre library by tag, author, or other criteria.
+Index multiple books from Calibre library by tag, author, or all books.
 
 Usage:
+    # Index ALL books in the library (no filter required)
+    python scripts/batch_index.py --all
+
     # Index all books with tag "Leit-Literatur"
     python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -72,6 +75,10 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
     """
     Get all books with a specific tag from Calibre database.
 
+    IMPORTANT: Uses Calibre book ID as primary key to avoid duplicate
+    processing of multi-author books. Each book is returned exactly once,
+    regardless of how many authors it has.
+
     Args:
         library_path: Path to Calibre library
         tag_name: Tag to filter by (case-insensitive)
@@ -87,19 +94,18 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    # Get UNIQUE book IDs first - this is the critical fix!
+    # Multi-author books must only appear once in the result.
     query = """
-    SELECT
+    SELECT DISTINCT
         books.id,
         books.title,
-        books.path,
-        authors.name as author
+        books.path
     FROM books
     INNER JOIN books_tags_link ON books.id = books_tags_link.book
     INNER JOIN tags ON books_tags_link.tag = tags.id
-    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
-    LEFT JOIN authors ON books_authors_link.author = authors.id
     WHERE LOWER(tags.name) = LOWER(?)
-    ORDER BY authors.name, books.title
+    ORDER BY books.id
     """
 
     cursor = conn.execute(query, (tag_name,))
@@ -107,7 +113,11 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
 
     books = []
     for row in rows:
+        book_id = row['id']
         book_path = library_path / row['path']
+
+        # Get ALL authors for this book (aggregated, not iterated)
+        authors = _get_authors_for_book(conn, book_id)
 
         # Find available formats (prefer PDF, then EPUB)
         formats = []
@@ -120,9 +130,9 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
 
         if formats:
             books.append({
-                'id': row['id'],
+                'id': book_id,
                 'title': row['title'],
-                'author': row['author'] or 'Unknown',
+                'author': authors,  # All authors as single string
                 'path': str(book_path),
                 'formats': formats,
                 # Prefer PDF > EPUB > others
@@ -136,9 +146,110 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
     return books
 
 
+def _get_authors_for_book(conn: sqlite3.Connection, book_id: int) -> str:
+    """
+    Get all authors for a book as a single string.
+
+    This helper ensures we aggregate authors instead of iterating over them,
+    preventing duplicate processing of multi-author books.
+
+    Args:
+        conn: SQLite connection to Calibre database
+        book_id: Calibre book ID
+
+    Returns:
+        Authors joined with " & " (e.g., "Mason & Rives & Edmondson")
+    """
+    query = """
+    SELECT authors.name
+    FROM authors
+    INNER JOIN books_authors_link ON authors.id = books_authors_link.author
+    WHERE books_authors_link.book = ?
+    ORDER BY books_authors_link.id
+    """
+    cursor = conn.execute(query, (book_id,))
+    author_rows = cursor.fetchall()
+
+    if author_rows:
+        return ' & '.join([row['name'] for row in author_rows])
+    return 'Unknown'
+
+
+def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
+    """
+    Get ALL books from Calibre database (no filtering).
+
+    IMPORTANT: Uses Calibre book ID as primary key to avoid duplicate
+    processing of multi-author books. Each book is returned exactly once.
+
+    Args:
+        library_path: Path to Calibre library
+
+    Returns:
+        List of book dictionaries with metadata and file paths
+    """
+    db_path = library_path / "metadata.db"
+
+    if not db_path.exists():
+        raise FileNotFoundError(f"Calibre database not found: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    # Get all books by unique ID
+    query = """
+    SELECT
+        books.id,
+        books.title,
+        books.path
+    FROM books
+    ORDER BY books.id
+    """
+
+    cursor = conn.execute(query)
+    rows = cursor.fetchall()
+
+    books = []
+    for row in rows:
+        book_id = row['id']
+        book_path = library_path / row['path']
+
+        # Get ALL authors for this book (aggregated, not iterated)
+        authors = _get_authors_for_book(conn, book_id)
+
+        # Find available formats
+        formats = []
+        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
+            for file in book_path.glob(f'*{ext}'):
+                formats.append({
+                    'format': ext[1:].upper(),
+                    'path': str(file)
+                })
+
+        if formats:
+            books.append({
+                'id': book_id,
+                'title': row['title'],
+                'author': authors,
+                'path': str(book_path),
+                'formats': formats,
+                'best_format': next(
+                    (f for f in formats if f['format'] == 'PDF'),
+                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
+                )
+            })
+
+    conn.close()
+    return books
+
+
 def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, Any]]:
     """
     Get all books by a specific author from Calibre database.
+
+    IMPORTANT: Uses Calibre book ID as primary key to avoid duplicate
+    processing of multi-author books. Each book is returned exactly once,
+    regardless of how many authors it has.
 
     Args:
         library_path: Path to Calibre library
@@ -155,17 +266,18 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    # Get UNIQUE book IDs first - this is the critical fix!
+    # Multi-author books must only appear once in the result.
     query = """
-    SELECT
+    SELECT DISTINCT
         books.id,
         books.title,
-        books.path,
-        authors.name as author
+        books.path
     FROM books
-    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
-    LEFT JOIN authors ON books_authors_link.author = authors.id
+    INNER JOIN books_authors_link ON books.id = books_authors_link.book
+    INNER JOIN authors ON books_authors_link.author = authors.id
     WHERE LOWER(authors.name) LIKE LOWER(?)
-    ORDER BY books.title
+    ORDER BY books.id
     """
 
     cursor = conn.execute(query, (f'%{author_name}%',))
@@ -173,7 +285,11 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
 
     books = []
     for row in rows:
+        book_id = row['id']
         book_path = library_path / row['path']
+
+        # Get ALL authors for this book (aggregated, not iterated)
+        authors = _get_authors_for_book(conn, book_id)
 
         # Find available formats
         formats = []
@@ -186,9 +302,9 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
 
         if formats:
             books.append({
-                'id': row['id'],
+                'id': book_id,
                 'title': row['title'],
-                'author': row['author'] or 'Unknown',
+                'author': authors,  # All authors as single string
                 'path': str(book_path),
                 'formats': formats,
                 'best_format': next(
@@ -498,6 +614,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Index ALL books in the library (no filter required)
+  python scripts/batch_index.py --all
+
   # Index all books tagged "Leit-Literatur"
   python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -523,6 +642,8 @@ Examples:
 
     # Selection criteria (mutually exclusive)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--all', action='store_true',
+                       help='Index ALL books in the library (no tag/author filter required)')
     group.add_argument('--tag', help='Index books with this tag')
     group.add_argument('--author', help='Index books by this author (partial match)')
 
@@ -564,7 +685,10 @@ Examples:
     print(f"📚 Calibre library: {library_path}")
 
     # Get books based on criteria
-    if args.tag:
+    if args.all:
+        print(f"📚 Indexing ALL books in the library")
+        books = get_all_books(library_path)
+    elif args.tag:
         print(f"🏷️  Filtering by tag: {args.tag}")
         books = get_books_by_tag(library_path, args.tag)
     elif args.author:

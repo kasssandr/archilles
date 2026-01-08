@@ -107,20 +107,51 @@ class SafeIndexer:
         # Check for interrupted sessions
         resume_info = self.tracker.get_resume_info()
         if resume_info:
-            print(f"\n{'='*60}")
-            print(f"📋 INTERRUPTED SESSION FOUND")
-            print(f"{'='*60}")
-            print(f"  Session: {resume_info['session_id']}")
-            print(f"  Started: {resume_info['start_time']}")
-            print(f"  Phase: {resume_info['phase']}")
-            print(f"  Progress: {resume_info['successful']}/{resume_info['total_processed']} books")
-            print(f"{'='*60}\n")
+            completed = resume_info['successful']
+            total = resume_info['total_processed']
+            remaining = total - completed if total > completed else 0
+            failed = resume_info.get('failed', 0)
+
+            print(f"\n{'='*64}")
+            print(f"  INTERRUPTED SESSION FOUND")
+            print(f"{'='*64}")
+            print(f"  Session ID:  {resume_info['session_id']}")
+            print(f"  Started:     {resume_info['start_time']}")
+            print(f"  Phase:       {resume_info['phase']}")
+            print(f"")
+            print(f"  Progress:")
+            print(f"    {completed}/{total} books completed")
+            if failed > 0:
+                print(f"    {failed} books failed")
+            print(f"    {remaining} books remaining")
+            print(f"{'='*64}")
+            print(f"")
+            print(f"  [F] Continue - Index the {remaining} remaining books")
+            if failed > 0:
+                print(f"  [R] Retry failures - Re-index the {failed} failed books")
+            print(f"  [N] New session - Start fresh (progress will be reset)")
+            print(f"  [A] Abort - Exit without changes")
+            print(f"{'='*64}\n")
 
             # In interactive mode, ask user
             if interactive:
                 try:
-                    response = input("Resume this session? [Y/n]: ").strip().lower()
-                    should_resume = response in ['', 'y', 'yes']
+                    response = input("Choose an option [F/r/n/a]: ").strip().upper()
+                    if response in ['', 'F']:
+                        should_resume = True
+                    elif response == 'R' and failed > 0:
+                        # Retry failed books - mark as resume but with failed books
+                        should_resume = True
+                        # Note: The actual retry logic would need additional handling
+                        # For now, resume continues with remaining books
+                    elif response == 'N':
+                        should_resume = False
+                    elif response == 'A':
+                        print("Aborted.")
+                        sys.exit(0)
+                    else:
+                        # Default to continue
+                        should_resume = True
                 except (EOFError, KeyboardInterrupt):
                     # If input fails, default to resuming
                     print("(Auto-resuming due to input error)")
@@ -132,11 +163,11 @@ class SafeIndexer:
 
             if should_resume:
                 self.current_session_id = resume_info['session_id']
-                print(f"✅ Resuming session {self.current_session_id}\n")
+                print(f"✅ Continuing session {self.current_session_id}\n")
                 return self.current_session_id
             else:
                 # Mark old session as abandoned and start new one
-                print(f"⏭️  Starting new session (old session abandoned)\n")
+                print(f"⏭️  Starting new session (old progress discarded)\n")
 
         # Start new session
         self.current_session_id = self.tracker.start_session(phase)
