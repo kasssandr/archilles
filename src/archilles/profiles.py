@@ -15,7 +15,7 @@ Reference: Tom's ThinkPad P15 (Quadro T1000, 4GB VRAM) -> "minimal" profile
 """
 
 from dataclasses import dataclass, field, asdict
-from typing import Literal, Dict, Any
+from typing import Literal, Dict, Any, Optional
 from datetime import datetime
 import json
 
