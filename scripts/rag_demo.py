@@ -1614,6 +1614,10 @@ class archillesRAG:
 
             # Direct link to PDF/EPUB (file:/// protocol)
             source_file = metadata.get('source_file')
+            calibre_id = metadata.get('calibre_id')
+
+            link_parts = []
+
             if source_file:
                 # Create file:/// URL for clickable links in Joplin/Obsidian
                 # Windows: file:///D:/path/to/file.pdf
@@ -1636,7 +1640,22 @@ class archillesRAG:
                 else:
                     filename = url_path
 
-                lines.append(f"**Quelle:** [{filename}]({file_url})  ")
+                link_parts.append(f"[{filename}]({file_url})")
+
+            # Add Calibre URI if available (opens in Calibre library viewer)
+            if calibre_id:
+                # Format: calibre://view/<calibre_id>
+                # Optional: add #page=N if we have a page number
+                calibre_url = f"calibre://view/{calibre_id}"
+
+                # Add page anchor if we have page info
+                if metadata.get('page'):
+                    calibre_url += f"#page={metadata['page']}"
+
+                link_parts.append(f"[📚 Open in Calibre]({calibre_url})")
+
+            if link_parts:
+                lines.append(f"**Quelle:** {' | '.join(link_parts)}  ")
 
             lines.append(f"")
 
