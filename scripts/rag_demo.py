@@ -946,33 +946,34 @@ class archillesRAG:
     def query(
         self,
         query_text: str,
-        top_k: int = 5,
+        top_k: int = 10,
         mode: Literal['semantic', 'keyword', 'hybrid'] = 'hybrid',
         language: str = None,
         book_id: str = None,
         exact_phrase: bool = False,
         tag_filter: List[str] = None,
         section_filter: str = None,
-        chunk_type_filter: str = None,
-        max_per_book: int = 3
+        chunk_type_filter: str = 'content',
+        max_per_book: int = 2
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
 
         Args:
             query_text: Search query
-            top_k: Number of results to return
-            mode: Search mode - 'semantic' (BGE-M3), 'keyword' (BM25), or 'hybrid' (both)
+            top_k: Number of results to return (default: 10)
+            mode: Search mode - 'semantic' (BGE-M3), 'keyword' (BM25), or 'hybrid' (both, default)
             language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
             tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
             section_filter: Filter by section type ('main_content', 'front_matter', 'back_matter')
                            Use 'main' to exclude front/back matter from results
-            chunk_type_filter: Filter by chunk type ('phase1_metadata', 'content', 'calibre_comment')
-                              Use 'phase1_metadata' to search only Calibre comments/metadata
-                              Use 'content' to search only book text (excludes comments)
-            max_per_book: Maximum results per book (default: 3, use 999 for unlimited)
+            chunk_type_filter: Filter by chunk type (default: 'content' - book text only)
+                              'content' = book text only (DEFAULT - excludes Calibre comments)
+                              'calibre_comment' = Calibre comments only
+                              None = all chunk types (book text + comments mixed)
+            max_per_book: Maximum results per book (default: 2, use 999 for unlimited)
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -1992,7 +1993,7 @@ Examples:
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
     query_parser.add_argument('query', help='Search query')
-    query_parser.add_argument('--top-k', type=int, default=5, help='Number of results (default: 5)')
+    query_parser.add_argument('--top-k', type=int, default=10, help='Number of results (default: 10)')
     query_parser.add_argument('--mode', choices=['semantic', 'keyword', 'hybrid'], default='hybrid',
                               help='Search mode: semantic (BGE-M3), keyword (BM25), or hybrid (both, default)')
     query_parser.add_argument('--exact', action='store_true',
@@ -2002,9 +2003,10 @@ Examples:
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
     query_parser.add_argument('--section', choices=['main', 'main_content', 'front_matter', 'back_matter'],
                               help='Filter by section type: main (exclude index/TOC), front_matter, back_matter')
-    query_parser.add_argument('--chunk-type', choices=['phase1_metadata', 'content', 'calibre_comment'],
-                              help='Filter by chunk type: phase1_metadata (Calibre comments/metadata), content (book text), calibre_comment')
-    query_parser.add_argument('--max-per-book', type=int, default=3, help='Maximum results per book (default: 3, use 999 for unlimited)')
+    query_parser.add_argument('--chunk-type', choices=['phase1_metadata', 'content', 'calibre_comment', 'all'],
+                              default='content',
+                              help='Filter by chunk type: content (book text only, DEFAULT), calibre_comment (Calibre comments), all (both)')
+    query_parser.add_argument('--max-per-book', type=int, default=2, help='Maximum results per book (default: 2, use 999 for unlimited)')
     query_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     query_parser.add_argument('--export', metavar='FILE', help='Export results to Markdown file (for Joplin/Obsidian)')
 
@@ -2047,6 +2049,10 @@ Examples:
 
         elif args.command == 'query':
             # Search
+            # Handle chunk_type: 'all' means no filter (None), otherwise use the specified type
+            chunk_type = args.chunk_type if hasattr(args, 'chunk_type') else 'content'
+            chunk_type_filter = None if chunk_type == 'all' else chunk_type
+
             results = rag.query(
                 args.query,
                 top_k=args.top_k,
@@ -2056,8 +2062,8 @@ Examples:
                 exact_phrase=args.exact,
                 tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None,
                 section_filter=args.section if hasattr(args, 'section') else None,
-                chunk_type_filter=args.chunk_type if hasattr(args, 'chunk_type') else None,
-                max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 3
+                chunk_type_filter=chunk_type_filter,
+                max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 2
             )
             rag.print_results(results, query_text=args.query)
 
