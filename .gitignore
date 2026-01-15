@@ -71,3 +71,4 @@ meine_zitate.md
 test.md
 test_search.py
 *.txt
+.env
