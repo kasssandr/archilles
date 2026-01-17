@@ -1514,7 +1514,15 @@ class archillesRAG:
 
             citation = ', '.join(citation_parts) if citation_parts else metadata.get('book_id', 'Unknown')
 
-            print(f"\n[{rank}] {citation}")
+            # Add chunk type indicator
+            chunk_type = metadata.get('chunk_type', '')
+            type_indicator = ''
+            if chunk_type == 'calibre_comment':
+                type_indicator = ' [CALIBRE_COMMENT]'
+            elif chunk_type == 'phase1_metadata':
+                type_indicator = ' [METADATA]'
+
+            print(f"\n[{rank}] {citation}{type_indicator}")
             print(f"    Relevanz: {similarity:.3f} ({'sehr hoch' if similarity > 0.8 else 'hoch' if similarity > 0.6 else 'mittel'})")
 
             # Show page number warning if applicable
@@ -1595,14 +1603,22 @@ class archillesRAG:
             author = metadata.get('author', '')
             year = metadata.get('year', '')
 
+            # Add chunk type indicator
+            chunk_type = metadata.get('chunk_type', '')
+            type_indicator = ''
+            if chunk_type == 'calibre_comment':
+                type_indicator = ' 📝'  # Emoji for markdown
+            elif chunk_type == 'phase1_metadata':
+                type_indicator = ' ℹ️'
+
             if author and year:
-                header = f"## [{rank}] {author}: {book_title} ({year})"
+                header = f"## [{rank}] {author}: {book_title} ({year}){type_indicator}"
             elif author:
-                header = f"## [{rank}] {author}: {book_title}"
+                header = f"## [{rank}] {author}: {book_title}{type_indicator}"
             elif year:
-                header = f"## [{rank}] {book_title} ({year})"
+                header = f"## [{rank}] {book_title} ({year}){type_indicator}"
             else:
-                header = f"## [{rank}] {book_title}"
+                header = f"## [{rank}] {book_title}{type_indicator}"
 
             lines.append(header)
 
