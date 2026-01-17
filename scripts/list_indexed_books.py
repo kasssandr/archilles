@@ -77,7 +77,8 @@ def get_indexed_books(rag: archillesRAG) -> dict:
         'title': None,
         'author': None,
         'format': None,
-        'tags': None
+        'tags': None,
+        'calibre_id': None
     })
 
     for metadata in all_metadatas:
@@ -105,6 +106,8 @@ def get_indexed_books(rag: archillesRAG) -> dict:
             books[book_id]['format'] = metadata.get('format', 'Unknown')
         if not books[book_id]['tags']:
             books[book_id]['tags'] = metadata.get('tags', '')
+        if not books[book_id]['calibre_id']:
+            books[book_id]['calibre_id'] = metadata.get('calibre_id', '')
 
     # Convert to list of dicts
     result = []
@@ -116,7 +119,8 @@ def get_indexed_books(rag: archillesRAG) -> dict:
             'chunks': info['chunks'],
             'indexed_at': info['indexed_at'],
             'format': info['format'],
-            'tags': info['tags']
+            'tags': info['tags'],
+            'calibre_id': info['calibre_id']
         })
 
     return result
@@ -140,24 +144,25 @@ def print_books_table(books: list, before_date: datetime = None):
         print("❌ No books found matching criteria")
         return
 
-    print(f"\n{'='*100}")
+    print(f"\n{'='*110}")
     print(f"📚 INDEXED BOOKS ({len(books)} total)")
-    print(f"{'='*100}\n")
+    print(f"{'='*110}\n")
 
     # Table header
-    print(f"{'Indexed At':<18} {'Chunks':<8} {'Author':<20} {'Title':<40}")
-    print(f"{'-'*18} {'-'*8} {'-'*20} {'-'*40}")
+    print(f"{'Indexed At':<18} {'Chunks':<8} {'ID':<6} {'Author':<20} {'Title':<40}")
+    print(f"{'-'*18} {'-'*8} {'-'*6} {'-'*20} {'-'*40}")
 
     # Table rows
     for book in books:
         date_str = format_date(book['indexed_at'])
         chunks_str = str(book['chunks'])
+        calibre_id_str = (str(book['calibre_id']) if book['calibre_id'] else '-')[:5]
         author_str = (book['author'] or 'Unknown')[:19]
         title_str = (book['title'] or 'Unknown')[:39]
 
-        print(f"{date_str:<18} {chunks_str:<8} {author_str:<20} {title_str:<40}")
+        print(f"{date_str:<18} {chunks_str:<8} {calibre_id_str:<6} {author_str:<20} {title_str:<40}")
 
-    print(f"\n{'='*100}\n")
+    print(f"\n{'='*110}\n")
 
     # Summary statistics
     total_chunks = sum(b['chunks'] for b in books)
@@ -181,7 +186,7 @@ def export_to_csv(books: list, output_file: str):
     """Export books to CSV file."""
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.DictWriter(f, fieldnames=[
-            'book_id', 'title', 'author', 'chunks', 'indexed_at', 'format', 'tags'
+            'book_id', 'calibre_id', 'title', 'author', 'chunks', 'indexed_at', 'format', 'tags'
         ])
         writer.writeheader()
 

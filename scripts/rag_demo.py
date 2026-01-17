@@ -1341,31 +1341,53 @@ class archillesRAG:
         return final_results
 
     def _build_where_clause(self, language: str = None, book_id: str = None, chunk_type_filter: str = None):
-        """Build ChromaDB where clause for filtering."""
+        """
+        Build ChromaDB where clause for filtering.
+
+        book_id can be:
+        - Full book_id (e.g., "Goldsworthy_RomanWarfare_9654")
+        - Calibre numeric ID (e.g., "9654" or 9654)
+        - Partial book_id match
+        """
         if not (language or book_id or chunk_type_filter):
             return None
 
-        where_conditions = {}
+        where_conditions = []
 
         if language:
             # Support comma-separated languages
             if ',' in language:
                 langs = [l.strip() for l in language.split(',')]
-                where_conditions['language'] = {'$in': langs}
+                where_conditions.append({'language': {'$in': langs}})
             else:
-                where_conditions['language'] = language
+                where_conditions.append({'language': language})
 
         if book_id:
-            where_conditions['book_id'] = book_id
+            # Try to match either book_id OR calibre_id
+            # If book_id looks like a pure number, assume it's a Calibre ID
+            book_id_str = str(book_id)
+
+            if book_id_str.isdigit():
+                # Pure numeric: Try calibre_id first (both as int and string for compatibility)
+                # ChromaDB may store calibre_id as int or string depending on indexing code version
+                where_conditions.append({
+                    '$or': [
+                        {'calibre_id': int(book_id_str)},
+                        {'calibre_id': book_id_str}
+                    ]
+                })
+            else:
+                # Non-numeric: match book_id exactly
+                where_conditions.append({'book_id': book_id_str})
 
         if chunk_type_filter:
-            where_conditions['chunk_type'] = chunk_type_filter
+            where_conditions.append({'chunk_type': chunk_type_filter})
 
-        # Combine conditions with AND
+        # Combine all conditions with AND
         if len(where_conditions) > 1:
-            return {'$and': [{k: v} for k, v in where_conditions.items()]}
+            return {'$and': where_conditions}
         elif where_conditions:
-            return where_conditions
+            return where_conditions[0]
         return None
 
     def _format_results(self, results: Dict, score_type: str = 'semantic') -> List[Dict[str, Any]]:
