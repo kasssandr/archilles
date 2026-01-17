@@ -1501,23 +1501,40 @@ class archillesRAG:
             metadata = result['metadata']
             text = result['text']
 
-            # Build citation with printed page numbers
+            # Build citation with section/chapter info
             citation_parts = []
             if metadata.get('book_title'):
                 citation_parts.append(metadata['book_title'])
 
-            # Check for printed page number with confidence
+            # Priority: Section number and/or section title
+            section = metadata.get('section')
+            section_title = metadata.get('section_title')
+
+            if section and section_title:
+                # Best case: "Section 19.20 - LAND WARFARE"
+                citation_parts.append(f"Section {section} - {section_title}")
+            elif section:
+                # Just section number: "Section 19.20"
+                citation_parts.append(f"Section {section}")
+            elif section_title:
+                # Just section title: "LAND WARFARE"
+                citation_parts.append(section_title)
+            elif metadata.get('chapter'):
+                # Fallback: chapter name
+                citation_parts.append(metadata['chapter'])
+
+            # Also show page number if available (in addition to section)
             printed_page = metadata.get('printed_page')
             printed_conf = metadata.get('printed_page_confidence', 0.0)
             page_warning = None
 
             # Debug mode: show raw metadata values
             if os.environ.get('DEBUG_METADATA'):
+                print(f"    [DEBUG] section: {repr(section)}, section_title: {repr(section_title)}")
                 print(f"    [DEBUG] printed_page: {repr(printed_page)} (type: {type(printed_page).__name__})")
 
             if printed_page and printed_conf >= 0.8:
                 # Use printed page number (high confidence)
-                # Explicitly convert to string to preserve special characters like asterisks
                 printed_page_str = str(printed_page) if printed_page else ""
                 citation_parts.append(f"S. {printed_page_str}")
 
@@ -1531,8 +1548,6 @@ class archillesRAG:
                 # Add warning if printed page exists but low confidence
                 if printed_page:
                     page_warning = f"? Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
-            elif metadata.get('chapter'):
-                citation_parts.append(metadata['chapter'])
 
             citation = ', '.join(citation_parts) if citation_parts else metadata.get('book_id', 'Unknown')
 
@@ -1608,7 +1623,24 @@ class archillesRAG:
             # Build citation
             book_title = metadata.get('book_title', metadata.get('book_id', 'Unknown'))
 
-            # Page number with confidence
+            # Build citation with section-aware priority
+            section = metadata.get('section')
+            section_title = metadata.get('section_title')
+            chapter = metadata.get('chapter')
+
+            citation_parts = []
+
+            # Priority 1: Section info (if available)
+            if section and section_title:
+                citation_parts.append(f"Section {section} - {section_title}")
+            elif section:
+                citation_parts.append(f"Section {section}")
+            elif section_title:
+                citation_parts.append(section_title)
+            elif chapter:
+                citation_parts.append(chapter)
+
+            # Add page info
             printed_page = metadata.get('printed_page')
             printed_conf = metadata.get('printed_page_confidence', 0.0)
 
@@ -1616,10 +1648,9 @@ class archillesRAG:
                 page_str = f"S. {str(printed_page)}"
                 if printed_conf < 1.0:
                     page_str += f" (Konfidenz: {printed_conf:.2f})"
+                citation_parts.append(page_str)
             elif metadata.get('page'):
-                page_str = f"PDF S. {metadata['page']}"
-            else:
-                page_str = metadata.get('chapter', '')
+                citation_parts.append(f"PDF S. {metadata['page']}")
 
             # Result header with author and year
             author = metadata.get('author', '')
@@ -1644,9 +1675,9 @@ class archillesRAG:
 
             lines.append(header)
 
-            # Page number
-            if page_str:
-                lines.append(f"**Seite:** {page_str}  ")
+            # Location (section + page)
+            if citation_parts:
+                lines.append(f"**Ort:** {' | '.join(citation_parts)}  ")
 
             # Relevanz
             lines.append(f"**Relevanz:** {similarity:.3f}  ")

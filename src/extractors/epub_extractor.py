@@ -83,6 +83,18 @@ class EPUBExtractor(BaseExtractor):
         # Extract TOC
         toc = self._extract_toc_ebooklib(book)
 
+        # Build href -> TOC mapping for section numbers
+        toc_map = {}
+        for toc_entry in toc:
+            if toc_entry.get('href'):
+                # Strip anchor from href (e.g., "chapter3.xhtml#section2" -> "chapter3.xhtml")
+                href_base = toc_entry['href'].split('#')[0]
+                toc_map[href_base] = {
+                    'section': toc_entry.get('section'),
+                    'title': toc_entry.get('title'),
+                    'level': toc_entry.get('level', 1),
+                }
+
         # Extract text from all chapters
         chapters_text = []
         chapters_metadata = []
@@ -109,9 +121,19 @@ class EPUBExtractor(BaseExtractor):
                     if h1:
                         chapter_title = h1.get_text(strip=True)
 
+                    # Get section info from TOC if available
+                    item_name = item.get_name()
+                    toc_info = toc_map.get(item_name, {})
+
+                    # Detect section type (front_matter, main_content, back_matter)
+                    section_type = self._detect_section_type(chapter_title or item_name)
+
                     chapters_metadata.append({
-                        'chapter': chapter_title or item.get_name(),
-                        'file': item.get_name(),
+                        'chapter': chapter_title or item_name,
+                        'section': toc_info.get('section'),
+                        'section_title': toc_info.get('title'),
+                        'section_type': section_type,
+                        'file': item_name,
                     })
 
         full_text = '\n\n---\n\n'.join(chapters_text)
@@ -205,23 +227,47 @@ class EPUBExtractor(BaseExtractor):
         )
 
     def _extract_toc_ebooklib(self, book) -> List[Dict[str, Any]]:
-        """Extract table of contents from EPUB."""
-        toc = []
+        """
+        Extract table of contents from EPUB.
 
-        def parse_toc_item(item, level=1):
+        Returns list of TOC entries with:
+        - title: Chapter/section title
+        - level: Nesting level (1, 2, 3...)
+        - section: Section number if present (e.g., "19.20")
+        - href: Link to file in EPUB
+        """
+        toc = []
+        section_counters = [0, 0, 0, 0, 0]  # Track section numbers at each level
+
+        def parse_toc_item(item, level=1, parent_section=''):
             if isinstance(item, tuple):
-                # Simple TOC entry
+                # TOC entry with possible children
                 section, children = item[0], item[1] if len(item) > 1 else []
-                toc.append({
-                    'title': section.title if hasattr(section, 'title') else str(section),
+
+                # Extract title and href
+                title = section.title if hasattr(section, 'title') else str(section)
+                href = section.href if hasattr(section, 'href') else None
+
+                # Try to extract section number from title
+                section_num = self._extract_section_number(title, level, parent_section, section_counters)
+
+                toc_entry = {
+                    'title': title,
                     'level': level,
-                })
+                    'href': href,
+                }
+                if section_num:
+                    toc_entry['section'] = section_num
+
+                toc.append(toc_entry)
+
+                # Parse children
                 if children:
                     for child in children:
-                        parse_toc_item(child, level + 1)
+                        parse_toc_item(child, level + 1, section_num or parent_section)
             elif isinstance(item, list):
                 for sub_item in item:
-                    parse_toc_item(sub_item, level)
+                    parse_toc_item(sub_item, level, parent_section)
 
         try:
             toc_items = book.toc
@@ -232,6 +278,63 @@ class EPUBExtractor(BaseExtractor):
 
         return toc
 
+    def _extract_section_number(self, title: str, level: int, parent_section: str, counters: List[int]) -> Optional[str]:
+        """
+        Extract section number from TOC title or generate based on hierarchy.
+
+        Handles formats like:
+        - "19.20 Land Warfare" -> "19.20"
+        - "Chapter 3" -> "3"
+        - "3.4.2 Tactics" -> "3.4.2"
+        """
+        import re
+
+        # Pattern 1: Number(s) at start: "19.20 Title" or "3 Title"
+        match = re.match(r'^(\d+(?:\.\d+)*)\s+', title)
+        if match:
+            return match.group(1)
+
+        # Pattern 2: "Chapter X" or "Section X.Y"
+        match = re.search(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', title, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+        # If no explicit number found, return None (we won't auto-generate)
+        # Better to have no section number than an incorrect one
+        return None
+
+    def _detect_section_type(self, title: str) -> str:
+        """
+        Detect if section is front matter, main content, or back matter.
+
+        Returns:
+            'front_matter', 'main_content', or 'back_matter'
+        """
+        title_lower = title.lower()
+
+        # Front matter patterns
+        front_patterns = [
+            'preface', 'foreword', 'introduction', 'acknowledgments',
+            'dedication', 'table of contents', 'toc', 'about the author',
+            'about this book', 'prologue'
+        ]
+        for pattern in front_patterns:
+            if pattern in title_lower:
+                return 'front_matter'
+
+        # Back matter patterns
+        back_patterns = [
+            'index', 'bibliography', 'references', 'glossary',
+            'appendix', 'notes', 'endnotes', 'epilogue',
+            'afterword', 'about the publisher', 'colophon'
+        ]
+        for pattern in back_patterns:
+            if pattern in title_lower:
+                return 'back_matter'
+
+        # Default to main content
+        return 'main_content'
+
     def _create_chunks_with_chapters(
         self,
         chapters_text: List[str],
@@ -240,7 +343,7 @@ class EPUBExtractor(BaseExtractor):
         title: str,
         author: str
     ) -> List[Dict[str, Any]]:
-        """Create chunks with chapter information."""
+        """Create chunks with chapter and section information."""
         chunks = []
 
         for chapter_text, chapter_meta in zip(chapters_text, chapters_metadata):
@@ -250,6 +353,9 @@ class EPUBExtractor(BaseExtractor):
                 title=title,
                 author=author,
                 chapter=chapter_meta.get('chapter'),
+                section=chapter_meta.get('section'),
+                section_title=chapter_meta.get('section_title'),
+                section_type=chapter_meta.get('section_type', 'main_content'),
             )
 
             chapter_chunks = self._create_chunks(chapter_text, base_metadata)
