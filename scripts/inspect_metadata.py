@@ -57,6 +57,7 @@ def inspect_book_metadata(book_id: str, limit: int = 5):
         print(f"Section Type: {metadata.get('section_type', 'N/A')}")
         print(f"Chunk Type: {metadata.get('chunk_type', 'N/A')}")
         print(f"Page: {metadata.get('page', 'N/A')}")
+        print(f"Source File: {metadata.get('source_file', 'N/A')}")
         print(f"Indexed At: {metadata.get('indexed_at', 'N/A')}")
         print()
 
