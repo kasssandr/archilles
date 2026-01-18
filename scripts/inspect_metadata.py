@@ -14,13 +14,13 @@ def inspect_book_metadata(book_id: str, limit: int = 5):
     calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH')
     if calibre_library:
         db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
-        print(f"📚 Using default RAG database: {db_path}")
+        print(f"Using default RAG database: {db_path}")
     else:
         db_path = "./archilles_rag_db"
-        print(f"⚠️  CALIBRE_LIBRARY_PATH not set, using local: {db_path}")
+        print(f"WARNING: CALIBRE_LIBRARY_PATH not set, using local: {db_path}")
 
     rag = archillesRAG(db_path=db_path)
-    print(f"📊 Total chunks in index: {rag.collection.count()}")
+    print(f"Total chunks in index: {rag.collection.count()}")
 
     # Query chunks for this book
     where_clause = None
@@ -40,7 +40,7 @@ def inspect_book_metadata(book_id: str, limit: int = 5):
         limit=limit
     )
 
-    print(f"\n📚 Showing {len(results['ids'])} chunks from book {book_id}\n")
+    print(f"\nShowing {len(results['ids'])} chunks from book {book_id}\n")
 
     for i, (chunk_id, metadata) in enumerate(zip(results['ids'], results['metadatas']), 1):
         print(f"{'='*80}")
