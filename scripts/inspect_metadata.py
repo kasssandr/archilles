@@ -10,6 +10,8 @@ from scripts.rag_demo import archillesRAG
 def inspect_book_metadata(book_id: str, limit: int = 5):
     """Show metadata for a few chunks from a specific book."""
     rag = archillesRAG()
+    print(f"📂 Database: {rag.db_path}")
+    print(f"📊 Total chunks in index: {rag.collection.count()}")
 
     # Query chunks for this book
     where_clause = None
