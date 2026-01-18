@@ -1,7 +1,7 @@
 """EPUB text extractor."""
 
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import zipfile
 import xml.etree.ElementTree as ET
 
