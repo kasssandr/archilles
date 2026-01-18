@@ -128,6 +128,12 @@ class EPUBExtractor(BaseExtractor):
                     # Detect section type (front_matter, main_content, back_matter)
                     section_type = self._detect_section_type(chapter_title or item_name)
 
+                    # DEBUG: Print first few chapters
+                    if len(chapters_metadata) < 3:
+                        print(f"  DEBUG Chapter {len(chapters_metadata)}: {chapter_title or item_name}")
+                        print(f"         Section type: {section_type}")
+                        print(f"         TOC info: {toc_info}")
+
                     chapters_metadata.append({
                         'chapter': chapter_title or item_name,
                         'section': toc_info.get('section'),
