@@ -284,10 +284,17 @@ class EPUBExtractor(BaseExtractor):
 
         try:
             toc_items = book.toc
+            print(f"  DEBUG: book.toc type: {type(toc_items)}")
+            print(f"  DEBUG: book.toc length: {len(toc_items) if toc_items else 0}")
             if toc_items:
+                print(f"  DEBUG: First item type: {type(toc_items[0]) if len(toc_items) > 0 else 'N/A'}")
+                if len(toc_items) > 0 and hasattr(toc_items[0], '__dict__'):
+                    print(f"  DEBUG: First item attributes: {toc_items[0].__dict__}")
                 parse_toc_item(toc_items)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"  DEBUG: TOC extraction failed with error: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
 
         return toc
 
