@@ -2,6 +2,7 @@
 """Quick script to inspect metadata for specific chunks."""
 
 import sys
+import os
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -9,8 +10,16 @@ from scripts.rag_demo import archillesRAG
 
 def inspect_book_metadata(book_id: str, limit: int = 5):
     """Show metadata for a few chunks from a specific book."""
-    rag = archillesRAG()
-    print(f"📂 Database: {rag.db_path}")
+    # Use same database path logic as main script
+    calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH')
+    if calibre_library:
+        db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
+        print(f"📚 Using default RAG database: {db_path}")
+    else:
+        db_path = "./archilles_rag_db"
+        print(f"⚠️  CALIBRE_LIBRARY_PATH not set, using local: {db_path}")
+
+    rag = archillesRAG(db_path=db_path)
     print(f"📊 Total chunks in index: {rag.collection.count()}")
 
     # Query chunks for this book
