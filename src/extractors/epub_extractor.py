@@ -284,17 +284,37 @@ class EPUBExtractor(BaseExtractor):
 
         try:
             toc_items = book.toc
-            print(f"  DEBUG: book.toc type: {type(toc_items)}")
-            print(f"  DEBUG: book.toc length: {len(toc_items) if toc_items else 0}")
-            if toc_items:
-                print(f"  DEBUG: First item type: {type(toc_items[0]) if len(toc_items) > 0 else 'N/A'}")
-                if len(toc_items) > 0 and hasattr(toc_items[0], '__dict__'):
-                    print(f"  DEBUG: First item attributes: {toc_items[0].__dict__}")
-                parse_toc_item(toc_items)
+            if not toc_items:
+                return toc
+
+            # Handle flat list of Link objects (most common format)
+            if isinstance(toc_items, list):
+                for item in toc_items:
+                    # Check if it's a Link object (has href and title attributes)
+                    if hasattr(item, 'href') and hasattr(item, 'title'):
+                        title = item.title if item.title else str(item)
+                        href = item.href if item.href else None
+
+                        # Try to extract section number from title
+                        section_num = self._extract_section_number(title, 1, '', section_counters)
+
+                        toc_entry = {
+                            'title': title,
+                            'level': 1,
+                            'href': href,
+                        }
+                        if section_num:
+                            toc_entry['section'] = section_num
+
+                        toc.append(toc_entry)
+                    # Handle nested tuple structure (alternative TOC format)
+                    elif isinstance(item, tuple):
+                        parse_toc_item(item, 1, '')
+            # Handle legacy tuple-based TOC
+            elif isinstance(toc_items, tuple):
+                parse_toc_item(toc_items, 1, '')
         except Exception as e:
             print(f"  DEBUG: TOC extraction failed with error: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
 
         return toc
 
