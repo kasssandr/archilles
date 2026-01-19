@@ -710,6 +710,14 @@ class archillesRAG:
             if 'metadata' in chunk and chunk['metadata'].get('chapter'):
                 metadata['chapter'] = chunk['metadata']['chapter']
 
+            # Add section info if available (EPUB section metadata)
+            if 'metadata' in chunk and chunk['metadata'].get('section'):
+                metadata['section'] = chunk['metadata']['section']
+            if 'metadata' in chunk and chunk['metadata'].get('section_title'):
+                metadata['section_title'] = chunk['metadata']['section_title']
+            if 'metadata' in chunk and chunk['metadata'].get('section_type'):
+                metadata['section_type'] = chunk['metadata']['section_type']
+
             # Add language info if available
             if 'metadata' in chunk and chunk['metadata'].get('language'):
                 metadata['language'] = chunk['metadata']['language']
