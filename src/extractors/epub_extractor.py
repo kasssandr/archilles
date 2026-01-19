@@ -82,9 +82,6 @@ class EPUBExtractor(BaseExtractor):
 
         # Extract TOC
         toc = self._extract_toc_ebooklib(book)
-        print(f"  DEBUG: Extracted {len(toc)} TOC entries")
-        if toc and len(toc) > 0:
-            print(f"  DEBUG: First TOC entry: {toc[0]}")
 
         # Build href -> TOC mapping for section numbers
         toc_map = {}
@@ -97,9 +94,6 @@ class EPUBExtractor(BaseExtractor):
                     'title': toc_entry.get('title'),
                     'level': toc_entry.get('level', 1),
                 }
-        print(f"  DEBUG: Built toc_map with {len(toc_map)} entries")
-        if len(toc_map) > 0:
-            print(f"  DEBUG: toc_map keys (first 3): {list(toc_map.keys())[:3]}")
 
         # Extract text from all chapters
         chapters_text = []
@@ -133,13 +127,6 @@ class EPUBExtractor(BaseExtractor):
 
                     # Detect section type (front_matter, main_content, back_matter)
                     section_type = self._detect_section_type(chapter_title or item_name)
-
-                    # DEBUG: Print first few chapters
-                    if len(chapters_metadata) < 3:
-                        print(f"  DEBUG Chapter {len(chapters_metadata)}: {chapter_title or item_name}")
-                        print(f"         Item name: {item_name}")
-                        print(f"         Section type: {section_type}")
-                        print(f"         TOC info: {toc_info}")
 
                     chapters_metadata.append({
                         'chapter': chapter_title or item_name,
