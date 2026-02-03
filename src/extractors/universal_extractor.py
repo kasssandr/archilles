@@ -23,6 +23,7 @@ from .epub_extractor import EPUBExtractor
 from .txt_extractor import TXTExtractor
 from .html_extractor import HTMLExtractor
 from .calibre_converter import CalibreConverter
+from .ocr_extractor import OCRBackend
 
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,9 @@ class UniversalExtractor:
         chunk_size: int = 512,
         overlap: int = 128,
         enable_ocr: bool = False,
+        force_ocr: bool = False,
+        ocr_backend: OCRBackend = OCRBackend.AUTO,
+        ocr_language: str = "deu+eng",
         calibre_path: Optional[str] = None,
     ):
         """
@@ -59,18 +63,27 @@ class UniversalExtractor:
         Args:
             chunk_size: Target chunk size in tokens
             overlap: Overlap between chunks in tokens
-            enable_ocr: Enable OCR for scanned PDFs
+            enable_ocr: Enable OCR for scanned PDFs (auto-detect)
+            force_ocr: Force OCR even for digital PDFs
+            ocr_backend: OCR backend to use (AUTO, TESSERACT, LIGHTON, OLMOCR)
+            ocr_language: Language codes for Tesseract (e.g., "deu+eng")
             calibre_path: Path to Calibre's ebook-convert (if not in PATH)
         """
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.enable_ocr = enable_ocr
+        self.force_ocr = force_ocr
+        self.ocr_backend = ocr_backend
+        self.ocr_language = ocr_language
 
         # Initialize extractors
         self.pdf_extractor = PDFExtractor(
             chunk_size=chunk_size,
             overlap=overlap,
-            enable_ocr=enable_ocr
+            enable_ocr=enable_ocr,
+            force_ocr=force_ocr,
+            ocr_backend=ocr_backend,
+            ocr_language=ocr_language
         )
         self.epub_extractor = EPUBExtractor(
             chunk_size=chunk_size,

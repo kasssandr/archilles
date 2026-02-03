@@ -24,6 +24,12 @@ except ImportError:
     OCR_AVAILABLE = False
 
 from .base import BaseExtractor
+from .ocr_extractor import (
+    OCRBackend,
+    get_ocr_extractor,
+    detect_scanned_pdf,
+    get_ocr_status,
+)
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import PDFExtractionError, ExtractionError
 
@@ -43,16 +49,30 @@ class PDFExtractor(BaseExtractor):
 
     SUPPORTED_EXTENSIONS = {'.pdf'}
 
-    def __init__(self, *args, enable_ocr: bool = False, **kwargs):
+    def __init__(
+        self,
+        *args,
+        enable_ocr: bool = False,
+        force_ocr: bool = False,
+        ocr_backend: OCRBackend = OCRBackend.AUTO,
+        ocr_language: str = "deu+eng",
+        **kwargs
+    ):
         """
         Initialize PDF extractor.
 
         Args:
-            enable_ocr: Whether to use OCR for scanned pages
+            enable_ocr: Whether to use OCR for scanned pages (auto-detect)
+            force_ocr: Force OCR even for digital PDFs (skip text extraction)
+            ocr_backend: Which OCR backend to use (AUTO, TESSERACT, LIGHTON, OLMOCR)
+            ocr_language: Language codes for Tesseract (e.g., "deu+eng")
             *args, **kwargs: Passed to BaseExtractor
         """
         super().__init__(*args, **kwargs)
-        self.enable_ocr = enable_ocr and OCR_AVAILABLE
+        self.enable_ocr = enable_ocr
+        self.force_ocr = force_ocr
+        self.ocr_backend = ocr_backend
+        self.ocr_language = ocr_language
 
     def supports(self, file_path: Path) -> bool:
         """Check if file is PDF."""
@@ -63,9 +83,10 @@ class PDFExtractor(BaseExtractor):
         Extract text from PDF using best available method.
 
         Tries in order:
-        1. pdfplumber (best for layout-aware extraction)
-        2. PyMuPDF (faster, good for simple PDFs)
-        3. OCR (for scanned PDFs)
+        1. If force_ocr: Use OCR directly
+        2. pdfplumber (best for layout-aware extraction)
+        3. PyMuPDF (faster, good for simple PDFs)
+        4. If enable_ocr and result is empty/scanned: Use OCR
 
         Args:
             file_path: Path to PDF file
@@ -79,22 +100,46 @@ class PDFExtractor(BaseExtractor):
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
+        # Force OCR: skip text extraction entirely
+        if self.force_ocr:
+            print(f"  [OCR] Force OCR enabled, skipping text extraction", flush=True)
+            return self._extract_with_ocr(file_path)
+
+        # Check if PDF is scanned (auto-detect)
+        is_scanned = False
+        if self.enable_ocr:
+            is_scanned = detect_scanned_pdf(file_path)
+            if is_scanned:
+                print(f"  [OCR] Scanned PDF detected, using OCR", flush=True)
+                return self._extract_with_ocr(file_path)
+
         # Try extraction methods in order
         errors = []
 
         if PDFPLUMBER_AVAILABLE:
             try:
-                return self._extract_with_pdfplumber(file_path)
+                result = self._extract_with_pdfplumber(file_path)
+                # Check if extraction yielded meaningful text
+                if self.enable_ocr and self._is_extraction_empty(result):
+                    print(f"  [OCR] Text extraction yielded little text, trying OCR", flush=True)
+                    return self._extract_with_ocr(file_path)
+                return result
             except Exception as e:
                 errors.append(f"pdfplumber failed: {e}")
 
         if PYMUPDF_AVAILABLE:
             try:
-                return self._extract_with_pymupdf(file_path)
+                result = self._extract_with_pymupdf(file_path)
+                # Check if extraction yielded meaningful text
+                if self.enable_ocr and self._is_extraction_empty(result):
+                    print(f"  [OCR] Text extraction yielded little text, trying OCR", flush=True)
+                    return self._extract_with_ocr(file_path)
+                return result
             except Exception as e:
                 errors.append(f"PyMuPDF failed: {e}")
 
-        if self.enable_ocr and OCR_AVAILABLE:
+        # Last resort: OCR
+        if self.enable_ocr:
             try:
                 return self._extract_with_ocr(file_path)
             except Exception as e:
@@ -103,6 +148,14 @@ class PDFExtractor(BaseExtractor):
         # All methods failed
         error_msg = "All PDF extraction methods failed:\n" + "\n".join(errors)
         raise PDFExtractionError(error_msg)
+
+    def _is_extraction_empty(self, result: ExtractedText, min_chars: int = 500) -> bool:
+        """Check if extraction result has too little text (likely scanned)."""
+        if not result.full_text:
+            return True
+        # Remove whitespace and check length
+        text_len = len(result.full_text.strip())
+        return text_len < min_chars
 
     def _extract_with_pdfplumber(self, file_path: Path) -> ExtractedText:
         """Extract using pdfplumber (best for complex layouts)."""
@@ -254,10 +307,81 @@ class PDFExtractor(BaseExtractor):
         )
 
     def _extract_with_ocr(self, file_path: Path) -> ExtractedText:
-        """Extract using OCR (for scanned PDFs)."""
-        # TODO: Implement OCR extraction
-        # This is complex and should use Tesseract
-        raise NotImplementedError("OCR extraction not yet implemented")
+        """
+        Extract using OCR (for scanned PDFs).
+
+        Uses the configured OCR backend (Tesseract by default).
+        """
+        import time
+        start_time = time.time()
+
+        # Get OCR extractor
+        try:
+            from .ocr_extractor import TesseractExtractor
+            ocr = get_ocr_extractor(self.ocr_backend)
+
+            # Configure language if using Tesseract
+            if isinstance(ocr, TesseractExtractor):
+                ocr.language = self.ocr_language
+
+        except RuntimeError as e:
+            raise PDFExtractionError(f"OCR not available: {e}")
+
+        print(f"  [OCR] Using {ocr.name} backend", flush=True)
+
+        # Run OCR
+        ocr_result = ocr.extract(file_path)
+
+        print(f"  [OCR] Processed {ocr_result.successful_pages}/{ocr_result.total_pages} pages "
+              f"in {ocr_result.processing_time_seconds:.1f}s "
+              f"(avg confidence: {ocr_result.average_confidence:.0%})", flush=True)
+
+        # Convert OCR result to pages format
+        pages_text = []
+        pages_metadata = []
+
+        for page in ocr_result.pages:
+            if page.text.strip():
+                pages_text.append(page.text)
+                pages_metadata.append({
+                    'page': page.page_number,
+                    'page_label': str(page.page_number),
+                    'ocr_confidence': page.confidence,
+                })
+
+        if not pages_text:
+            raise PDFExtractionError("OCR extracted no text from document")
+
+        full_text = '\n\n'.join(pages_text)
+
+        # Create chunks with page information
+        chunks = self._create_chunks_with_pages(
+            pages_text,
+            pages_metadata,
+            file_path,
+            toc=[]
+        )
+
+        # Create extraction metadata
+        extraction_metadata = self._create_extraction_metadata(
+            file_path=file_path,
+            format_name='pdf',
+            extraction_time=time.time() - start_time,
+            total_pages=ocr_result.total_pages,
+            total_chars=len(full_text),
+            total_words=len(full_text.split()),
+            total_chunks=len(chunks),
+        )
+        extraction_metadata.warnings.append(f"Extracted with OCR ({ocr.name})")
+        extraction_metadata.warnings.append(f"Average OCR confidence: {ocr_result.average_confidence:.0%}")
+        extraction_metadata.warnings.extend(ocr_result.warnings)
+
+        return ExtractedText(
+            full_text=full_text,
+            chunks=chunks,
+            metadata=extraction_metadata,
+            toc=[],
+        )
 
     def _create_chunks_with_pages(
         self,

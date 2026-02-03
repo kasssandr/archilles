@@ -72,7 +72,11 @@ class archillesRAG:
         self,
         db_path: str = "./archilles_rag_db",
         model_name: str = "BAAI/bge-m3",
-        reset_db: bool = False
+        reset_db: bool = False,
+        enable_ocr: bool = False,
+        force_ocr: bool = False,
+        ocr_backend: str = "auto",
+        ocr_language: str = "deu+eng"
     ):
         """
         Initialize RAG system.
@@ -81,16 +85,37 @@ class archillesRAG:
             db_path: Path to LanceDB storage
             model_name: Sentence transformer model (default: BGE-M3)
             reset_db: If True, delete and recreate the database
+            enable_ocr: Enable OCR for scanned PDFs (auto-detect)
+            force_ocr: Force OCR even for digital PDFs
+            ocr_backend: OCR backend (auto, tesseract, lighton, olmocr)
+            ocr_language: Language codes for Tesseract
         """
         print(f"Initializing ARCHILLES RAG...")
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
-        # Initialize extractor
+        # Map string backend to enum
+        from src.extractors import OCRBackend
+        backend_map = {
+            "auto": OCRBackend.AUTO,
+            "tesseract": OCRBackend.TESSERACT,
+            "lighton": OCRBackend.LIGHTON,
+            "olmocr": OCRBackend.OLMOCR,
+        }
+        ocr_backend_enum = backend_map.get(ocr_backend.lower(), OCRBackend.AUTO)
+
+        # Initialize extractor with OCR options
         self.extractor = UniversalExtractor(
             chunk_size=512,
-            overlap=128
+            overlap=128,
+            enable_ocr=enable_ocr,
+            force_ocr=force_ocr,
+            ocr_backend=ocr_backend_enum,
+            ocr_language=ocr_language
         )
+
+        if enable_ocr or force_ocr:
+            print(f"  OCR: {'force' if force_ocr else 'auto-detect'} ({ocr_backend})")
 
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
@@ -1701,6 +1726,12 @@ Examples:
     index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     index_parser.add_argument('--force', action='store_true', help='Force reindex (delete existing chunks first)')
     index_parser.add_argument('--reset-db', action='store_true', help='Reset corrupted database (WARNING: deletes all indexed data)')
+    # OCR options
+    index_parser.add_argument('--enable-ocr', action='store_true', help='Enable OCR for scanned PDFs (auto-detect)')
+    index_parser.add_argument('--force-ocr', action='store_true', help='Force OCR even for digital PDFs (skip text extraction)')
+    index_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto',
+                              help='OCR backend: auto (best available), tesseract, lighton, olmocr')
+    index_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes (default: deu+eng)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1756,9 +1787,21 @@ Examples:
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:
-        # Initialize RAG
+        # Initialize RAG with OCR options (only for index command)
         reset_db = getattr(args, 'reset_db', False)
-        rag = archillesRAG(db_path=args.db_path, reset_db=reset_db)
+        enable_ocr = getattr(args, 'enable_ocr', False)
+        force_ocr = getattr(args, 'force_ocr', False)
+        ocr_backend = getattr(args, 'ocr_backend', 'auto')
+        ocr_language = getattr(args, 'ocr_language', 'deu+eng')
+
+        rag = archillesRAG(
+            db_path=args.db_path,
+            reset_db=reset_db,
+            enable_ocr=enable_ocr,
+            force_ocr=force_ocr,
+            ocr_backend=ocr_backend,
+            ocr_language=ocr_language
+        )
 
         if args.command == 'index':
             # Index a book
