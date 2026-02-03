@@ -89,7 +89,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
     conn.row_factory = sqlite3.Row
 
     # Build query with optional rating filter
-    # Calibre stores rating as 0-10, we use 1-5 stars
+    # Calibre stores rating in separate table (0-10 scale), we use 1-5 stars
     calibre_rating = min_rating * 2 if min_rating > 0 else 0
 
     query = """
@@ -97,23 +97,25 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
         books.id,
         books.title,
         books.path,
-        books.rating,
+        ratings.rating as rating,
         authors.name as author
     FROM books
     INNER JOIN books_tags_link ON books.id = books_tags_link.book
     INNER JOIN tags ON books_tags_link.tag = tags.id
     LEFT JOIN books_authors_link ON books.id = books_authors_link.book
     LEFT JOIN authors ON books_authors_link.author = authors.id
+    LEFT JOIN books_ratings_link ON books.id = books_ratings_link.book
+    LEFT JOIN ratings ON books_ratings_link.rating = ratings.id
     WHERE LOWER(tags.name) = LOWER(?)
     """
 
     params = [tag_name]
 
     if calibre_rating > 0:
-        query += " AND books.rating >= ?"
+        query += " AND ratings.rating >= ?"
         params.append(calibre_rating)
 
-    query += " ORDER BY books.rating DESC, authors.name, books.title"
+    query += " ORDER BY ratings.rating DESC, authors.name, books.title"
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()
