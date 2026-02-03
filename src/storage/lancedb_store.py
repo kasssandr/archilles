@@ -103,30 +103,37 @@ class LanceDBStore:
             logger.warning("No table exists, skipping index creation")
             return
 
-        # Only create vector index if we have enough data
         chunk_count = num_chunks or self.count()
-        if chunk_count < 256:
+
+        # Create IVF-PQ vector index only if we have enough data
+        if chunk_count >= 256:
+            # Calculate optimal partitions (sqrt(n) is a good heuristic)
+            num_partitions = min(256, max(16, int(np.sqrt(chunk_count))))
+
+            try:
+                logger.info(f"Creating IVF-PQ index with {num_partitions} partitions...")
+                self.table.create_index(
+                    metric="cosine",
+                    num_partitions=num_partitions,
+                    num_sub_vectors=32,
+                    index_type="IVF_PQ"
+                )
+                logger.info("Vector index created successfully")
+            except Exception as e:
+                logger.warning(f"Could not create vector index: {e}")
+        else:
             logger.info(f"Skipping IVF-PQ index (need 256+ chunks, have {chunk_count})")
+
+        # Always create FTS index for hybrid search
+        self.create_fts_index()
+
+    def create_fts_index(self):
+        """Create full-text search index on text column."""
+        if self.table is None:
+            logger.warning("No table exists, skipping FTS index creation")
             return
 
-        # Calculate optimal partitions (sqrt(n) is a good heuristic)
-        num_partitions = min(256, max(16, int(np.sqrt(chunk_count))))
-
         try:
-            # Create vector index (IVF-PQ for large corpora)
-            logger.info(f"Creating IVF-PQ index with {num_partitions} partitions...")
-            self.table.create_index(
-                metric="cosine",
-                num_partitions=num_partitions,
-                num_sub_vectors=32,
-                index_type="IVF_PQ"
-            )
-            logger.info("Vector index created successfully")
-        except Exception as e:
-            logger.warning(f"Could not create vector index: {e}")
-
-        try:
-            # Create full-text search index on text column
             logger.info("Creating FTS index on text column...")
             self.table.create_fts_index("text", replace=True)
             logger.info("FTS index created successfully")

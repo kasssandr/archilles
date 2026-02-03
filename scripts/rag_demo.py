@@ -1726,6 +1726,11 @@ Examples:
     stats_parser = subparsers.add_parser('stats', help='Show index statistics')
     stats_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
 
+    # Create-index command
+    create_index_parser = subparsers.add_parser('create-index', help='Create search indexes (FTS and/or IVF-PQ)')
+    create_index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
+    create_index_parser.add_argument('--fts-only', action='store_true', help='Only create FTS index (skip IVF-PQ vector index)')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -1789,6 +1794,18 @@ Examples:
             print(f"INDEX STATISTICS\n")
             print(f"  Total chunks: {rag.store.count()}")
             print(f"  Database path: {args.db_path}\n")
+
+        elif args.command == 'create-index':
+            # Create search indexes
+            chunk_count = rag.store.count()
+            print(f"Creating indexes for {chunk_count} chunks...\n")
+
+            if args.fts_only:
+                rag.store.create_fts_index()
+            else:
+                rag.store.create_indexes(chunk_count)
+
+            print("\nIndex creation complete.")
 
     except LanceDBError as e:
         # LanceDB error - show helpful error message
