@@ -567,6 +567,10 @@ Examples:
                         help='Phase 1: Quick indexing of metadata, comments, and annotations only (5-10 min)')
     parser.add_argument('--non-interactive', action='store_true',
                         help='Run in non-interactive mode (auto-resume sessions, no prompts)')
+    parser.add_argument('--enable-ocr', action='store_true',
+                        help='Enable OCR for scanned PDFs (auto-detect)')
+    parser.add_argument('--force-ocr', action='store_true',
+                        help='Force OCR even for digital PDFs')
 
     args = parser.parse_args()
 
@@ -621,7 +625,12 @@ Examples:
         rag = DummyRAG()
     else:
         try:
-            rag = archillesRAG(db_path=args.db_path, reset_db=args.reset_db)
+            rag = archillesRAG(
+                db_path=args.db_path,
+                reset_db=args.reset_db,
+                enable_ocr=args.enable_ocr,
+                force_ocr=args.force_ocr
+            )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message
             print(f"\n{'='*60}")
