@@ -68,13 +68,14 @@ def get_calibre_library_path() -> Path:
     return Path(library_path)
 
 
-def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
+def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> List[Dict[str, Any]]:
     """
     Get all books with a specific tag from Calibre database.
 
     Args:
         library_path: Path to Calibre library
         tag_name: Tag to filter by (case-insensitive)
+        min_rating: Minimum star rating (1-5, 0 = no filter)
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -87,11 +88,16 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    # Build query with optional rating filter
+    # Calibre stores rating as 0-10, we use 1-5 stars
+    calibre_rating = min_rating * 2 if min_rating > 0 else 0
+
     query = """
     SELECT
         books.id,
         books.title,
         books.path,
+        books.rating,
         authors.name as author
     FROM books
     INNER JOIN books_tags_link ON books.id = books_tags_link.book
@@ -99,10 +105,17 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
     LEFT JOIN books_authors_link ON books.id = books_authors_link.book
     LEFT JOIN authors ON books_authors_link.author = authors.id
     WHERE LOWER(tags.name) = LOWER(?)
-    ORDER BY authors.name, books.title
     """
 
-    cursor = conn.execute(query, (tag_name,))
+    params = [tag_name]
+
+    if calibre_rating > 0:
+        query += " AND books.rating >= ?"
+        params.append(calibre_rating)
+
+    query += " ORDER BY books.rating DESC, authors.name, books.title"
+
+    cursor = conn.execute(query, params)
     rows = cursor.fetchall()
 
     books = []
@@ -119,10 +132,12 @@ def get_books_by_tag(library_path: Path, tag_name: str) -> List[Dict[str, Any]]:
                 })
 
         if formats:
+            rating = row['rating'] // 2 if row['rating'] else 0
             books.append({
                 'id': row['id'],
                 'title': row['title'],
                 'author': row['author'] or 'Unknown',
+                'rating': rating,
                 'path': str(book_path),
                 'formats': formats,
                 # Prefer PDF > EPUB > others
@@ -526,6 +541,10 @@ Examples:
     group.add_argument('--tag', help='Index books with this tag')
     group.add_argument('--author', help='Index books by this author (partial match)')
 
+    # Rating filter
+    parser.add_argument('--min-rating', type=int, choices=[1, 2, 3, 4, 5], default=0,
+                        help='Minimum star rating (1-5)')
+
     # Options
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what would be indexed without actually indexing')
@@ -564,11 +583,14 @@ Examples:
     print(f"📚 Calibre library: {library_path}")
 
     # Get books based on criteria
+    min_rating = getattr(args, 'min_rating', 0) or 0
     if args.tag:
-        print(f"🏷️  Filtering by tag: {args.tag}")
-        books = get_books_by_tag(library_path, args.tag)
+        print(f"  Filtering by tag: {args.tag}")
+        if min_rating > 0:
+            print(f"  Minimum rating: {'*' * min_rating}")
+        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating)
     elif args.author:
-        print(f"✍️  Filtering by author: {args.author}")
+        print(f"  Filtering by author: {args.author}")
         books = get_books_by_author(library_path, args.author)
 
     if not books:
