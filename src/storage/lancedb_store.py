@@ -391,10 +391,17 @@ class LanceDBStore:
         results = []
         for _, row in df.iterrows():
             result = row.to_dict()
-            # Convert _distance to similarity score (1 - distance for cosine)
+            # Convert distance/score columns to unified 'score' field
+            # LanceDB returns different columns depending on search type:
+            # - _distance: vector search (cosine distance, lower is better)
+            # - _score: FTS search (higher is better)
+            # - _relevance_score: hybrid search (higher is better)
             if '_distance' in result:
                 result['score'] = 1.0 - result['_distance']
                 del result['_distance']
+            elif '_relevance_score' in result:
+                result['score'] = result['_relevance_score']
+                del result['_relevance_score']
             elif '_score' in result:
                 result['score'] = result['_score']
                 del result['_score']
