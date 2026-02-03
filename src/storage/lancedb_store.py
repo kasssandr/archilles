@@ -231,11 +231,10 @@ class LanceDBStore:
         )
 
         try:
-            # Try hybrid search first
-            search = self.table.search(
-                query_vector.tolist(),
-                query_type="hybrid"
-            ).text(query_text)
+            # Try hybrid search first using explicit vector() and text() methods
+            search = self.table.search(query_type="hybrid") \
+                .vector(query_vector.tolist()) \
+                .text(query_text)
 
             if filters:
                 search = search.where(filters)
