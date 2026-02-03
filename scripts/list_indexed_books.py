@@ -54,21 +54,26 @@ def get_indexed_books(rag: archillesRAG) -> dict:
     """
     print("Analyzing indexed books...")
 
-    # Fetch all data in batches to avoid SQLite variable limit
+    # Use LanceDB's get_indexed_books for efficiency
+    indexed_books = rag.store.get_indexed_books()
+    print(f"  Found {len(indexed_books)} books")
+
+    # Convert to expected format
     all_metadatas = []
-    batch_size = 500
-    offset = 0
+    for book in indexed_books:
+        # Create a metadata entry for aggregation
+        all_metadatas.append({
+            'book_id': book.get('book_id', 'unknown'),
+            'book_title': book.get('title', 'Unknown'),
+            'author': book.get('author', 'Unknown'),
+            'format': book.get('format', 'Unknown'),
+            'tags': book.get('tags', ''),
+            'calibre_id': book.get('calibre_id'),
+            'indexed_at': book.get('indexed_at'),
+            '_chunk_count': book.get('chunks', 0)  # Pre-calculated
+        })
 
-    while True:
-        batch = rag.collection.get(limit=batch_size, offset=offset)
-        if not batch['ids']:
-            break
-        all_metadatas.extend(batch['metadatas'])
-        offset += batch_size
-        if len(batch['ids']) < batch_size:
-            break
-
-    print(f"  Loaded {len(all_metadatas)} chunks")
+    print(f"  Loaded {sum(m.get('_chunk_count', 1) for m in all_metadatas)} chunks")
 
     # Group by book_id
     books = defaultdict(lambda: {
@@ -84,17 +89,17 @@ def get_indexed_books(rag: archillesRAG) -> dict:
     for metadata in all_metadatas:
         book_id = metadata.get('book_id', 'unknown')
 
-        # Count chunks
-        books[book_id]['chunks'] += 1
+        # Use pre-calculated chunk count from LanceDB
+        books[book_id]['chunks'] = metadata.get('_chunk_count', 1)
 
         # Get earliest indexing timestamp for this book
         indexed_at_str = metadata.get('indexed_at')
         if indexed_at_str:
             try:
-                indexed_at = datetime.fromisoformat(indexed_at_str)
-                if books[book_id]['indexed_at'] is None or indexed_at < books[book_id]['indexed_at']:
+                indexed_at = datetime.fromisoformat(indexed_at_str) if isinstance(indexed_at_str, str) else indexed_at_str
+                if books[book_id]['indexed_at'] is None or (indexed_at and indexed_at < books[book_id]['indexed_at']):
                     books[book_id]['indexed_at'] = indexed_at
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 pass
 
         # Get book metadata (same for all chunks of a book)
