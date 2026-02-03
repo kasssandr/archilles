@@ -206,7 +206,6 @@ class CalibreDB:
             books.id,
             books.title,
             books.path,
-            books.isbn as legacy_isbn,
             books.has_cover,
             comments.text as comments,
             authors.name as author,
@@ -239,7 +238,7 @@ class CalibreDB:
         """
         cursor = self.conn.execute(isbn_query, (book_id,))
         isbn_row = cursor.fetchone()
-        isbn = isbn_row['val'] if isbn_row else row['legacy_isbn']
+        isbn = isbn_row['val'] if isbn_row else None
 
         # Get all authors (books can have multiple authors)
         authors_query = """

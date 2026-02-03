@@ -52,23 +52,28 @@ def get_indexed_books(rag: archillesRAG) -> dict:
             'tags': str
         }
     """
-    print("📊 Analyzing indexed books...")
+    print("Analyzing indexed books...")
 
-    # Fetch all data in batches to avoid SQLite variable limit
+    # Use LanceDB's get_indexed_books for efficiency
+    indexed_books = rag.store.get_indexed_books()
+    print(f"  Found {len(indexed_books)} books")
+
+    # Convert to expected format
     all_metadatas = []
-    batch_size = 500
-    offset = 0
+    for book in indexed_books:
+        # Create a metadata entry for aggregation
+        all_metadatas.append({
+            'book_id': book.get('book_id', 'unknown'),
+            'book_title': book.get('title', 'Unknown'),
+            'author': book.get('author', 'Unknown'),
+            'format': book.get('format', 'Unknown'),
+            'tags': book.get('tags', ''),
+            'calibre_id': book.get('calibre_id'),
+            'indexed_at': book.get('indexed_at'),
+            '_chunk_count': book.get('chunks', 0)  # Pre-calculated
+        })
 
-    while True:
-        batch = rag.collection.get(limit=batch_size, offset=offset)
-        if not batch['ids']:
-            break
-        all_metadatas.extend(batch['metadatas'])
-        offset += batch_size
-        if len(batch['ids']) < batch_size:
-            break
-
-    print(f"  Loaded {len(all_metadatas)} chunks")
+    print(f"  Loaded {sum(m.get('_chunk_count', 1) for m in all_metadatas)} chunks")
 
     # Group by book_id
     books = defaultdict(lambda: {
@@ -84,17 +89,17 @@ def get_indexed_books(rag: archillesRAG) -> dict:
     for metadata in all_metadatas:
         book_id = metadata.get('book_id', 'unknown')
 
-        # Count chunks
-        books[book_id]['chunks'] += 1
+        # Use pre-calculated chunk count from LanceDB
+        books[book_id]['chunks'] = metadata.get('_chunk_count', 1)
 
         # Get earliest indexing timestamp for this book
         indexed_at_str = metadata.get('indexed_at')
         if indexed_at_str:
             try:
-                indexed_at = datetime.fromisoformat(indexed_at_str)
-                if books[book_id]['indexed_at'] is None or indexed_at < books[book_id]['indexed_at']:
+                indexed_at = datetime.fromisoformat(indexed_at_str) if isinstance(indexed_at_str, str) else indexed_at_str
+                if books[book_id]['indexed_at'] is None or (indexed_at and indexed_at < books[book_id]['indexed_at']):
                     books[book_id]['indexed_at'] = indexed_at
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 pass
 
         # Get book metadata (same for all chunks of a book)
@@ -138,14 +143,14 @@ def print_books_table(books: list, before_date: datetime = None):
     # Filter by date if specified
     if before_date:
         books = [b for b in books if b['indexed_at'] and b['indexed_at'] < before_date]
-        print(f"\n📅 Showing books indexed before {before_date.strftime('%Y-%m-%d')}\n")
+        print(f"\nShowing books indexed before {before_date.strftime('%Y-%m-%d')}\n")
 
     if not books:
-        print("❌ No books found matching criteria")
+        print("No books found matching criteria")
         return
 
     print(f"\n{'='*110}")
-    print(f"📚 INDEXED BOOKS ({len(books)} total)")
+    print(f"INDEXED BOOKS ({len(books)} total)")
     print(f"{'='*110}\n")
 
     # Table header
@@ -166,7 +171,7 @@ def print_books_table(books: list, before_date: datetime = None):
 
     # Summary statistics
     total_chunks = sum(b['chunks'] for b in books)
-    print(f"📊 Statistics:")
+    print(f"Statistics:")
     print(f"  Total books: {len(books)}")
     print(f"  Total chunks: {total_chunks:,}")
     print(f"  Average chunks per book: {total_chunks // len(books) if books else 0}")
@@ -199,7 +204,7 @@ def export_to_csv(books: list, output_file: str):
                 book_copy['indexed_at'] = ''
             writer.writerow(book_copy)
 
-    print(f"📝 Exported {len(books)} books to: {output_file}\n")
+    print(f"Exported {len(books)} books to: {output_file}\n")
 
 
 def main():
@@ -259,7 +264,7 @@ Examples:
         try:
             before_date = datetime.strptime(args.before, '%Y-%m-%d')
         except ValueError:
-            print(f"❌ Invalid date format: {args.before}")
+            print(f"ERROR: Invalid date format: {args.before}")
             print("   Use YYYY-MM-DD format (e.g., 2024-12-01)")
             sys.exit(1)
 
@@ -290,13 +295,13 @@ Examples:
 
     except ChromaDBCorruptionError as e:
         print(f"\n{'='*60}")
-        print(f"❌ DATABASE CORRUPTION DETECTED")
+        print(f"DATABASE CORRUPTION DETECTED")
         print(f"{'='*60}\n")
         print(str(e))
         print(f"\n{'='*60}\n")
         sys.exit(1)
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"ERROR: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

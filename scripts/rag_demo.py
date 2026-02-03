@@ -5,15 +5,14 @@ ARCHILLES RAG System with Hybrid Search
 Features:
 1. Extract text from books (30+ formats: PDF, EPUB, DJVU, MOBI, etc.)
 2. BGE-M3 embeddings (multilingual, optimized for German/Latin/Greek)
-3. BM25 keyword search (exact word matching)
-4. Hybrid search (semantic + keyword via Reciprocal Rank Fusion)
-5. Language filtering (auto-detected: de, en, la, fr, etc.)
-6. ChromaDB local storage (100% offline)
+3. LanceDB with native hybrid search (vector + full-text)
+4. Language filtering (auto-detected: de, en, la, fr, etc.)
+5. Local storage (100% offline)
 
 Search Modes:
 - hybrid (default): Best of both worlds - finds concepts AND exact words
 - semantic: Concept-based search using BGE-M3 embeddings
-- keyword: Exact word matching using BM25 (great for Latin phrases, custom terms)
+- keyword: Exact word matching using full-text search (great for Latin phrases, custom terms)
 
 Usage:
     # Index a book
@@ -34,30 +33,28 @@ import argparse
 from pathlib import Path
 from typing import List, Dict, Any, Literal
 import time
-import pickle
 import re
 from datetime import datetime
+import numpy as np
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
-import chromadb
+from src.storage import LanceDBStore
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 import os
 
-try:
-    from rank_bm25 import BM25Okapi
-    BM25_AVAILABLE = True
-except ImportError:
-    BM25_AVAILABLE = False
 
-
-class ChromaDBCorruptionError(Exception):
-    """Raised when ChromaDB index is corrupted and needs to be reset."""
+class LanceDBError(Exception):
+    """Raised when LanceDB operations fail."""
     pass
+
+
+# Keep for backward compatibility with other scripts
+ChromaDBCorruptionError = LanceDBError
 
 
 class archillesRAG:
@@ -66,9 +63,9 @@ class archillesRAG:
 
     Features:
     - BGE-M3 embeddings (1024 dimensions, multilingual)
-    - ChromaDB local storage
+    - LanceDB with native hybrid search
     - Exact page citations
-    - Semantic search
+    - Semantic + keyword search
     """
 
     def __init__(
@@ -81,11 +78,11 @@ class archillesRAG:
         Initialize RAG system.
 
         Args:
-            db_path: Path to ChromaDB storage
+            db_path: Path to LanceDB storage
             model_name: Sentence transformer model (default: BGE-M3)
-            reset_db: If True, delete and recreate the database (use for recovery from corruption)
+            reset_db: If True, delete and recreate the database
         """
-        print(f"?? Initializing ARCHILLES RAG...")
+        print(f"Initializing ARCHILLES RAG...")
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
@@ -98,76 +95,36 @@ class archillesRAG:
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
         self.embedding_model = SentenceTransformer(model_name)
-        print(f"  ? Model loaded: {model_name}")
+        print(f"  Model loaded: {model_name}")
 
         # Handle database reset if requested
+        self.db_path = Path(db_path)
         if reset_db:
-            print(f"  ? Resetting database (deleting corrupted data)...")
+            print(f"  Resetting database (deleting existing data)...")
             import shutil
-            db_path_obj = Path(db_path)
-            if db_path_obj.exists():
-                shutil.rmtree(db_path_obj)
-                print(f"    ? Deleted {db_path}")
+            if self.db_path.exists():
+                shutil.rmtree(self.db_path)
+                print(f"    Deleted {db_path}")
 
-        # Initialize ChromaDB with error handling for corruption
+        # Initialize LanceDB
         try:
-            self.chroma_client = chromadb.PersistentClient(path=db_path)
+            self.store = LanceDBStore(db_path=str(self.db_path))
+            print(f"  LanceDB ready")
 
-            # Get or create collection
-            self.collection = self.chroma_client.get_or_create_collection(
-                name="archilles_books",
-                metadata={"hnsw:space": "cosine"}
-            )
-
-            print(f"  ? ChromaDB ready")
-
-            # Try to count chunks - this will fail if database is corrupted
-            try:
-                chunk_count = self.collection.count()
-                print(f"  Current index: {chunk_count} chunks")
-            except Exception as count_error:
-                # ChromaDB corruption detected
-                raise ChromaDBCorruptionError(
-                    f"ChromaDB index is corrupted (likely from interrupted indexing).\n"
-                    f"Error: {count_error}\n\n"
-                    f"To recover, run with --reset-db flag:\n"
-                    f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
-                    f"WARNING: This will delete the entire index. You'll need to re-index all books."
-                )
+            # Count chunks
+            chunk_count = self.store.count()
+            print(f"  Current index: {chunk_count} chunks")
 
         except Exception as e:
-            # Check if this is a known corruption error
-            if "hnsw" in str(e).lower() or "compactor" in str(e).lower():
-                raise ChromaDBCorruptionError(
-                    f"ChromaDB index is corrupted (likely from interrupted indexing).\n"
-                    f"Error: {e}\n\n"
-                    f"To recover, run with --reset-db flag:\n"
-                    f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
-                    f"WARNING: This will delete the entire index. You'll need to re-index all books."
-                )
-            else:
-                # Re-raise other errors
-                raise
+            raise LanceDBError(
+                f"LanceDB initialization failed.\n"
+                f"Error: {e}\n\n"
+                f"To recover, run with --reset-db flag:\n"
+                f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
+                f"WARNING: This will delete the entire index. You'll need to re-index all books."
+            )
 
-        # Initialize BM25 index for hybrid search
-        self.db_path = Path(db_path)
-        self.bm25_index = None
-        self.bm25_docs = None
-        self.bm25_ids = None
-        self.bm25_metadatas = None  # Cache metadata to avoid SQLite variable limit
-
-        # Load BM25 index (skip if database was just reset)
-        if not reset_db:
-            self._load_bm25_index()
-        else:
-            print(f"  ? BM25 index will be built on first indexing")
-
-        if BM25_AVAILABLE and self.bm25_index:
-            print(f"  ? BM25 keyword search ready\n")
-        elif not BM25_AVAILABLE:
-            print(f"  ? BM25 not available (install: pip install rank-bm25)\n")
-        else:
-            print(f"  ? BM25 index empty (will be built on first indexing)\n")
+        print(f"  Native hybrid search ready (vector + full-text)\n")
 
     def _extract_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
@@ -460,7 +417,7 @@ class archillesRAG:
             convert_to_numpy=True
         ).tolist()
 
-        # Prepare metadata for ChromaDB
+        # Prepare metadata for LanceDB
         chunk_metadata = {
             'book_id': book_id,
             'book_title': title,
@@ -492,23 +449,20 @@ class archillesRAG:
 
         chunk_metadata['source_file'] = str(book_path)
 
-        # Index in ChromaDB
+        # Index in LanceDB
         print("  [2/2] Indexing metadata chunk...")
-        self.collection.add(
-            ids=[f"{book_id}_metadata"],
-            embeddings=[embedding],
-            documents=[searchable_text],
-            metadatas=[chunk_metadata]
-        )
+        chunk_data = {
+            'id': f"{book_id}_metadata",
+            'text': searchable_text,
+            **chunk_metadata
+        }
+        embeddings_array = np.array([embedding])
+        self.store.add_chunks([chunk_data], embeddings_array)
 
         index_time = time.time() - start_time
 
-        # Update BM25 index
-        if BM25_AVAILABLE:
-            self._rebuild_bm25_index()
-
-        print(f"  ✅ Phase 1 complete ({index_time:.1f}s)")
-        print(f"     Collection size: {self.collection.count()} chunks\n")
+        print(f"  Phase 1 complete ({index_time:.1f}s)")
+        print(f"     Collection size: {self.store.count()} chunks\n")
 
         return {
             'book_id': book_id,
@@ -542,63 +496,26 @@ class archillesRAG:
 
         book_id = book_id or book_path.stem
 
-        print(f"📚 INDEXING BOOK: {book_path.name}")
+        print(f"INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
 
         # Check for existing chunks and handle force reindex
-        existing = self.collection.get(where={"book_id": book_id})
-        if existing and existing['ids']:
-            # Check what types of chunks exist
-            existing_types = set()
-            for metadata in existing['metadatas']:
-                chunk_type = metadata.get('chunk_type', 'content')
-                existing_types.add(chunk_type)
-
-            has_phase1 = 'phase1_metadata' in existing_types
-            has_content = 'content' in existing_types or any(t not in ['phase1_metadata', 'calibre_comment'] for t in existing_types)
-
-            # Phase 1: Skip if already has Phase 1 chunks
-            if phase == 'phase1' and has_phase1:
-                if force:
-                    print(f"  🗑️  Deleting {len(existing['ids'])} existing Phase 1 chunks...", flush=True)
-                    self.collection.delete(ids=existing['ids'])
-                else:
-                    print(f"  ⚠️  Phase 1 already indexed ({len(existing['ids'])} chunks). Use --force to reindex.")
-                    return {
-                        'book_id': book_id,
-                        'status': 'already_indexed',
-                        'chunks_indexed': len(existing['ids']),
-                        'existing_chunks': len(existing['ids'])
-                    }
-
-            # Phase 2: Skip if already has content chunks
-            elif phase == 'phase2' and has_content:
-                if force:
-                    # Delete only content chunks, keep Phase 1 chunks
-                    content_chunk_ids = [
-                        existing['ids'][i] for i, meta in enumerate(existing['metadatas'])
-                        if meta.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']
-                    ]
-                    if content_chunk_ids:
-                        print(f"  🗑️  Deleting {len(content_chunk_ids)} existing content chunks...", flush=True)
-                        self.collection.delete(ids=content_chunk_ids)
-                else:
-                    print(f"  ⚠️  Phase 2 already indexed ({len([m for m in existing['metadatas'] if m.get('chunk_type', 'content') not in ['phase1_metadata', 'calibre_comment']])} content chunks). Use --force to reindex.")
-                    return {
-                        'book_id': book_id,
-                        'status': 'already_indexed',
-                        'chunks_indexed': len(existing['ids']),
-                        'existing_chunks': len(existing['ids'])
-                    }
-
-            # Phase 2 + only Phase 1 chunks = OK to add content!
-            elif phase == 'phase2' and has_phase1 and not has_content:
-                print(f"  ℹ️  Found Phase 1 chunks, adding Phase 2 content chunks alongside...")
-
-            # Old chunks without phase info - handle with force flag
-            elif force:
-                print(f"  🗑️  Deleting {len(existing['ids'])} existing chunks...", flush=True)
-                self.collection.delete(ids=existing['ids'])
+        existing = self.store.get_by_book_id(book_id, limit=1)
+        if existing:
+            if force:
+                print(f"  Deleting existing chunks for {book_id}...", flush=True)
+                deleted = self.store.delete_by_book_id(book_id)
+                print(f"    Deleted {deleted} chunks")
+            else:
+                # Count existing chunks
+                all_existing = self.store.get_by_book_id(book_id, limit=10000)
+                print(f"  Book already indexed ({len(all_existing)} chunks). Use --force to reindex.")
+                return {
+                    'book_id': book_id,
+                    'status': 'already_indexed',
+                    'chunks_indexed': len(all_existing),
+                    'existing_chunks': len(all_existing)
+                }
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
@@ -639,94 +556,67 @@ class archillesRAG:
         embed_time = time.time() - start_time
         print(f"    ? Generated {len(embeddings)} embeddings in {embed_time:.1f}s\n")
 
-        # Step 3: Index in ChromaDB
-        print("  [3/3] Indexing in ChromaDB...")
+        # Step 3: Index in LanceDB
+        print("  [3/3] Indexing in LanceDB...")
         start_time = time.time()
 
-        # Prepare data
-        ids = []
-        documents = []
-        metadatas = []
-
-        for i, (chunk, embedding) in enumerate(zip(extracted.chunks, embeddings)):
-            chunk_id = f"{book_id}_chunk_{i}"
-            ids.append(chunk_id)
-            documents.append(chunk['text'])
-
-            # Metadata for citation
-            metadata = {
+        # Prepare chunks with metadata
+        chunks = []
+        for i, chunk in enumerate(extracted.chunks):
+            chunk_data = {
+                'id': f"{book_id}_chunk_{i}",
+                'text': chunk['text'],
                 'book_id': book_id,
                 'book_title': extracted.metadata.file_path.stem,
                 'chunk_index': i,
-                'chunk_type': 'content',  # Phase 2 content chunks
+                'chunk_type': 'content',
                 'format': extracted.metadata.detected_format,
-                'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
-                'phase': 'phase2'
+                'indexed_at': datetime.now().isoformat(),
             }
 
-            # Add book metadata (author, title, year, ISBN, publisher, etc.)
-            # Works for PDF, EPUB, and other formats
+            # Add book metadata
             if book_metadata:
                 if book_metadata.get('author'):
-                    metadata['author'] = book_metadata['author']
+                    chunk_data['author'] = book_metadata['author']
                 if book_metadata.get('title'):
-                    # Prefer embedded title over filename
-                    metadata['book_title'] = book_metadata['title']
+                    chunk_data['book_title'] = book_metadata['title']
                 if book_metadata.get('year'):
-                    metadata['year'] = book_metadata['year']
-                if book_metadata.get('subject'):
-                    metadata['subject'] = book_metadata['subject']
-                if book_metadata.get('keywords'):
-                    metadata['keywords'] = book_metadata['keywords']
-
-                # EPUB-specific fields
+                    chunk_data['year'] = book_metadata['year']
                 if book_metadata.get('publisher'):
-                    metadata['publisher'] = book_metadata['publisher']
-                if book_metadata.get('isbn'):
-                    metadata['isbn'] = book_metadata['isbn']
-                    # Track ISBN source (file vs calibre)
-                    if book_metadata.get('isbn_source'):
-                        metadata['isbn_source'] = book_metadata['isbn_source']
-                if book_metadata.get('description'):
-                    metadata['description'] = book_metadata['description']
+                    chunk_data['publisher'] = book_metadata['publisher']
                 if book_metadata.get('calibre_id'):
-                    metadata['calibre_id'] = book_metadata['calibre_id']
+                    chunk_data['calibre_id'] = book_metadata['calibre_id']
                 if book_metadata.get('tags'):
-                    # Store tags as comma-separated string for ChromaDB compatibility
-                    metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
-                if book_metadata.get('custom_fields'):
-                    # Store custom fields as JSON string for ChromaDB compatibility
-                    import json
-                    metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
+                    chunk_data['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
 
-            # Add source file path for direct links
-            metadata['source_file'] = str(extracted.metadata.file_path)
+            # Add source file path
+            chunk_data['source_file'] = str(extracted.metadata.file_path)
 
             # Add page info if available
             if 'metadata' in chunk and chunk['metadata'].get('page'):
-                metadata['page'] = chunk['metadata']['page']
+                chunk_data['page_number'] = chunk['metadata']['page']
 
             # Add chapter info if available
             if 'metadata' in chunk and chunk['metadata'].get('chapter'):
-                metadata['chapter'] = chunk['metadata']['chapter']
+                chunk_data['chapter'] = chunk['metadata']['chapter']
 
             # Add section info if available (EPUB section metadata)
             if 'metadata' in chunk and chunk['metadata'].get('section'):
-                metadata['section'] = chunk['metadata']['section']
+                chunk_data['section'] = chunk['metadata']['section']
             if 'metadata' in chunk and chunk['metadata'].get('section_title'):
-                metadata['section_title'] = chunk['metadata']['section_title']
+                chunk_data['section_title'] = chunk['metadata']['section_title']
             if 'metadata' in chunk and chunk['metadata'].get('section_type'):
-                metadata['section_type'] = chunk['metadata']['section_type']
+                chunk_data['section_type'] = chunk['metadata']['section_type']
 
             # Add language info if available
             if 'metadata' in chunk and chunk['metadata'].get('language'):
-                metadata['language'] = chunk['metadata']['language']
+                chunk_data['language'] = chunk['metadata']['language']
 
-            metadatas.append(metadata)
+            chunks.append(chunk_data)
 
         # Add Calibre comments as separate chunk (if available)
         if book_metadata and book_metadata.get('comments'):
-            print(f"    ? Adding Calibre comment as searchable chunk...")
+            print(f"    Adding Calibre comment as searchable chunk...")
 
             comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
 
@@ -735,83 +625,49 @@ class archillesRAG:
                 comment_text,
                 show_progress_bar=False,
                 convert_to_numpy=True
-            ).tolist()
+            )
 
-            # Create comment chunk metadata
-            comment_metadata = {
+            comment_chunk = {
+                'id': f"{book_id}_comment",
+                'text': comment_text,
                 'book_id': book_id,
                 'book_title': book_metadata.get('title', extracted.metadata.file_path.stem),
-                'chunk_index': -1,  # Special index for comments
+                'chunk_index': -1,
                 'chunk_type': 'calibre_comment',
                 'format': extracted.metadata.detected_format,
-                'indexed_at': datetime.now().isoformat(),  # Track when this was indexed
+                'indexed_at': datetime.now().isoformat(),
             }
 
-            # Copy book metadata to comment chunk
             if book_metadata.get('author'):
-                comment_metadata['author'] = book_metadata['author']
+                comment_chunk['author'] = book_metadata['author']
             if book_metadata.get('publisher'):
-                comment_metadata['publisher'] = book_metadata['publisher']
-            if book_metadata.get('isbn'):
-                comment_metadata['isbn'] = book_metadata['isbn']
+                comment_chunk['publisher'] = book_metadata['publisher']
             if book_metadata.get('calibre_id'):
-                comment_metadata['calibre_id'] = book_metadata['calibre_id']
+                comment_chunk['calibre_id'] = book_metadata['calibre_id']
             if book_metadata.get('tags'):
-                comment_metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
-            if book_metadata.get('custom_fields'):
-                import json
-                comment_metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
+                comment_chunk['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
 
-            # Add to lists
-            ids.append(f"{book_id}_comment")
-            documents.append(comment_text)
-            embeddings.append(comment_embedding)
-            metadatas.append(comment_metadata)
+            chunks.append(comment_chunk)
+            embeddings.append(comment_embedding.tolist())
 
-        # Add to collection in batches (ChromaDB limit for large books)
-        batch_size = 500  # Safe batch size for ChromaDB
-        total_chunks = len(ids)
+        # Convert embeddings to numpy array
+        embeddings_array = np.array(embeddings)
 
-        if total_chunks <= batch_size:
-            # Small book: single batch
-            self.collection.add(
-                ids=ids,
-                embeddings=embeddings,
-                documents=documents,
-                metadatas=metadatas
-            )
-        else:
-            # Large book: batch processing
-            print(f"    📦 Processing {total_chunks} chunks in batches of {batch_size}...", flush=True)
-            for i in range(0, total_chunks, batch_size):
-                batch_end = min(i + batch_size, total_chunks)
-                batch_num = i // batch_size + 1
-                total_batches = (total_chunks + batch_size - 1) // batch_size
-
-                self.collection.add(
-                    ids=ids[i:batch_end],
-                    embeddings=embeddings[i:batch_end],
-                    documents=documents[i:batch_end],
-                    metadatas=metadatas[i:batch_end]
-                )
-                print(f"      Batch {batch_num}/{total_batches}: {batch_end}/{total_chunks} chunks", flush=True)
+        # Add to LanceDB
+        num_indexed = self.store.add_chunks(chunks, embeddings_array)
 
         index_time = time.time() - start_time
-        print(f"    ? Indexed {len(ids)} chunks in {index_time:.1f}s\n")
+        print(f"    Indexed {num_indexed} chunks in {index_time:.1f}s\n")
 
         # Summary
         total_time = extract_time + embed_time + index_time
-        print(f"? INDEXING COMPLETE")
+        print(f"INDEXING COMPLETE")
         print(f"  Total time: {total_time:.1f}s")
-        print(f"  Collection size: {self.collection.count()} chunks\n")
-
-        # Update BM25 index after indexing
-        if BM25_AVAILABLE:
-            self._rebuild_bm25_index()
+        print(f"  Collection size: {self.store.count()} chunks\n")
 
         return {
             'book_id': book_id,
-            'chunks_indexed': len(ids),
+            'chunks_indexed': num_indexed,
             'total_words': extracted.metadata.total_words,
             'total_pages': extracted.metadata.total_pages,
             'extraction_time': extract_time,
@@ -819,137 +675,6 @@ class archillesRAG:
             'indexing_time': index_time,
             'total_time': total_time,
         }
-
-    def _tokenize(self, text: str) -> List[str]:
-        """
-        Simple tokenizer for BM25.
-
-        Lowercases and splits on word boundaries.
-        Academic-friendly: keeps hyphens, apostrophes.
-        """
-        # Lowercase
-        text = text.lower()
-        # Split on whitespace and punctuation (but keep hyphens, apostrophes)
-        tokens = re.findall(r"[\w'-]+", text)
-        return tokens
-
-    def _load_bm25_index(self):
-        """Load BM25 index from disk if available."""
-        bm25_path = self.db_path / "bm25_index.pkl"
-
-        if not bm25_path.exists():
-            return
-
-        try:
-            with open(bm25_path, 'rb') as f:
-                data = pickle.load(f)
-                self.bm25_index = data['index']
-                self.bm25_docs = data['docs']
-                self.bm25_ids = data['ids']
-                self.bm25_metadatas = data.get('metadatas', None)  # Load cached metadata
-        except Exception as e:
-            print(f"  ? Could not load BM25 index: {e}")
-
-    def _save_bm25_index(self):
-        """Save BM25 index to disk."""
-        if not self.bm25_index:
-            return
-
-        bm25_path = self.db_path / "bm25_index.pkl"
-        bm25_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            with open(bm25_path, 'wb') as f:
-                pickle.dump({
-                    'index': self.bm25_index,
-                    'docs': self.bm25_docs,
-                    'ids': self.bm25_ids,
-                    'metadatas': self.bm25_metadatas  # Cache metadata to avoid SQLite limit
-                }, f)
-        except Exception as e:
-            print(f"  ? Could not save BM25 index: {e}")
-
-    def _rebuild_bm25_index(self):
-        """Rebuild BM25 index from ChromaDB documents + metadata (tags, title, author)."""
-        if not BM25_AVAILABLE:
-            return
-
-        # Get all documents from ChromaDB in batches to avoid SQLite variable limit
-        # ChromaDB's get() without parameters can hit SQLite's ~999 variable limit
-        print("  Fetching documents from ChromaDB...")
-        all_ids = []
-        all_docs = []
-        all_metadatas = []
-        batch_size = 500
-        offset = 0
-
-        while True:
-            batch = self.collection.get(limit=batch_size, offset=offset)
-            if not batch['ids']:
-                break
-            all_ids.extend(batch['ids'])
-            all_docs.extend(batch['documents'])
-            all_metadatas.extend(batch['metadatas'])
-            offset += batch_size
-            if len(batch['ids']) < batch_size:
-                break  # Last batch
-
-        if not all_ids:
-            return
-
-        print(f"  Loaded {len(all_ids)} chunks for BM25 indexing...")
-
-        # Store original documents, IDs, and metadata
-        self.bm25_ids = all_ids
-        self.bm25_docs = all_docs
-        self.bm25_metadatas = all_metadatas  # Cache for filtering without SQLite limit
-
-        # Create enriched documents with metadata for BM25 indexing
-        # This makes tags, titles, authors searchable via keyword search
-        enriched_docs = []
-        for doc, metadata in zip(self.bm25_docs, self.bm25_metadatas):
-            enriched_text = doc
-
-            # Add tags to searchable text (if available)
-            if metadata.get('tags'):
-                enriched_text += f" [TAGS: {metadata['tags']}]"
-
-            # Add book title (helps finding books by title)
-            if metadata.get('book_title'):
-                enriched_text += f" [TITLE: {metadata['book_title']}]"
-
-            # Add author (helps finding books by author)
-            if metadata.get('author'):
-                enriched_text += f" [AUTHOR: {metadata['author']}]"
-
-            # Add custom fields (if available) - makes user-defined Calibre fields searchable
-            if metadata.get('custom_fields'):
-                # Custom fields are stored as JSON string in metadata
-                # Parse and add to searchable text
-                try:
-                    import json
-                    custom_fields = metadata['custom_fields']
-                    if isinstance(custom_fields, str):
-                        custom_fields = json.loads(custom_fields)
-
-                    for field_label, field_data in custom_fields.items():
-                        if isinstance(field_data, dict) and 'value' in field_data:
-                            value = field_data['value']
-                            name = field_data.get('name', field_label)
-                            enriched_text += f" [CUSTOM_{field_label.upper()}: {value}]"
-                except Exception:
-                    pass  # Silently skip if parsing fails
-
-            enriched_docs.append(enriched_text)
-
-        # Tokenize enriched documents
-        tokenized_docs = [self._tokenize(doc) for doc in enriched_docs]
-
-        # Build BM25 index
-        self.bm25_index = BM25Okapi(tokenized_docs)
-
-        # Save to disk
-        self._save_bm25_index()
 
     def query(
         self,
@@ -970,7 +695,7 @@ class archillesRAG:
         Args:
             query_text: Search query
             top_k: Number of results to return (default: 10)
-            mode: Search mode - 'semantic' (BGE-M3), 'keyword' (BM25), or 'hybrid' (both, default)
+            mode: Search mode - 'semantic' (BGE-M3), 'keyword' (FTS), or 'hybrid' (both, default)
             language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
@@ -1004,9 +729,8 @@ class archillesRAG:
             filters.append(f"max {max_per_book}/book")
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
-        mode_emoji = {"semantic": "??", "keyword": "??", "hybrid": "??"}
-        print(f"{mode_emoji.get(mode, '??')} QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
-        print(f"  Searching {self.collection.count()} chunks...\n")
+        print(f"QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
+        print(f"  Searching {self.store.count()} chunks...\n")
 
         # Oversample to allow for diversity filtering
         # If max_per_book is set, we need to fetch more results than top_k
@@ -1101,25 +825,32 @@ class archillesRAG:
         book_id: str = None,
         chunk_type_filter: str = None
     ) -> List[Dict[str, Any]]:
-        """Semantic search using BGE-M3 embeddings."""
+        """Semantic search using BGE-M3 embeddings via LanceDB."""
         # Generate query embedding
         query_embedding = self.embedding_model.encode(
             query_text,
             convert_to_numpy=True
-        ).tolist()
+        )
 
-        # Build where clause for filtering
-        where_clause = self._build_where_clause(language, book_id, chunk_type_filter)
+        # Resolve book_id to calibre_id if numeric
+        calibre_id = None
+        resolved_book_id = book_id
+        if book_id and str(book_id).isdigit():
+            calibre_id = int(book_id)
+            resolved_book_id = None
 
-        # Search in ChromaDB
-        results = self.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            where=where_clause
+        # Search in LanceDB
+        results = self.store.vector_search(
+            query_vector=query_embedding,
+            top_k=top_k,
+            book_id=resolved_book_id,
+            calibre_id=calibre_id,
+            chunk_type=chunk_type_filter,
+            language=language
         )
 
         # Format results
-        return self._format_results(results, score_type='semantic')
+        return self._format_lancedb_results(results, score_type='semantic')
 
     def _keyword_search(
         self,
@@ -1130,64 +861,30 @@ class archillesRAG:
         chunk_type_filter: str = None,
         exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
-        """Keyword search using BM25 or exact phrase matching."""
-        if not BM25_AVAILABLE:
-            print("  ? BM25 not available. Install with: pip install rank-bm25")
-            return []
-
-        # Build BM25 index on-the-fly if not available
-        if not self.bm25_index:
-            print("  Building BM25 index on-the-fly...")
-            self._rebuild_bm25_index()
-            if not self.bm25_index:
-                print("  ? Could not build BM25 index (no documents?)")
-                return []
-
+        """Keyword search using LanceDB full-text search."""
         # For exact phrase matching, use different approach
         if exact_phrase:
             return self._exact_phrase_search(query_text, top_k, language, book_id, chunk_type_filter)
 
-        # Tokenize query
-        query_tokens = self._tokenize(query_text)
+        # Resolve book_id to calibre_id if numeric
+        calibre_id = None
+        resolved_book_id = book_id
+        if book_id and str(book_id).isdigit():
+            calibre_id = int(book_id)
+            resolved_book_id = None
 
-        # Get BM25 scores
-        scores = self.bm25_index.get_scores(query_tokens)
+        # Search in LanceDB using full-text search
+        results = self.store.fts_search(
+            query_text=query_text,
+            top_k=top_k,
+            book_id=resolved_book_id,
+            calibre_id=calibre_id,
+            chunk_type=chunk_type_filter,
+            language=language
+        )
 
-        # Get top-k indices
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k * 10]  # Get more for filtering
-
-        # Use cached metadata (avoids SQLite variable limit with large indexes)
-        all_metadata = self.bm25_metadatas
-
-        # Filter by language/book_id
-        filtered_results = []
-        for idx in top_indices:
-            metadata = all_metadata[idx]
-
-            # Apply filters
-            if language:
-                langs = [l.strip() for l in language.split(',')] if ',' in language else [language]
-                if metadata.get('language') not in langs:
-                    continue
-
-            if book_id and metadata.get('book_id') != book_id:
-                continue
-
-            if chunk_type_filter and metadata.get('chunk_type') != chunk_type_filter:
-                continue
-
-            filtered_results.append({
-                'rank': len(filtered_results) + 1,
-                'text': self.bm25_docs[idx],
-                'metadata': metadata,
-                'score': scores[idx],
-                'similarity': min(scores[idx] / 10.0, 1.0),  # Normalize BM25 score to 0-1
-            })
-
-            if len(filtered_results) >= top_k:
-                break
-
-        return filtered_results
+        # Format results
+        return self._format_lancedb_results(results, score_type='keyword')
 
     def _exact_phrase_search(
         self,
@@ -1204,51 +901,54 @@ class archillesRAG:
         Critical for Latin phrases like "evangelista et a presbyteris".
 
         IMPORTANT: Normalizes whitespace to handle line breaks!
-        "evangelista\net a presbyteris" matches "evangelista et a presbyteris"
         """
-        import re
+        # Get all chunks (filtered by book/language if specified)
+        calibre_id = None
+        resolved_book_id = book_id
+        if book_id and str(book_id).isdigit():
+            calibre_id = int(book_id)
+            resolved_book_id = None
 
-        # Normalize query: lowercase + collapse whitespace (newlines, tabs, multiple spaces ? single space)
+        # Fetch chunks to search through
+        all_chunks = self.store.get_all(limit=10000)
+
+        # Normalize query
         query_normalized = re.sub(r'\s+', ' ', query_text.lower().strip())
 
-        # Use cached data (avoids SQLite variable limit with large indexes)
         # Find exact matches
         matches = []
-        for idx, (doc_id, doc_text, metadata) in enumerate(zip(
-            self.bm25_ids,
-            self.bm25_docs,
-            self.bm25_metadatas
-        )):
-            # Apply filters first
+        for chunk in all_chunks:
+            # Apply filters
             if language:
                 langs = [l.strip() for l in language.split(',')] if ',' in language else [language]
-                if metadata.get('language') not in langs:
+                if chunk.get('language') not in langs:
                     continue
 
-            if book_id and metadata.get('book_id') != book_id:
+            if resolved_book_id and chunk.get('book_id') != resolved_book_id:
                 continue
 
-            if chunk_type_filter and metadata.get('chunk_type') != chunk_type_filter:
+            if calibre_id and chunk.get('calibre_id') != calibre_id:
                 continue
 
-            # Normalize document text: lowercase + collapse whitespace
-            # This handles line breaks! "evangelista\net a presbyteris" ? "evangelista et a presbyteris"
+            if chunk_type_filter and chunk.get('chunk_type') != chunk_type_filter:
+                continue
+
+            # Normalize document text
+            doc_text = chunk.get('text', '')
             doc_normalized = re.sub(r'\s+', ' ', doc_text.lower())
 
-            # Check for exact phrase in normalized text
+            # Check for exact phrase
             if query_normalized in doc_normalized:
-                # Count occurrences for scoring
                 count = doc_normalized.count(query_normalized)
-
                 matches.append({
-                    'rank': 0,  # Will be set later
-                    'text': doc_text,  # Keep ORIGINAL text (with line breaks)
-                    'metadata': metadata,
-                    'score': count,  # More occurrences = higher score
-                    'similarity': min(count / 10.0, 1.0),  # Normalize
+                    'rank': 0,
+                    'text': doc_text,
+                    'metadata': chunk,
+                    'score': count,
+                    'similarity': min(count / 10.0, 1.0),
                 })
 
-        # Sort by score (number of occurrences)
+        # Sort by score
         matches.sort(key=lambda x: x['score'], reverse=True)
 
         # Assign ranks
@@ -1267,156 +967,90 @@ class archillesRAG:
         exact_phrase: bool = False
     ) -> List[Dict[str, Any]]:
         """
-        Hybrid search combining semantic (BGE-M3) and keyword (BM25).
+        Hybrid search using LanceDB native hybrid search (vector + FTS).
 
-        Uses Reciprocal Rank Fusion (RRF) to combine scores.
-
-        IMPORTANT: If exact_phrase=True, ONLY returns exact phrase matches (no semantic mixing!)
+        IMPORTANT: If exact_phrase=True, ONLY returns exact phrase matches!
         """
-        # For exact phrase matching, skip semantic search entirely
-        # We want ONLY exact matches, not semantically similar results!
+        # For exact phrase matching, skip hybrid search entirely
         if exact_phrase:
             return self._keyword_search(query_text, top_k, language, book_id, chunk_type_filter, exact_phrase=True)
 
-        # Get results from both methods (request more to have enough after fusion)
-        semantic_results = self._semantic_search(query_text, top_k * 2, language, book_id, chunk_type_filter)
-        keyword_results = self._keyword_search(query_text, top_k * 2, language, book_id, chunk_type_filter, exact_phrase=False)
+        # Generate query embedding
+        query_embedding = self.embedding_model.encode(
+            query_text,
+            convert_to_numpy=True
+        )
 
-        if not BM25_AVAILABLE or not keyword_results:
-            # Fallback to semantic-only
-            return semantic_results[:top_k]
+        # Resolve book_id to calibre_id if numeric
+        calibre_id = None
+        resolved_book_id = book_id
+        if book_id and str(book_id).isdigit():
+            calibre_id = int(book_id)
+            resolved_book_id = None
 
-        # Reciprocal Rank Fusion (RRF)
-        # RRF score = sum(1 / (k + rank)) for each result
-        k = 60  # RRF constant (standard value)
-        rrf_scores = {}
+        # Use LanceDB native hybrid search
+        results = self.store.hybrid_search(
+            query_text=query_text,
+            query_vector=query_embedding,
+            top_k=top_k,
+            book_id=resolved_book_id,
+            calibre_id=calibre_id,
+            chunk_type=chunk_type_filter,
+            language=language
+        )
 
-        # Add semantic scores
-        for result in semantic_results:
-            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
-            book_id_key = result['metadata'].get('book_id', '')
-            chunk_idx = result['metadata'].get('chunk_index', 0)
-            doc_id = f"{book_id_key}_{chunk_idx}"
-            rrf_scores[doc_id] = {
-                'score': 1 / (k + result['rank']),
-                'result': result
-            }
+        # Format and apply boost factors
+        formatted_results = self._format_lancedb_results(results, score_type='hybrid')
 
-        # Add keyword scores (accumulate if already present)
-        for result in keyword_results:
-            # Use book_id + chunk_index as unique ID (Phase 1 all have chunk_index=0)
-            book_id_key = result['metadata'].get('book_id', '')
-            chunk_idx = result['metadata'].get('chunk_index', 0)
-            doc_id = f"{book_id_key}_{chunk_idx}"
-            if doc_id in rrf_scores:
-                rrf_scores[doc_id]['score'] += 1 / (k + result['rank'])
-            else:
-                rrf_scores[doc_id] = {
-                    'score': 1 / (k + result['rank']),
-                    'result': result
-                }
-
-        # Apply boost factors BEFORE sorting
-        # Extract query terms for tag matching
+        # Apply boost factors for Calibre comments and tag matches
         query_terms = set(query_text.lower().split())
 
-        for doc_id, data in rrf_scores.items():
-            result_metadata = data['result']['metadata']
+        for result in formatted_results:
+            metadata = result['metadata']
 
-            # Boost for Calibre comments (curated content)
-            if result_metadata.get('chunk_type') == 'calibre_comment':
-                data['score'] *= 1.2
+            # Boost for Calibre comments
+            if metadata.get('chunk_type') == 'calibre_comment':
+                result['score'] *= 1.2
+                result['similarity'] *= 1.2
 
             # Boost for tag matches
-            if result_metadata.get('tags'):
-                result_tags = set(result_metadata['tags'].lower().split(', '))
-                if query_terms & result_tags:  # If any query term matches any tag
-                    data['score'] *= 1.15
+            if metadata.get('tags'):
+                result_tags = set(metadata['tags'].lower().split(', '))
+                if query_terms & result_tags:
+                    result['score'] *= 1.15
+                    result['similarity'] *= 1.15
 
-        # Sort by RRF score (now with boosts applied)
-        sorted_results = sorted(rrf_scores.items(), key=lambda x: x[1]['score'], reverse=True)
+        # Re-sort by boosted scores
+        formatted_results.sort(key=lambda x: x['score'], reverse=True)
 
-        # Format final results
-        final_results = []
-        for i, (doc_id, data) in enumerate(sorted_results[:top_k]):
-            result = data['result'].copy()
+        # Re-assign ranks
+        for i, result in enumerate(formatted_results):
             result['rank'] = i + 1
-            rrf_score = min(data['score'], 1.0)  # Normalize
-            result['similarity'] = rrf_score
-            result['score'] = rrf_score  # Add score field for consistency
-            final_results.append(result)
 
-        return final_results
+        return formatted_results
 
-    def _build_where_clause(self, language: str = None, book_id: str = None, chunk_type_filter: str = None):
-        """
-        Build ChromaDB where clause for filtering.
-
-        book_id can be:
-        - Full book_id (e.g., "Goldsworthy_RomanWarfare_9654")
-        - Calibre numeric ID (e.g., "9654" or 9654)
-        - Partial book_id match
-        """
-        if not (language or book_id or chunk_type_filter):
-            return None
-
-        where_conditions = []
-
-        if language:
-            # Support comma-separated languages
-            if ',' in language:
-                langs = [l.strip() for l in language.split(',')]
-                where_conditions.append({'language': {'$in': langs}})
-            else:
-                where_conditions.append({'language': language})
-
-        if book_id:
-            # Try to match either book_id OR calibre_id
-            # If book_id looks like a pure number, assume it's a Calibre ID
-            book_id_str = str(book_id)
-
-            if book_id_str.isdigit():
-                # Pure numeric: Try calibre_id first (both as int and string for compatibility)
-                # ChromaDB may store calibre_id as int or string depending on indexing code version
-                where_conditions.append({
-                    '$or': [
-                        {'calibre_id': int(book_id_str)},
-                        {'calibre_id': book_id_str}
-                    ]
-                })
-            else:
-                # Non-numeric: match book_id exactly
-                where_conditions.append({'book_id': book_id_str})
-
-        if chunk_type_filter:
-            where_conditions.append({'chunk_type': chunk_type_filter})
-
-        # Combine all conditions with AND
-        if len(where_conditions) > 1:
-            return {'$and': where_conditions}
-        elif where_conditions:
-            return where_conditions[0]
-        return None
-
-    def _format_results(self, results: Dict, score_type: str = 'semantic') -> List[Dict[str, Any]]:
-        """Format ChromaDB results into standard format."""
+    def _format_lancedb_results(self, results: List[Dict], score_type: str = 'semantic') -> List[Dict[str, Any]]:
+        """Format LanceDB results into standard format."""
         formatted_results = []
 
-        if not results['ids'] or len(results['ids'][0]) == 0:
-            return formatted_results
+        for i, result in enumerate(results):
+            # Extract text and score
+            text = result.get('text', '')
+            score = result.get('score', 0.0)
 
-        for i in range(len(results['ids'][0])):
-            similarity = 1 - results['distances'][0][i]  # Convert distance to similarity
-            result = {
+            # Build metadata dict (all fields except text, vector, score)
+            metadata = {k: v for k, v in result.items()
+                       if k not in ('text', 'vector', 'score', '_distance', '_score')}
+
+            formatted_result = {
                 'rank': i + 1,
-                'text': results['documents'][0][i],
-                'metadata': results['metadatas'][0][i],
-                'distance': results['distances'][0][i],
-                'similarity': similarity,
-                'score': similarity,  # Add score field (using similarity for semantic)
+                'text': text,
+                'metadata': metadata,
+                'similarity': score,
+                'score': score,
                 'score_type': score_type
             }
-            formatted_results.append(result)
+            formatted_results.append(formatted_result)
 
         return formatted_results
 
@@ -1463,7 +1097,8 @@ class archillesRAG:
             else:
                 # Strategy 2: Fallback to individual token matching
                 # This works for partial matches or when query is multiple concepts
-                query_tokens = self._tokenize(query_text)
+                # Simple tokenization: lowercase and split on word boundaries
+                query_tokens = re.findall(r"[\w'-]+", query_text.lower())
 
                 if not query_tokens:
                     # No tokens found, show beginning
@@ -2033,7 +1668,7 @@ Examples:
 
   # Search modes (demonstration with different query types)
   python scripts/rag_demo.py query "network analysis" --mode hybrid     # Best: semantic + keyword (default)
-  python scripts/rag_demo.py query "Herrschaftslegitimation" --mode keyword    # Exact word matching (BM25)
+  python scripts/rag_demo.py query "Herrschaftslegitimation" --mode keyword    # Exact word matching (FTS)
   python scripts/rag_demo.py query "migration narratives" --mode semantic   # Concept search (BGE-M3)
 
   # Filter by language
@@ -2072,7 +1707,7 @@ Examples:
     query_parser.add_argument('query', help='Search query')
     query_parser.add_argument('--top-k', type=int, default=10, help='Number of results (default: 10)')
     query_parser.add_argument('--mode', choices=['semantic', 'keyword', 'hybrid'], default='hybrid',
-                              help='Search mode: semantic (BGE-M3), keyword (BM25), or hybrid (both, default)')
+                              help='Search mode: semantic (BGE-M3), keyword (FTS), or hybrid (both, default)')
     query_parser.add_argument('--exact', action='store_true',
                               help='Exact phrase matching (case-insensitive) - critical for Latin quotes')
     query_parser.add_argument('--language', help='Filter by language (e.g., de, en, la) or comma-separated')
@@ -2090,6 +1725,11 @@ Examples:
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show index statistics')
     stats_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
+
+    # Create-index command
+    create_index_parser = subparsers.add_parser('create-index', help='Create search indexes (FTS and/or IVF-PQ)')
+    create_index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
+    create_index_parser.add_argument('--fts-only', action='store_true', help='Only create FTS index (skip IVF-PQ vector index)')
 
     args = parser.parse_args()
 
@@ -2151,14 +1791,26 @@ Examples:
 
         elif args.command == 'stats':
             # Show stats
-            print(f"?? INDEX STATISTICS\n")
-            print(f"  Total chunks: {rag.collection.count()}")
+            print(f"INDEX STATISTICS\n")
+            print(f"  Total chunks: {rag.store.count()}")
             print(f"  Database path: {args.db_path}\n")
 
-    except ChromaDBCorruptionError as e:
-        # ChromaDB is corrupted - show helpful error message
+        elif args.command == 'create-index':
+            # Create search indexes
+            chunk_count = rag.store.count()
+            print(f"Creating indexes for {chunk_count} chunks...\n")
+
+            if args.fts_only:
+                rag.store.create_fts_index()
+            else:
+                rag.store.create_indexes(chunk_count)
+
+            print("\nIndex creation complete.")
+
+    except LanceDBError as e:
+        # LanceDB error - show helpful error message
         print(f"\n{'='*60}")
-        print(f"❌ DATABASE CORRUPTION DETECTED")
+        print(f"DATABASE ERROR")
         print(f"{'='*60}\n")
         print(str(e))
         print(f"\n{'='*60}\n")

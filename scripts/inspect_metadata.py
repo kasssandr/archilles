@@ -20,45 +20,35 @@ def inspect_book_metadata(book_id: str, limit: int = 5):
         print(f"WARNING: CALIBRE_LIBRARY_PATH not set, using local: {db_path}")
 
     rag = archillesRAG(db_path=db_path)
-    print(f"Total chunks in index: {rag.collection.count()}")
+    print(f"Total chunks in index: {rag.store.count()}")
 
     # Query chunks for this book
-    where_clause = None
     if book_id.isdigit():
-        # Numeric ID - try both calibre_id formats
-        where_clause = {
-            '$or': [
-                {'calibre_id': int(book_id)},
-                {'calibre_id': book_id}
-            ]
-        }
+        # Numeric ID - use calibre_id
+        results = rag.store.get_by_calibre_id(int(book_id), limit=limit)
     else:
-        where_clause = {'book_id': book_id}
+        # String ID - use book_id
+        results = rag.store.get_by_book_id(book_id, limit=limit)
 
-    results = rag.collection.get(
-        where=where_clause,
-        limit=limit
-    )
+    print(f"\nShowing {len(results)} chunks from book {book_id}\n")
 
-    print(f"\nShowing {len(results['ids'])} chunks from book {book_id}\n")
-
-    for i, (chunk_id, metadata) in enumerate(zip(results['ids'], results['metadatas']), 1):
+    for i, chunk in enumerate(results, 1):
         print(f"{'='*80}")
-        print(f"Chunk {i}: {chunk_id[:50]}...")
+        print(f"Chunk {i}: {chunk.get('id', 'N/A')[:50]}...")
         print(f"{'='*80}")
 
         # Key fields to check
-        print(f"Book ID: {metadata.get('book_id', 'N/A')}")
-        print(f"Calibre ID: {metadata.get('calibre_id', 'N/A')}")
-        print(f"Title: {metadata.get('book_title', 'N/A')}")
-        print(f"Chapter: {metadata.get('chapter', 'N/A')}")
-        print(f"Section: {metadata.get('section', 'N/A')}")
-        print(f"Section Title: {metadata.get('section_title', 'N/A')}")
-        print(f"Section Type: {metadata.get('section_type', 'N/A')}")
-        print(f"Chunk Type: {metadata.get('chunk_type', 'N/A')}")
-        print(f"Page: {metadata.get('page', 'N/A')}")
-        print(f"Source File: {metadata.get('source_file', 'N/A')}")
-        print(f"Indexed At: {metadata.get('indexed_at', 'N/A')}")
+        print(f"Book ID: {chunk.get('book_id', 'N/A')}")
+        print(f"Calibre ID: {chunk.get('calibre_id', 'N/A')}")
+        print(f"Title: {chunk.get('book_title', 'N/A')}")
+        print(f"Chapter: {chunk.get('chapter', 'N/A')}")
+        print(f"Section: {chunk.get('section', 'N/A')}")
+        print(f"Section Title: {chunk.get('section_title', 'N/A')}")
+        print(f"Section Type: {chunk.get('section_type', 'N/A')}")
+        print(f"Chunk Type: {chunk.get('chunk_type', 'N/A')}")
+        print(f"Page: {chunk.get('page_number', 'N/A')}")
+        print(f"Source File: {chunk.get('source_file', 'N/A')}")
+        print(f"Indexed At: {chunk.get('indexed_at', 'N/A')}")
         print()
 
 if __name__ == '__main__':
