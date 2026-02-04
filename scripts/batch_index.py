@@ -276,29 +276,18 @@ def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> 
         (excluding books that should be re-indexed)
     """
     try:
-        # Get all metadata from collection in batches
-        all_metadatas = []
-        batch_size = 500
-        offset = 0
-
-        while True:
-            batch = rag.collection.get(limit=batch_size, offset=offset)
-            if not batch['ids']:
-                break
-            all_metadatas.extend(batch['metadatas'])
-            offset += batch_size
-            if len(batch['ids']) < batch_size:
-                break
+        # Get all metadata from LanceDB store
+        all_chunks = rag.store.get_all(limit=100000)  # Get all chunks
 
         # Extract unique book_ids
         book_ids = set()
-        for metadata in all_metadatas:
-            if metadata and 'book_id' in metadata:
-                book_id = metadata['book_id']
+        for chunk in all_chunks:
+            if chunk and 'book_id' in chunk:
+                book_id = chunk['book_id']
 
                 # Check if this book should be re-indexed based on date
                 if reindex_before:
-                    indexed_at_str = metadata.get('indexed_at')
+                    indexed_at_str = chunk.get('indexed_at')
                     if indexed_at_str:
                         try:
                             indexed_at = datetime.fromisoformat(indexed_at_str)
@@ -687,7 +676,8 @@ Profiles:
                 db_path=args.db_path,
                 reset_db=args.reset_db,
                 enable_ocr=args.enable_ocr,
-                force_ocr=args.force_ocr
+                force_ocr=args.force_ocr,
+                profile=profile_name
             )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message
