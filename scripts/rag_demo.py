@@ -572,7 +572,8 @@ class archillesRAG:
         embeddings = []
 
         # Batch process for speed
-        batch_size = 32
+        # Note: batch_size=8 for 4GB GPU (BGE-M3 needs ~1.5GB for weights + activations)
+        batch_size = 8
         for i in tqdm(range(0, len(texts), batch_size), desc="    Embedding"):
             batch = texts[i:i+batch_size]
             batch_embeddings = self.embedding_model.encode(
