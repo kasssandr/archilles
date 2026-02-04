@@ -71,26 +71,47 @@ class archillesRAG:
     def __init__(
         self,
         db_path: str = "./archilles_rag_db",
-        model_name: str = "BAAI/bge-m3",
+        model_name: str = None,  # Will be set by profile or default to BGE-M3
         reset_db: bool = False,
         enable_ocr: bool = False,
         force_ocr: bool = False,
         ocr_backend: str = "auto",
-        ocr_language: str = "deu+eng"
+        ocr_language: str = "deu+eng",
+        profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
+        use_modular_pipeline: bool = False  # Future: use modular architecture
     ):
         """
         Initialize RAG system.
 
         Args:
             db_path: Path to LanceDB storage
-            model_name: Sentence transformer model (default: BGE-M3)
+            model_name: Sentence transformer model (overrides profile if set)
             reset_db: If True, delete and recreate the database
             enable_ocr: Enable OCR for scanned PDFs (auto-detect)
             force_ocr: Force OCR even for digital PDFs
             ocr_backend: OCR backend (auto, tesseract, lighton, olmocr)
             ocr_language: Language codes for Tesseract
+            profile: Hardware profile (minimal/balanced/maximal) - auto-detects if None
+            use_modular_pipeline: Use ModularPipeline architecture (future)
         """
-        print(f"Initializing ARCHILLES RAG...")
+        # Determine model and settings from profile
+        if profile:
+            from src.archilles.profiles import get_profile
+            profile_config = get_profile(profile)
+            if model_name is None:
+                model_name = profile_config.embedding_model
+            self.batch_size = profile_config.batch_size
+            self.device = profile_config.embedding_device
+            print(f"Initializing ARCHILLES RAG (profile: {profile})...")
+        else:
+            # Default to BGE-M3 and auto-detect device
+            if model_name is None:
+                model_name = "BAAI/bge-m3"
+            self.batch_size = 8  # Conservative default for 4GB GPUs
+            import torch
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            print(f"Initializing ARCHILLES RAG...")
+
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
@@ -120,11 +141,9 @@ class archillesRAG:
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
 
-        # Use GPU if available
-        import torch
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.embedding_model = SentenceTransformer(model_name, device=device)
-        print(f"  Model loaded: {model_name} (device: {device})")
+        # Use device from profile or auto-detected
+        self.embedding_model = SentenceTransformer(model_name, device=self.device)
+        print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested
         self.db_path = Path(db_path)
@@ -571,11 +590,9 @@ class archillesRAG:
         texts = [chunk['text'] for chunk in extracted.chunks]
         embeddings = []
 
-        # Batch process for speed
-        # Note: batch_size=8 for 4GB GPU (BGE-M3 needs ~1.5GB for weights + activations)
-        batch_size = 8
-        for i in tqdm(range(0, len(texts), batch_size), desc="    Embedding"):
-            batch = texts[i:i+batch_size]
+        # Batch process for speed (batch_size determined by profile)
+        for i in tqdm(range(0, len(texts), self.batch_size), desc="    Embedding"):
+            batch = texts[i:i+self.batch_size]
             batch_embeddings = self.embedding_model.encode(
                 batch,
                 show_progress_bar=False,
@@ -1737,6 +1754,11 @@ Examples:
     index_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto',
                               help='OCR backend: auto (best available), tesseract, lighton, olmocr')
     index_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes (default: deu+eng)')
+    # Hardware profile options
+    index_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
+                              help='Hardware profile: minimal (CPU), balanced (GPU 6-12GB), maximal (GPU 12GB+)')
+    index_parser.add_argument('--use-modular-pipeline', action='store_true',
+                              help='Use new ModularPipeline architecture (parser→chunker→embedder)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1792,12 +1814,14 @@ Examples:
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:
-        # Initialize RAG with OCR options (only for index command)
+        # Initialize RAG with OCR and profile options (only for index command)
         reset_db = getattr(args, 'reset_db', False)
         enable_ocr = getattr(args, 'enable_ocr', False)
         force_ocr = getattr(args, 'force_ocr', False)
         ocr_backend = getattr(args, 'ocr_backend', 'auto')
         ocr_language = getattr(args, 'ocr_language', 'deu+eng')
+        profile = getattr(args, 'profile', None)
+        use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
 
         rag = archillesRAG(
             db_path=args.db_path,
@@ -1805,7 +1829,9 @@ Examples:
             enable_ocr=enable_ocr,
             force_ocr=force_ocr,
             ocr_backend=ocr_backend,
-            ocr_language=ocr_language
+            ocr_language=ocr_language,
+            use_modular_pipeline=use_modular_pipeline,
+            profile=profile
         )
 
         if args.command == 'index':
