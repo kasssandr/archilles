@@ -250,30 +250,12 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
 
 def create_book_id(book: Dict[str, Any]) -> str:
     """
-    Create a unique, readable book ID for indexing.
+    Create a unique book ID for indexing.
 
-    Format: AuthorLastName_ShortTitle_CalibreID
-    Example: Arendt_VitaActiva_1234
+    Uses the Calibre ID directly for easy cross-referencing.
+    Example: "8127" (matches Calibre's "Id" column)
     """
-    # Extract last name from author
-    author = book['author']
-    if ',' in author:
-        # "LastName, FirstName" format
-        last_name = author.split(',')[0].strip()
-    else:
-        # "FirstName LastName" format
-        parts = author.split()
-        last_name = parts[-1] if parts else 'Unknown'
-
-    # Clean last name (remove special chars)
-    last_name = ''.join(c for c in last_name if c.isalnum())
-
-    # Create short title (first 20 chars, alphanumeric only)
-    title = book['title']
-    short_title = ''.join(c for c in title if c.isalnum() or c.isspace())[:20]
-    short_title = short_title.replace(' ', '')
-
-    return f"{last_name}_{short_title}_{book['id']}"
+    return str(book['id'])
 
 
 def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> set:
