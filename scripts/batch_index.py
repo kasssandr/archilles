@@ -84,7 +84,7 @@ def get_calibre_library_path() -> Path:
     return Path(library_path)
 
 
-def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> List[Dict[str, Any]]:
+def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exclude_tags: List[str] = None) -> List[Dict[str, Any]]:
     """
     Get all books with a specific tag from Calibre database.
 
@@ -92,6 +92,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
         library_path: Path to Calibre library
         tag_name: Tag to filter by (case-insensitive)
         min_rating: Minimum star rating (1-5, 0 = no filter)
+        exclude_tags: List of tags to exclude (e.g., ['DeepL', 'Machine-translated'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -130,6 +131,19 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
     if calibre_rating > 0:
         query += " AND ratings.rating >= ?"
         params.append(calibre_rating)
+
+    # Exclude books that have any of the excluded tags
+    if exclude_tags:
+        placeholders = ', '.join(['LOWER(?)' for _ in exclude_tags])
+        query += f"""
+        AND NOT EXISTS (
+            SELECT 1 FROM books_tags_link btl_excl
+            INNER JOIN tags t_excl ON btl_excl.tag = t_excl.id
+            WHERE btl_excl.book = books.id
+            AND LOWER(t_excl.name) IN ({placeholders})
+        )
+        """
+        params.extend(exclude_tags)
 
     query += " ORDER BY ratings.rating DESC, authors.name, books.title"
 
@@ -548,6 +562,9 @@ Examples:
   # Re-index old books (e.g., indexed before Dec 1st with old code)
   python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
 
+  # Exclude machine-translated books
+  python scripts/batch_index.py --tag "Leit-Literatur" --exclude-tag "DeepL" --exclude-tag "Übersetzung"
+
 Profiles:
   minimal  - CPU-only, resource-efficient (laptops, <6GB VRAM)
   balanced - GPU-accelerated, good quality (6-12GB VRAM)
@@ -563,6 +580,10 @@ Profiles:
     # Rating filter
     parser.add_argument('--min-rating', type=int, choices=[1, 2, 3, 4, 5], default=0,
                         help='Minimum star rating (1-5)')
+
+    # Exclude filter (can be used multiple times)
+    parser.add_argument('--exclude-tag', action='append', dest='exclude_tags', metavar='TAG',
+                        help='Exclude books with this tag (can be used multiple times, e.g., --exclude-tag "DeepL" --exclude-tag "Übersetzung")')
 
     # Options
     parser.add_argument('--dry-run', action='store_true',
@@ -641,7 +662,10 @@ Profiles:
         print(f"  Filtering by tag: {args.tag}")
         if min_rating > 0:
             print(f"  Minimum rating: {'*' * min_rating}")
-        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating)
+        exclude_tags = getattr(args, 'exclude_tags', None)
+        if exclude_tags:
+            print(f"  Excluding tags: {', '.join(exclude_tags)}")
+        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=exclude_tags)
     elif args.author:
         print(f"  Filtering by author: {args.author}")
         books = get_books_by_author(library_path, args.author)
