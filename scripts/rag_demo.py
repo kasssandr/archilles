@@ -119,8 +119,12 @@ class archillesRAG:
 
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
-        self.embedding_model = SentenceTransformer(model_name)
-        print(f"  Model loaded: {model_name}")
+
+        # Use GPU if available
+        import torch
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.embedding_model = SentenceTransformer(model_name, device=device)
+        print(f"  Model loaded: {model_name} (device: {device})")
 
         # Handle database reset if requested
         self.db_path = Path(db_path)
