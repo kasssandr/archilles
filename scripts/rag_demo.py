@@ -95,21 +95,29 @@ class archillesRAG:
             use_modular_pipeline: Use ModularPipeline architecture (future)
         """
         # Determine model and settings from profile
+        import torch
+        cuda_available = torch.cuda.is_available()
+
         if profile:
             from src.archilles.profiles import get_profile
             profile_config = get_profile(profile)
             if model_name is None:
                 model_name = profile_config.embedding_model
             self.batch_size = profile_config.batch_size
-            self.device = profile_config.embedding_device
+            # Auto-detect: use CUDA if profile wants it AND it's available
+            if profile_config.embedding_device == "cuda" and cuda_available:
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+                if profile_config.embedding_device == "cuda" and not cuda_available:
+                    print(f"  ⚠️  CUDA not available, falling back to CPU")
             print(f"Initializing ARCHILLES RAG (profile: {profile})...")
         else:
             # Default to BGE-M3 and auto-detect device
             if model_name is None:
                 model_name = "BAAI/bge-m3"
             self.batch_size = 8  # Conservative default for 4GB GPUs
-            import torch
-            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            self.device = 'cuda' if cuda_available else 'cpu'
             print(f"Initializing ARCHILLES RAG...")
 
         print(f"  Database: {db_path}")
