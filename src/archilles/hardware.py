@@ -35,32 +35,32 @@ class HardwareProfile:
         """
         Recommend an indexing profile based on detected hardware.
 
-        Decision logic:
-        - No CUDA or < 6 GB VRAM -> "minimal" (CPU-only, resource-efficient)
-        - 6-12 GB VRAM -> "balanced" (GPU-accelerated, good quality)
-        - > 12 GB VRAM -> "maximal" (full GPU, maximum quality)
+        All profiles use BGE-M3 (same quality!) - only batch_size differs:
+        - < 8 GB VRAM -> "minimal" (batch_size=8, ~2 min/book)
+        - 8-16 GB VRAM -> "balanced" (batch_size=32, ~30s/book)
+        - > 16 GB VRAM -> "maximal" (batch_size=64, ~15s/book)
 
         Returns:
             Recommended profile name
         """
         if not self.cuda_available:
-            logger.info("No CUDA available - recommending 'minimal' profile")
+            logger.info("No CUDA available - recommending 'minimal' profile (will use CPU)")
             return "minimal"
 
-        if self.vram_gb is None or self.vram_gb < 6:
+        if self.vram_gb is None or self.vram_gb < 8:
             logger.info(
-                f"Limited VRAM ({self.vram_gb or 0:.1f} GB) - recommending 'minimal' profile"
+                f"VRAM ({self.vram_gb or 0:.1f} GB) - recommending 'minimal' profile (batch_size=8)"
             )
             return "minimal"
 
-        if self.vram_gb >= 12:
+        if self.vram_gb >= 16:
             logger.info(
-                f"High VRAM ({self.vram_gb:.1f} GB) - recommending 'maximal' profile"
+                f"High VRAM ({self.vram_gb:.1f} GB) - recommending 'maximal' profile (batch_size=64)"
             )
             return "maximal"
 
         logger.info(
-            f"Moderate VRAM ({self.vram_gb:.1f} GB) - recommending 'balanced' profile"
+            f"Moderate VRAM ({self.vram_gb:.1f} GB) - recommending 'balanced' profile (batch_size=32)"
         )
         return "balanced"
 

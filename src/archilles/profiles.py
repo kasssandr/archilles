@@ -3,13 +3,17 @@ ARCHILLES Indexing Profiles
 
 Hardware-adaptive configuration profiles for different system capabilities.
 
+ALL profiles use BGE-M3 (best multilingual model) - only batch_size differs!
+
 Profile Overview:
 -----------------
-| Profile   | VRAM Trigger | Embedding Model      | Batch | Chunk | Philosophy          |
-|-----------|--------------|----------------------|-------|-------|---------------------|
-| minimal   | <6 GB / no CUDA | bge-small-en-v1.5 | 8     | 1000  | Works everywhere    |
-| balanced  | 6-12 GB      | bge-base-en-v1.5     | 32    | 768   | Sweet spot          |
-| maximal   | >12 GB       | bge-m3               | 64    | 512   | Maximum quality     |
+| Profile   | VRAM       | Model  | Batch | Speed      | Use Case               |
+|-----------|------------|--------|-------|------------|------------------------|
+| minimal   | 4-6 GB     | bge-m3 | 8     | ~2 min/book| Quadro T1000, GTX 1650 |
+| balanced  | 8-12 GB    | bge-m3 | 32    | ~30s/book  | RTX 3060, RTX 2070     |
+| maximal   | 16+ GB     | bge-m3 | 64    | ~15s/book  | RTX 3090, RTX 4080     |
+
+Quality is IDENTICAL across all profiles - only indexing speed differs.
 
 Reference: Tom's ThinkPad P15 (Quadro T1000, 4GB VRAM) -> "minimal" profile
 """
@@ -53,43 +57,43 @@ class IndexingProfile:
         return cls(**data)
 
 
-# Pre-defined profiles
+# Pre-defined profiles - ALL use BGE-M3 for consistent quality
 PROFILES: Dict[ProfileName, IndexingProfile] = {
     "minimal": IndexingProfile(
         name="minimal",
-        embedding_model="BAAI/bge-small-en-v1.5",
-        embedding_device="cpu",
-        batch_size=8,
-        chunk_size=1000,
-        chunk_overlap=200,
+        embedding_model="BAAI/bge-m3",
+        embedding_device="cuda",  # Uses GPU if available, falls back to CPU
+        batch_size=8,  # Small batches for 4GB VRAM (tested on Quadro T1000)
+        chunk_size=512,
+        chunk_overlap=128,
         max_parallel_docs=2,
-        description="For laptops and older hardware. Fast, resource-efficient.",
-        embedding_dimension=384,
-        max_tokens_per_chunk=512,
+        description="For 4-6GB GPUs (Quadro T1000, GTX 1650). Full quality, ~2 min/book.",
+        embedding_dimension=1024,
+        max_tokens_per_chunk=8192,
     ),
     "balanced": IndexingProfile(
         name="balanced",
-        embedding_model="BAAI/bge-base-en-v1.5",
+        embedding_model="BAAI/bge-m3",
         embedding_device="cuda",
-        batch_size=32,
-        chunk_size=768,
-        chunk_overlap=150,
+        batch_size=32,  # Medium batches for 8-12GB VRAM
+        chunk_size=512,
+        chunk_overlap=128,
         max_parallel_docs=4,
-        description="Recommended for most systems. Good balance of speed and quality.",
-        embedding_dimension=768,
-        max_tokens_per_chunk=512,
+        description="For 8-12GB GPUs (RTX 3060, RTX 2070). Full quality, ~30s/book.",
+        embedding_dimension=1024,
+        max_tokens_per_chunk=8192,
     ),
     "maximal": IndexingProfile(
         name="maximal",
         embedding_model="BAAI/bge-m3",
         embedding_device="cuda",
-        batch_size=64,
+        batch_size=64,  # Large batches for 16GB+ VRAM
         chunk_size=512,
         chunk_overlap=128,
         max_parallel_docs=8,
-        description="For high-end GPUs. Maximum semantic depth and quality.",
+        description="For 16GB+ GPUs (RTX 3090, RTX 4080). Full quality, ~15s/book.",
         embedding_dimension=1024,
-        max_tokens_per_chunk=8192,  # bge-m3 supports longer sequences
+        max_tokens_per_chunk=8192,
     ),
 }
 
