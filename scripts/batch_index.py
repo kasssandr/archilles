@@ -4,7 +4,19 @@ ARCHILLES Batch Indexer
 
 Index multiple books from Calibre library by tag, author, or other criteria.
 
+Hardware-Adaptive Profiles:
+    - minimal:  CPU-only, resource-efficient (for laptops, <6GB VRAM)
+    - balanced: GPU-accelerated, good quality (6-12GB VRAM)
+    - maximal:  Full GPU, maximum quality (>12GB VRAM)
+
 Usage:
+    # Index ALL books in the library (no filter required)
+    python scripts/batch_index.py --all
+
+    # Index with a specific profile (auto-detects hardware if not specified)
+    python scripts/batch_index.py --all --profile minimal
+    python scripts/batch_index.py --all --profile balanced
+
     # Index all books with tag "Leit-Literatur"
     python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -46,6 +58,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
 from scripts.safe_indexer import SafeIndexer
 from scripts.import_calibre_annotations import import_annotations, find_latest_export
+
+# Hardware-adaptive profile system
+from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
+from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
 
 
 def get_calibre_library_path() -> Path:
@@ -515,6 +531,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Index ALL books in the library (no filter required)
+  python scripts/batch_index.py --all
+
+  # Use a specific hardware profile (minimal/balanced/maximal)
+  python scripts/batch_index.py --all --profile minimal
+  python scripts/batch_index.py --all --profile balanced
+
   # Index all books tagged "Leit-Literatur"
   python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -535,6 +558,11 @@ Examples:
 
   # Re-index old books (e.g., indexed before Dec 1st with old code)
   python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
+
+Profiles:
+  minimal  - CPU-only, resource-efficient (laptops, <6GB VRAM)
+  balanced - GPU-accelerated, good quality (6-12GB VRAM)
+  maximal  - Full GPU, maximum quality (>12GB VRAM)
         """
     )
 
@@ -571,8 +599,17 @@ Examples:
                         help='Enable OCR for scanned PDFs (auto-detect)')
     parser.add_argument('--force-ocr', action='store_true',
                         help='Force OCR even for digital PDFs')
+    parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
+                        help='Hardware profile to use (auto-detects if not specified)')
+    parser.add_argument('--show-profiles', action='store_true',
+                        help='Show available profiles and exit')
 
     args = parser.parse_args()
+
+    # Handle --show-profiles
+    if args.show_profiles:
+        list_profiles()
+        sys.exit(0)
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -587,6 +624,27 @@ Examples:
     # Get library path
     library_path = get_calibre_library_path()
     print(f"📚 Calibre library: {library_path}")
+
+    # Determine hardware profile
+    if args.profile:
+        # User specified profile explicitly
+        profile_name = args.profile
+        profile = get_profile(profile_name)
+        print(f"⚙️  Using profile: {profile_name.upper()} (user-specified)")
+    elif args.non_interactive:
+        # Non-interactive mode: auto-detect and use recommended
+        hw = detect_hardware()
+        profile_name = hw.recommend_profile()
+        profile = get_profile(profile_name)
+        print(f"⚙️  Using profile: {profile_name.upper()} (auto-detected)")
+    else:
+        # Interactive mode: show hardware detection and let user choose
+        profile_name = select_profile_interactive()
+        profile = get_profile(profile_name)
+
+    print(f"    Model: {profile.embedding_model}")
+    print(f"    Device: {profile.embedding_device}")
+    print(f"    Chunk size: {profile.chunk_size} tokens")
 
     # Get books based on criteria
     min_rating = getattr(args, 'min_rating', 0) or 0
