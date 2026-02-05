@@ -255,6 +255,13 @@ class PDFExtractor(BaseExtractor):
         except Exception:
             pass
 
+        # Get page labels (printed page numbers like "xiv", "1", "62")
+        # This handles Roman numerals in front matter correctly
+        try:
+            page_labels = doc.get_page_labels()
+        except Exception:
+            page_labels = None
+
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
@@ -262,10 +269,16 @@ class PDFExtractor(BaseExtractor):
             if not text.strip():
                 continue
 
+            # Use PDF page label if available, otherwise fall back to physical page
+            if page_labels and page_num < len(page_labels):
+                page_label = page_labels[page_num]
+            else:
+                page_label = str(page_num + 1)
+
             pages_text.append(text)
             pages_metadata.append({
-                'page': page_num + 1,
-                'page_label': str(page_num + 1),
+                'page': page_num + 1,  # Physical page (for navigation)
+                'page_label': page_label,  # Printed page label (for citation)
             })
 
         doc.close()

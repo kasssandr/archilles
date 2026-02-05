@@ -45,7 +45,8 @@ class LanceDBStore:
         # Position metadata
         "chunk_index": int,
         "chunk_type": str,
-        "page_number": int,
+        "page_number": int,  # Physical PDF page (for navigation)
+        "page_label": str,   # Printed page label (for citations, e.g. "xiv", "62")
         "chapter": str,
 
         # Section metadata (EPUB)
@@ -175,6 +176,7 @@ class LanceDBStore:
                 "chunk_index": chunk.get("chunk_index", i),
                 "chunk_type": chunk.get("chunk_type", "content"),
                 "page_number": chunk.get("page_number") or chunk.get("page") or 0,
+                "page_label": chunk.get("page_label", ""),  # Printed page (e.g. "xiv", "62")
                 "chapter": chunk.get("chapter", ""),
 
                 # Section metadata (EPUB)

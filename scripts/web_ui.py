@@ -124,6 +124,7 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
     year = metadata.get('year', 0) or result.get('year', 0)
     language = metadata.get('language', '') or result.get('language', '')
     page = metadata.get('page_number', 0) or result.get('page_number', 0)
+    page_label = metadata.get('page_label', '') or result.get('page_label', '')
     section_type = metadata.get('section_type', '') or result.get('section_type', '')
     tags = metadata.get('tags', '') or result.get('tags', '')
     calibre_id = metadata.get('calibre_id', 0) or result.get('calibre_id', 0)
@@ -156,7 +157,10 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
             meta_parts.append(f"**Jahr:** {year}")
         if language:
             meta_parts.append(f"**Sprache:** {language}")
-        if page and page > 0:
+        # Page: prefer page_label (printed page), show PDF page if different
+        if page_label and page_label != str(page):
+            meta_parts.append(f"**Seite:** {page_label} (PDF: {page})")
+        elif page and page > 0:
             meta_parts.append(f"**Seite:** {page}")
         if calibre_id and calibre_id > 0:
             meta_parts.append(f"**Calibre-ID:** {calibre_id}")
