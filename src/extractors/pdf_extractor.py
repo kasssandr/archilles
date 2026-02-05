@@ -650,20 +650,41 @@ class PDFExtractor(BaseExtractor):
 
         return cleaned_pages
 
+    def _roman_to_int(self, roman: str) -> int:
+        """Convert Roman numeral to integer."""
+        roman = roman.upper()
+        values = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+        result = 0
+        prev = 0
+        for char in reversed(roman):
+            curr = values.get(char, 0)
+            if curr < prev:
+                result -= curr
+            else:
+                result += curr
+            prev = curr
+        return result
+
+    def _is_roman(self, s: str) -> bool:
+        """Check if string is a valid Roman numeral."""
+        pattern = re.compile(
+            r'^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
+            re.IGNORECASE
+        )
+        return bool(pattern.match(s)) and len(s) > 0
+
     def _extract_page_labels_from_headers(
         self,
         pages_text: List[str]
     ) -> List[str]:
         """
-        Extract printed page numbers from running headers.
+        Extract printed page numbers from running headers with validation.
 
-        Running headers often contain the page number at the start or end of line.
-        This extracts those BEFORE the headers are removed, so we can use them
-        for accurate citations.
-
-        Handles:
-        - Arabic numerals: "62", "123"
-        - Roman numerals: "xiv", "VII"
+        Features:
+        - Extracts Arabic numerals (62, 123) and Roman numerals (xiv, VII)
+        - Validates sequence (numbers should be roughly increasing)
+        - Interpolates missing page numbers from neighbors
+        - Detects chapter starts (often omit page number)
 
         Args:
             pages_text: List of page texts (headers still present)
@@ -671,12 +692,8 @@ class PDFExtractor(BaseExtractor):
         Returns:
             List of extracted page labels (one per page, empty string if not found)
         """
-        labels = []
-        roman_pattern = re.compile(
-            r'^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
-            re.IGNORECASE
-        )
-
+        # Step 1: Raw extraction
+        raw_labels = []
         for page_text in pages_text:
             lines = page_text.strip().split('\n')
             page_label = ""
@@ -693,7 +710,6 @@ class PDFExtractor(BaseExtractor):
 
                 lines_checked += 1
 
-                # Try to extract page number from start or end of line
                 # Pattern 1: Line starts with number
                 match = re.match(r'^(\d+)\s', line)
                 if match:
@@ -714,22 +730,125 @@ class PDFExtractor(BaseExtractor):
                 # Pattern 4: Roman numerals (standalone or at start/end)
                 line_parts = line.split()
                 if line_parts:
-                    # Check first and last word for Roman numerals
                     for candidate in [line_parts[0], line_parts[-1]]:
-                        if roman_pattern.match(candidate):
+                        if self._is_roman(candidate):
                             page_label = candidate.lower()
                             break
                     if page_label:
                         break
 
-            labels.append(page_label)
+            raw_labels.append(page_label)
+
+        # Step 2: Convert to numeric for validation
+        numeric_labels = []
+        is_roman_sequence = False
+
+        for label in raw_labels:
+            if not label:
+                numeric_labels.append(None)
+            elif label.isdigit():
+                numeric_labels.append(int(label))
+            elif self._is_roman(label):
+                numeric_labels.append(self._roman_to_int(label))
+                is_roman_sequence = True  # At least some Roman numerals
+            else:
+                numeric_labels.append(None)
+
+        # Step 3: Validate sequence and detect outliers
+        # A valid page sequence should be roughly increasing (with some tolerance for errors)
+        validated = numeric_labels.copy()
+
+        # Find the dominant sequence (should be roughly n, n+1, n+2, ...)
+        # Check window of 5 pages to detect if a value is an outlier
+        for i in range(len(validated)):
+            if validated[i] is None:
+                continue
+
+            # Get neighbors (within 3 pages)
+            neighbors = []
+            for j in range(max(0, i-3), min(len(validated), i+4)):
+                if j != i and validated[j] is not None:
+                    neighbors.append((j, validated[j]))
+
+            if len(neighbors) >= 2:
+                # Check if current value fits the sequence
+                # Expected value based on neighbors: interpolate
+                expected_values = []
+                for j, val in neighbors:
+                    expected = val + (i - j)  # If page j has value val, page i should have val + (i-j)
+                    expected_values.append(expected)
+
+                avg_expected = sum(expected_values) / len(expected_values)
+                current = validated[i]
+
+                # If current value differs by more than 5 from expected, it's likely wrong
+                if abs(current - avg_expected) > 5:
+                    validated[i] = None  # Mark as invalid
+
+        # Step 4: Interpolate missing values (including chapter starts)
+        interpolated = validated.copy()
+
+        for i in range(len(interpolated)):
+            if interpolated[i] is not None:
+                continue
+
+            # Find previous valid value
+            prev_idx, prev_val = None, None
+            for j in range(i - 1, -1, -1):
+                if interpolated[j] is not None:
+                    prev_idx, prev_val = j, interpolated[j]
+                    break
+
+            # Find next valid value
+            next_idx, next_val = None, None
+            for j in range(i + 1, len(interpolated)):
+                if interpolated[j] is not None:
+                    next_idx, next_val = j, interpolated[j]
+                    break
+
+            # Interpolate if we have both neighbors
+            if prev_val is not None and next_val is not None:
+                # Check if the gap makes sense (next should be > prev)
+                if next_val > prev_val:
+                    # Linear interpolation
+                    step = (next_val - prev_val) / (next_idx - prev_idx)
+                    interpolated[i] = int(prev_val + step * (i - prev_idx))
+            elif prev_val is not None:
+                # Only have previous, assume +1 per page
+                interpolated[i] = prev_val + (i - prev_idx)
+            elif next_val is not None:
+                # Only have next, assume -1 per page backwards
+                interpolated[i] = next_val - (next_idx - i)
+
+        # Step 5: Convert back to strings (preserving Roman numerals in front matter)
+        final_labels = []
+        for i, val in enumerate(interpolated):
+            if val is None:
+                final_labels.append("")
+            elif is_roman_sequence and i < len(interpolated) // 4:
+                # Keep Roman numerals for front matter (first quarter of book)
+                # This is a heuristic - front matter is usually < 25% of pages
+                original = raw_labels[i]
+                if original and self._is_roman(original):
+                    final_labels.append(original.lower())
+                else:
+                    final_labels.append(str(val))
+            else:
+                final_labels.append(str(val))
 
         # Log extraction results
-        found = sum(1 for l in labels if l)
-        if found > 0:
-            print(f"  📄 Extracted {found}/{len(labels)} page labels from headers", flush=True)
+        raw_found = sum(1 for l in raw_labels if l)
+        final_found = sum(1 for l in final_labels if l)
+        interpolated_count = final_found - raw_found
 
-        return labels
+        if final_found > 0:
+            msg = f"  📄 Page labels: {raw_found} extracted"
+            if interpolated_count > 0:
+                msg += f", {interpolated_count} interpolated"
+            msg += f" (total: {final_found}/{len(pages_text)})"
+            print(msg, flush=True)
+
+        return final_labels
 
     def _detect_section_type(
         self,
