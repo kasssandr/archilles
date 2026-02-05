@@ -189,6 +189,72 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
     return books
 
 
+def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
+    """
+    Get ALL books from Calibre database (no filtering).
+
+    Uses GROUP_CONCAT to handle multi-author books correctly.
+
+    Args:
+        library_path: Path to Calibre library
+
+    Returns:
+        List of book dictionaries with metadata and file paths
+    """
+    db_path = library_path / "metadata.db"
+
+    if not db_path.exists():
+        raise FileNotFoundError(f"Calibre database not found: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    query = """
+    SELECT
+        books.id,
+        books.title,
+        books.path,
+        GROUP_CONCAT(authors.name, ' & ') as author
+    FROM books
+    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
+    LEFT JOIN authors ON books_authors_link.author = authors.id
+    GROUP BY books.id
+    ORDER BY books.id
+    """
+
+    cursor = conn.execute(query)
+    rows = cursor.fetchall()
+
+    books = []
+    for row in rows:
+        book_path = library_path / row['path']
+
+        # Find available formats
+        formats = []
+        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
+            for file in book_path.glob(f'*{ext}'):
+                formats.append({
+                    'format': ext[1:].upper(),
+                    'path': str(file)
+                })
+
+        if formats:
+            books.append({
+                'id': row['id'],
+                'title': row['title'],
+                'author': row['author'] or 'Unknown',
+                'path': str(book_path),
+                'formats': formats,
+                'best_format': next(
+                    (f for f in formats if f['format'] == 'PDF'),
+                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
+                )
+            })
+
+    conn.close()
+    return books
+
+
 def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, Any]]:
     """
     Get all books by a specific author from Calibre database.
@@ -602,6 +668,8 @@ Profiles:
 
     # Selection criteria (mutually exclusive)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--all', action='store_true',
+                       help='Index ALL books in the library (no tag/author filter)')
     group.add_argument('--tag', help='Index books with this tag')
     group.add_argument('--author', help='Index books by this author (partial match)')
 
@@ -689,7 +757,10 @@ Profiles:
 
     # Get books based on criteria
     min_rating = getattr(args, 'min_rating', 0) or 0
-    if args.tag:
+    if getattr(args, 'all', False):
+        print(f"📚 Indexing ALL books in the library")
+        books = get_all_books(library_path)
+    elif args.tag:
         print(f"  Filtering by tag: {args.tag}")
         if min_rating > 0:
             print(f"  Minimum rating: {'*' * min_rating}")
