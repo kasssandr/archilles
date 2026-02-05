@@ -360,7 +360,13 @@ def main():
                         max_per_book=max_per_book
                     )
                 except Exception as e:
-                    st.error(f"Suchfehler: {e}")
+                    error_msg = str(e)
+                    if "INVERTED index" in error_msg or "full text search" in error_msg.lower():
+                        st.error("FTS-Index fehlt! Keyword-Suche nicht verfügbar.")
+                        st.info("Lösung: `python scripts/rag_demo.py create-index --fts-only`")
+                        st.info("Alternativ: Hybrid- oder Semantische Suche verwenden.")
+                    else:
+                        st.error(f"Suchfehler: {e}")
                     results = []
 
             # Results header

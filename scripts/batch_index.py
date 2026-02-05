@@ -728,6 +728,16 @@ Profiles:
         status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
         safe_indexer.end_session(status)
 
+    # Create FTS index for keyword search (if not dry run and we indexed something)
+    if not args.dry_run and stats['indexed'] > 0:
+        print("\n📇 Creating full-text search index...")
+        try:
+            rag.store.create_fts_index()
+            print("   ✅ FTS index created - keyword search now available")
+        except Exception as e:
+            print(f"   ⚠️  FTS index creation failed: {e}")
+            print("   Keyword search may not work. Run: python scripts/rag_demo.py create-index")
+
     # Exit with error code if any failures
     if stats['failed'] > 0:
         sys.exit(1)
