@@ -49,6 +49,28 @@ def load_rag():
     return archillesRAG(db_path=db_path)
 
 
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_available_tags(_rag) -> List[str]:
+    """Get all unique tags from indexed books."""
+    books = _rag.store.get_indexed_books()
+    all_tags = set()
+    for book in books:
+        tags_str = book.get('tags', '')
+        if tags_str:
+            for tag in tags_str.split(', '):
+                tag = tag.strip()
+                if tag:
+                    all_tags.add(tag)
+    return sorted(all_tags)
+
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def get_indexed_books_list(_rag) -> List[Dict[str, Any]]:
+    """Get list of indexed books for dropdown."""
+    books = _rag.store.get_indexed_books()
+    return sorted(books, key=lambda x: x.get('title', '') or '')
+
+
 def highlight_text(text: str, query_terms: List[str]) -> str:
     """Highlight query terms in text with HTML markup."""
     if not query_terms:
@@ -166,6 +188,62 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
             st.text(text)
 
         st.divider()
+
+
+def generate_markdown_export(results: List[Dict[str, Any]], query: str, filters: List[str]) -> str:
+    """Generate Markdown export of search results."""
+    from datetime import datetime
+
+    lines = [
+        f"# ARCHILLES Suchergebnisse",
+        f"",
+        f"**Query:** {query}",
+        f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"**Ergebnisse:** {len(results)}",
+    ]
+
+    if filters:
+        lines.append(f"**Filter:** {', '.join(filters)}")
+
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    for i, result in enumerate(results, 1):
+        metadata = result.get('metadata', {})
+        text = result.get('text', '')
+        score = result.get('score', 0)
+
+        book_title = metadata.get('book_title', '') or metadata.get('title', 'Unknown')
+        author = metadata.get('author', '')
+        year = metadata.get('year', 0)
+        page = metadata.get('page_number', 0)
+        calibre_id = metadata.get('calibre_id', 0)
+
+        lines.append(f"## {i}. {book_title}")
+        lines.append("")
+
+        meta_parts = []
+        if author:
+            meta_parts.append(f"**Autor:** {author}")
+        if year and year > 0:
+            meta_parts.append(f"**Jahr:** {year}")
+        if page and page > 0:
+            meta_parts.append(f"**Seite:** {page}")
+        if calibre_id and calibre_id > 0:
+            meta_parts.append(f"**Calibre-ID:** {calibre_id}")
+        meta_parts.append(f"**Score:** {score:.2f}")
+
+        lines.append(" | ".join(meta_parts))
+        lines.append("")
+        lines.append(f"> {text[:500]}{'...' if len(text) > 500 else ''}")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+
+    lines.append(f"*Exportiert von ARCHILLES*")
+
+    return "\n".join(lines)
 
 
 def render_books_tab(rag, stats):
@@ -310,6 +388,51 @@ def main():
         selected_chunk = st.selectbox("Inhaltstyp", options=list(chunk_options.keys()))
         chunk_type_filter = chunk_options[selected_chunk]
 
+        # Tag filter
+        available_tags = get_available_tags(rag)
+        if available_tags:
+            tag_options = ['Alle Tags'] + available_tags
+            selected_tags = st.multiselect(
+                "🏷️ Tags",
+                options=available_tags,
+                default=[],
+                help="Nur in Büchern mit diesen Tags suchen"
+            )
+            tag_filter = selected_tags if selected_tags else None
+        else:
+            tag_filter = None
+
+        # Book filter
+        indexed_books = get_indexed_books_list(rag)
+        if indexed_books:
+            book_options = [{'label': 'Alle Bücher', 'id': None}]
+            for book in indexed_books:
+                title = book.get('title', 'Unbekannt')[:50]
+                author = book.get('author', '')[:20]
+                book_id = book.get('book_id', '')
+                label = f"{title}" + (f" ({author})" if author else "")
+                book_options.append({'label': label, 'id': book_id})
+
+            selected_book_idx = st.selectbox(
+                "📖 In Buch suchen",
+                options=range(len(book_options)),
+                format_func=lambda i: book_options[i]['label'],
+                index=0
+            )
+            book_id_filter = book_options[selected_book_idx]['id']
+        else:
+            book_id_filter = None
+
+        st.divider()
+
+        # Advanced options
+        with st.expander("⚙️ Erweitert"):
+            exact_phrase = st.checkbox(
+                "Exakte Phrase",
+                value=False,
+                help="Findet nur exakte Übereinstimmungen (gut für Zitate, Latein)"
+            )
+
         st.divider()
 
         # Database info
@@ -348,13 +471,29 @@ def main():
         if query and search_clicked:
             query_terms = query.split()
 
-            with st.spinner(f"Suche in {stats.get('total_chunks', 0):,} Chunks..."):
+            # Build filter description for display
+            active_filters = []
+            if tag_filter:
+                active_filters.append(f"Tags: {', '.join(tag_filter)}")
+            if book_id_filter:
+                active_filters.append(f"Buch: {book_options[selected_book_idx]['label']}")
+            if language_filter:
+                active_filters.append(f"Sprache: {language_filter}")
+            if exact_phrase:
+                active_filters.append("Exakte Phrase")
+
+            filter_msg = f" (Filter: {'; '.join(active_filters)})" if active_filters else ""
+
+            with st.spinner(f"Suche in {stats.get('total_chunks', 0):,} Chunks{filter_msg}..."):
                 try:
                     results = rag.query(
                         query_text=query,
                         top_k=top_k,
                         mode=mode,
                         language=language_filter,
+                        book_id=book_id_filter,
+                        exact_phrase=exact_phrase,
+                        tag_filter=tag_filter,
                         section_filter=section_filter,
                         chunk_type_filter=chunk_type_filter,
                         max_per_book=max_per_book
@@ -372,6 +511,24 @@ def main():
             # Results header
             if results:
                 st.success(f"**{len(results)}** Ergebnisse für: *{query}*")
+
+                # Show active filters
+                if active_filters:
+                    st.caption(f"Filter: {' | '.join(active_filters)}")
+
+                # Export button
+                col_export, col_spacer = st.columns([1, 5])
+                with col_export:
+                    export_md = generate_markdown_export(results, query, active_filters)
+                    st.download_button(
+                        label="📥 Export",
+                        data=export_md,
+                        file_name=f"archilles_search_{query[:20].replace(' ', '_')}.md",
+                        mime="text/markdown",
+                        help="Ergebnisse als Markdown exportieren"
+                    )
+
+                st.divider()
 
                 # Results
                 for i, result in enumerate(results, 1):
