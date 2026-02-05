@@ -95,15 +95,20 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
     score = result.get('score', 0)
     text = result.get('text', '')
 
-    # Extract metadata
-    book_title = result.get('book_title', 'Unknown')
-    author = result.get('author', '')
-    year = result.get('year', 0)
-    language = result.get('language', '')
-    page = result.get('page_number', 0)
-    section_type = result.get('section_type', '')
-    tags = result.get('tags', '')
-    calibre_id = result.get('calibre_id', 0)
+    # Extract metadata (nested in 'metadata' dict from query results)
+    metadata = result.get('metadata', {})
+    book_title = metadata.get('book_title', '') or result.get('book_title', 'Unknown')
+    author = metadata.get('author', '') or result.get('author', '')
+    year = metadata.get('year', 0) or result.get('year', 0)
+    language = metadata.get('language', '') or result.get('language', '')
+    page = metadata.get('page_number', 0) or result.get('page_number', 0)
+    section_type = metadata.get('section_type', '') or result.get('section_type', '')
+    tags = metadata.get('tags', '') or result.get('tags', '')
+    calibre_id = metadata.get('calibre_id', 0) or result.get('calibre_id', 0)
+
+    # Fallback for title
+    if not book_title or book_title == 'Unknown':
+        book_title = metadata.get('title', '') or 'Unknown'
 
     # Score color
     if score > 0.8:
