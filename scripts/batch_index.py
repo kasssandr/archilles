@@ -119,7 +119,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
         books.title,
         books.path,
         ratings.rating as rating,
-        authors.name as author
+        GROUP_CONCAT(authors.name, ' & ') as author
     FROM books
     INNER JOIN books_tags_link ON books.id = books_tags_link.book
     INNER JOIN tags ON books_tags_link.tag = tags.id
@@ -149,7 +149,9 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
         """
         params.extend(exclude_tags)
 
-    query += " ORDER BY ratings.rating DESC, authors.name, books.title"
+    # Group by book to avoid duplicates when books have multiple authors
+    query += " GROUP BY books.id"
+    query += " ORDER BY ratings.rating DESC, author, books.title"
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()
@@ -206,16 +208,21 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    # First find all books that have the author we're looking for
+    # Then get all authors for those books (to show co-authors)
     query = """
     SELECT
         books.id,
         books.title,
         books.path,
-        authors.name as author
+        GROUP_CONCAT(all_authors.name, ' & ') as author
     FROM books
-    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
-    LEFT JOIN authors ON books_authors_link.author = authors.id
+    INNER JOIN books_authors_link bal ON books.id = bal.book
+    INNER JOIN authors ON bal.author = authors.id
+    LEFT JOIN books_authors_link all_bal ON books.id = all_bal.book
+    LEFT JOIN authors all_authors ON all_bal.author = all_authors.id
     WHERE LOWER(authors.name) LIKE LOWER(?)
+    GROUP BY books.id
     ORDER BY books.title
     """
 
