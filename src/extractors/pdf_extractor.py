@@ -673,15 +673,125 @@ class PDFExtractor(BaseExtractor):
         )
         return bool(pattern.match(s)) and len(s) > 0
 
+    def _is_likely_footnote_line(self, line: str) -> bool:
+        """
+        Check if a line looks like a footnote rather than a page number.
+
+        Footnote indicators:
+        - Line starts with number followed by text (e.g., "1 This is a footnote")
+        - Line starts with number followed by punctuation (e.g., "1. See also...")
+        - Superscript markers followed by text
+        - Multiple reference numbers with commas
+
+        Page number indicators:
+        - Standalone number (just "42")
+        - Number at start/end with only header text (title, author)
+        """
+        line = line.strip()
+        if not line:
+            return False
+
+        # If line is just a number, it's a page number, not footnote
+        if line.isdigit():
+            return False
+
+        # Footnote pattern: starts with number + punctuation + text
+        # e.g., "1. See also...", "1) Reference...", "1 Text continues..."
+        if re.match(r'^\d+[\.\)\s]\s*[A-Za-zÄÖÜäöüß]', line):
+            # But "123 Chapter Title" could be "page_num header_text"
+            # Check if the number is likely a page number (reasonable range)
+            match = re.match(r'^(\d+)', line)
+            if match:
+                num = int(match.group(1))
+                # Small numbers (1-20) at start with text are likely footnotes
+                # Larger numbers could be page numbers with header text
+                if num <= 20:
+                    return True
+
+        # Multiple numbers with separators = footnote references
+        # e.g., "1, 2, 3" or "see notes 1-5"
+        if re.search(r'\d+\s*[,\-]\s*\d+', line):
+            return True
+
+        return False
+
+    def _extract_page_number_from_lines(
+        self,
+        lines: List[str],
+        check_first: bool = True
+    ) -> str:
+        """
+        Extract page number from a set of lines (header or footer).
+
+        Args:
+            lines: Lines to check
+            check_first: If True, check first 3 non-empty lines (header)
+                        If False, check last 3 non-empty lines (footer)
+
+        Returns:
+            Extracted page label or empty string
+        """
+        # Filter to non-empty lines
+        non_empty = [l.strip() for l in lines if l.strip()]
+
+        if not non_empty:
+            return ""
+
+        # Select lines to check (first 3 or last 3)
+        if check_first:
+            lines_to_check = non_empty[:3]
+        else:
+            lines_to_check = non_empty[-3:]
+
+        for line in lines_to_check:
+            # Skip if line looks like a footnote
+            if not check_first and self._is_likely_footnote_line(line):
+                continue
+
+            # Pattern 1: Line is just a number (most reliable)
+            if line.isdigit():
+                return line
+
+            # Pattern 2: Line is just a Roman numeral
+            if self._is_roman(line):
+                return line.lower()
+
+            # Pattern 3: Line starts with number + space (then header text)
+            match = re.match(r'^(\d+)\s+', line)
+            if match:
+                num = match.group(1)
+                # For footers, be more strict - avoid footnote markers
+                if not check_first:
+                    # Skip small numbers that might be footnotes
+                    if int(num) <= 20 and len(line) > 10:
+                        continue
+                return num
+
+            # Pattern 4: Line ends with number (page number at end of header)
+            match = re.search(r'\s(\d+)$', line)
+            if match:
+                return match.group(1)
+
+            # Pattern 5: Roman numerals at start or end
+            parts = line.split()
+            if parts:
+                for candidate in [parts[0], parts[-1]]:
+                    if self._is_roman(candidate):
+                        return candidate.lower()
+
+        return ""
+
     def _extract_page_labels_from_headers(
         self,
         pages_text: List[str]
     ) -> List[str]:
         """
-        Extract printed page numbers from running headers with validation.
+        Extract printed page numbers from running headers OR footers with validation.
 
         Features:
+        - Checks both header (first 3 lines) and footer (last 3 lines)
         - Extracts Arabic numerals (62, 123) and Roman numerals (xiv, VII)
+        - Distinguishes page numbers from footnote markers
         - Validates sequence (numbers should be roughly increasing)
         - Interpolates missing page numbers from neighbors
         - Detects chapter starts (often omit page number)
@@ -692,50 +802,28 @@ class PDFExtractor(BaseExtractor):
         Returns:
             List of extracted page labels (one per page, empty string if not found)
         """
-        # Step 1: Raw extraction
+        # Step 1: Raw extraction from headers AND footers
         raw_labels = []
+        header_count = 0
+        footer_count = 0
+
         for page_text in pages_text:
             lines = page_text.strip().split('\n')
             page_label = ""
+            source = None
 
-            # Check first 3 non-empty lines for page numbers
-            lines_checked = 0
-            for line in lines:
-                if lines_checked >= 3:
-                    break
+            # First try header (first 3 non-empty lines)
+            page_label = self._extract_page_number_from_lines(lines[:10], check_first=True)
+            if page_label:
+                source = "header"
+                header_count += 1
 
-                line = line.strip()
-                if not line:
-                    continue
-
-                lines_checked += 1
-
-                # Pattern 1: Line starts with number
-                match = re.match(r'^(\d+)\s', line)
-                if match:
-                    page_label = match.group(1)
-                    break
-
-                # Pattern 2: Line ends with number
-                match = re.search(r'\s(\d+)$', line)
-                if match:
-                    page_label = match.group(1)
-                    break
-
-                # Pattern 3: Line is just a number
-                if line.isdigit():
-                    page_label = line
-                    break
-
-                # Pattern 4: Roman numerals (standalone or at start/end)
-                line_parts = line.split()
-                if line_parts:
-                    for candidate in [line_parts[0], line_parts[-1]]:
-                        if self._is_roman(candidate):
-                            page_label = candidate.lower()
-                            break
-                    if page_label:
-                        break
+            # If not found in header, try footer (last 3 non-empty lines)
+            if not page_label:
+                page_label = self._extract_page_number_from_lines(lines[-10:], check_first=False)
+                if page_label:
+                    source = "footer"
+                    footer_count += 1
 
             raw_labels.append(page_label)
 
@@ -843,9 +931,17 @@ class PDFExtractor(BaseExtractor):
 
         if final_found > 0:
             msg = f"  📄 Page labels: {raw_found} extracted"
+            # Show source breakdown (header vs footer)
+            if header_count > 0 or footer_count > 0:
+                sources = []
+                if header_count > 0:
+                    sources.append(f"{header_count} header")
+                if footer_count > 0:
+                    sources.append(f"{footer_count} footer")
+                msg += f" ({', '.join(sources)})"
             if interpolated_count > 0:
                 msg += f", {interpolated_count} interpolated"
-            msg += f" (total: {final_found}/{len(pages_text)})"
+            msg += f" → total: {final_found}/{len(pages_text)}"
             print(msg, flush=True)
 
         return final_labels
