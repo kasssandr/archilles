@@ -38,6 +38,9 @@ Usage:
     # Re-index books that were indexed before a certain date (with improved code)
     python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
 
+    # Re-index books with missing page labels (indexed before page label feature)
+    python scripts/batch_index.py --tag "Leit-Literatur" --reindex-missing-labels
+
     # Run in non-interactive mode (auto-resume sessions, no prompts)
     python scripts/batch_index.py --tag "Leit-Literatur" --non-interactive
 """
@@ -58,6 +61,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
 from scripts.safe_indexer import SafeIndexer
 from scripts.import_calibre_annotations import import_annotations, find_latest_export
+from scripts.find_books_missing_labels import find_books_missing_labels
 
 # Hardware-adaptive profile system
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
@@ -258,7 +262,12 @@ def create_book_id(book: Dict[str, Any]) -> str:
     return str(book['id'])
 
 
-def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> set:
+def get_indexed_book_ids(
+    rag: archillesRAG,
+    reindex_before: datetime = None,
+    reindex_missing_labels: bool = False,
+    db_path: str = None
+) -> set:
     """
     Get set of already indexed book IDs from RAG database.
 
@@ -266,11 +275,25 @@ def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> 
         rag: Initialized archillesRAG instance
         reindex_before: If provided, exclude books indexed before this date
                        (so they will be re-indexed)
+        reindex_missing_labels: If True, exclude books with missing page labels
+                               (so they will be re-indexed)
+        db_path: Path to LanceDB database (for missing labels check)
 
     Returns:
         Set of book_id strings that are already in the index
         (excluding books that should be re-indexed)
     """
+    # Get books with missing labels if requested
+    books_missing_labels = set()
+    if reindex_missing_labels and db_path:
+        print("🔍 Checking for books with missing page labels...")
+        missing = find_books_missing_labels(db_path)
+        books_missing_labels = set(missing.keys())
+        if books_missing_labels:
+            print(f"   Found {len(books_missing_labels)} books needing page label re-indexing")
+        else:
+            print("   All books have proper page labels!")
+
     try:
         # Get all metadata from LanceDB store
         all_chunks = rag.store.get_all(limit=100000)  # Get all chunks
@@ -280,6 +303,10 @@ def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> 
         for chunk in all_chunks:
             if chunk and 'book_id' in chunk:
                 book_id = chunk['book_id']
+
+                # Check if this book should be re-indexed due to missing labels
+                if reindex_missing_labels and book_id in books_missing_labels:
+                    continue  # Don't add to set (will be re-indexed)
 
                 # Check if this book should be re-indexed based on date
                 if reindex_before:
@@ -312,9 +339,11 @@ def batch_index(
     dry_run: bool = False,
     skip_existing: bool = False,
     reindex_before: datetime = None,
+    reindex_missing_labels: bool = False,
     log_file: Optional[Path] = None,
     safe_indexer: Optional[SafeIndexer] = None,
-    phase: str = 'phase2'
+    phase: str = 'phase2',
+    db_path: str = None
 ) -> Dict[str, Any]:
     """
     Index multiple books into the RAG database.
@@ -325,9 +354,11 @@ def batch_index(
         dry_run: If True, only show what would be indexed
         skip_existing: If True, skip books that are already indexed
         reindex_before: If provided, re-index books indexed before this date
+        reindex_missing_labels: If True, re-index books with missing page labels
         log_file: Optional path to write detailed log
         safe_indexer: Optional SafeIndexer for crash-safety and progress tracking
         phase: 'phase1' (metadata only) or 'phase2' (full content)
+        db_path: Path to LanceDB database
 
     Returns:
         Dictionary with indexing statistics
@@ -345,13 +376,18 @@ def batch_index(
     # Get already indexed books if skip_existing is enabled
     # If reindex_before is set, exclude old books from the existing set
     # Also check progress tracker if available
+    should_check = skip_existing or reindex_before or reindex_missing_labels
     if safe_indexer:
         # Check progress tracker for indexed books
         existing_ids_from_tracker = set(safe_indexer.tracker.get_indexed_books(phase))
-        existing_ids_from_chromadb = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+        existing_ids_from_chromadb = get_indexed_book_ids(
+            rag, reindex_before, reindex_missing_labels, db_path
+        ) if should_check else set()
         existing_ids = existing_ids_from_tracker | existing_ids_from_chromadb
     else:
-        existing_ids = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+        existing_ids = get_indexed_book_ids(
+            rag, reindex_before, reindex_missing_labels, db_path
+        ) if should_check else set()
 
     print(f"\n{'='*60}")
     print(f"📚 ARCHILLES BATCH INDEXER")
@@ -363,6 +399,8 @@ def batch_index(
         reindex_count = len(books) - len(existing_ids)
         print(f"  📅 Re-indexing books indexed before: {reindex_before.strftime('%Y-%m-%d')}")
         print(f"     → {reindex_count} books will be re-indexed")
+    if reindex_missing_labels:
+        print(f"  📄 Re-indexing books with missing page labels")
     print(f"  Mode: {'DRY RUN' if dry_run else 'INDEXING'}")
     print(f"{'='*60}\n")
 
@@ -381,8 +419,9 @@ def batch_index(
         print(f"         Format: {format_type} | ID: {book_id}")
 
         # Check if already indexed (skip or progress tracker)
-        # BUT: Don't skip if reindex_before is set (force reindex mode)
-        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not reindex_before:
+        # BUT: Don't skip if reindex_before or reindex_missing_labels is set (force reindex mode)
+        force_reindex = reindex_before or reindex_missing_labels
+        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not force_reindex:
             print(f"         ⏭️  SKIPPED (already indexed in {phase})")
             stats['skipped'] += 1
             if safe_indexer:
@@ -575,6 +614,9 @@ Profiles:
     parser.add_argument('--reindex-before', metavar='DATE',
                         help='Re-index books indexed before this date (YYYY-MM-DD). '
                              'Useful for re-indexing old books with improved code.')
+    parser.add_argument('--reindex-missing-labels', action='store_true',
+                        help='Re-index books with missing page labels (indexed before '
+                             'page label extraction was implemented)')
     parser.add_argument('--limit', type=int,
                         help='Limit number of books to index (for testing)')
     parser.add_argument('--log', metavar='FILE',
@@ -718,9 +760,11 @@ Profiles:
         dry_run=args.dry_run,
         skip_existing=args.skip_existing,
         reindex_before=reindex_before,
+        reindex_missing_labels=args.reindex_missing_labels,
         log_file=log_file,
         safe_indexer=safe_indexer,
-        phase=phase if safe_indexer else 'phase2'
+        phase=phase if safe_indexer else 'phase2',
+        db_path=args.db_path
     )
 
     # End session (if not dry run)
