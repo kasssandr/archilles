@@ -155,6 +155,14 @@ class LanceDBStore:
         if len(chunks) == 0:
             return 0
 
+        # Check existing schema to handle backward compatibility
+        existing_columns = set()
+        if self.table is not None:
+            try:
+                existing_columns = set(self.table.schema.names)
+            except Exception:
+                pass
+
         records = []
         for i, chunk in enumerate(chunks):
             record = {
@@ -176,7 +184,6 @@ class LanceDBStore:
                 "chunk_index": chunk.get("chunk_index", i),
                 "chunk_type": chunk.get("chunk_type", "content"),
                 "page_number": chunk.get("page_number") or chunk.get("page") or 0,
-                "page_label": chunk.get("page_label", ""),  # Printed page (e.g. "xiv", "62")
                 "chapter": chunk.get("chapter", ""),
 
                 # Section metadata (EPUB)
@@ -189,6 +196,11 @@ class LanceDBStore:
                 "format": chunk.get("format", ""),
                 "indexed_at": chunk.get("indexed_at", datetime.now().isoformat()),
             }
+
+            # Add page_label only if table supports it or is new
+            if not existing_columns or "page_label" in existing_columns:
+                record["page_label"] = chunk.get("page_label", "")
+
             records.append(record)
 
         if self.table is None:

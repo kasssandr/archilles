@@ -202,6 +202,16 @@ class PDFExtractor(BaseExtractor):
         # Combine all pages
         full_text = '\n\n'.join(pages_text)
 
+        # Extract page labels from headers BEFORE removing them
+        # This captures printed page numbers (like "62" or "xiv") from running headers
+        extracted_labels = self._extract_page_labels_from_headers(pages_text)
+        for i, label in enumerate(extracted_labels):
+            if label and i < len(pages_metadata):
+                # Only update if we found a label and PDF didn't provide one
+                current_label = pages_metadata[i].get('page_label', '')
+                if not current_label or current_label == str(pages_metadata[i].get('page', '')):
+                    pages_metadata[i]['page_label'] = label
+
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
@@ -284,6 +294,15 @@ class PDFExtractor(BaseExtractor):
         doc.close()
 
         full_text = '\n\n'.join(pages_text)
+
+        # Extract page labels from headers BEFORE removing them (fallback for PDFs without labels)
+        extracted_labels = self._extract_page_labels_from_headers(pages_text)
+        for i, label in enumerate(extracted_labels):
+            if label and i < len(pages_metadata):
+                current_label = pages_metadata[i].get('page_label', '')
+                # Only update if PDF didn't provide a proper label
+                if not current_label or current_label == str(pages_metadata[i].get('page', '')):
+                    pages_metadata[i]['page_label'] = label
 
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
@@ -630,6 +649,87 @@ class PDFExtractor(BaseExtractor):
             cleaned_pages.append('\n'.join(cleaned_lines))
 
         return cleaned_pages
+
+    def _extract_page_labels_from_headers(
+        self,
+        pages_text: List[str]
+    ) -> List[str]:
+        """
+        Extract printed page numbers from running headers.
+
+        Running headers often contain the page number at the start or end of line.
+        This extracts those BEFORE the headers are removed, so we can use them
+        for accurate citations.
+
+        Handles:
+        - Arabic numerals: "62", "123"
+        - Roman numerals: "xiv", "VII"
+
+        Args:
+            pages_text: List of page texts (headers still present)
+
+        Returns:
+            List of extracted page labels (one per page, empty string if not found)
+        """
+        labels = []
+        roman_pattern = re.compile(
+            r'^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
+            re.IGNORECASE
+        )
+
+        for page_text in pages_text:
+            lines = page_text.strip().split('\n')
+            page_label = ""
+
+            # Check first 3 non-empty lines for page numbers
+            lines_checked = 0
+            for line in lines:
+                if lines_checked >= 3:
+                    break
+
+                line = line.strip()
+                if not line:
+                    continue
+
+                lines_checked += 1
+
+                # Try to extract page number from start or end of line
+                # Pattern 1: Line starts with number
+                match = re.match(r'^(\d+)\s', line)
+                if match:
+                    page_label = match.group(1)
+                    break
+
+                # Pattern 2: Line ends with number
+                match = re.search(r'\s(\d+)$', line)
+                if match:
+                    page_label = match.group(1)
+                    break
+
+                # Pattern 3: Line is just a number
+                if line.isdigit():
+                    page_label = line
+                    break
+
+                # Pattern 4: Roman numerals (standalone or at start/end)
+                line_parts = line.split()
+                if line_parts:
+                    # Check first and last word for Roman numerals
+                    for candidate in [line_parts[0], line_parts[-1]]:
+                        if roman_pattern.match(candidate):
+                            page_label = candidate.lower()
+                            break
+                    if page_label:
+                        break
+
+            labels.append(page_label)
+
+        # Log extraction results
+        found = sum(1 for l in labels if l)
+        if found > 0:
+            print(f"  📄 Extracted {found}/{len(labels)} page labels from headers", flush=True)
+
+        return labels
 
     def _detect_section_type(
         self,
