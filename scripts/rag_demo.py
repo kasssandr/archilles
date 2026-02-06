@@ -68,6 +68,55 @@ class archillesRAG:
     - Semantic + keyword search
     """
 
+    # Common stop words for multilingual queries
+    # These are automatically removed from queries to improve search quality
+    # Covers all languages supported by ARCHILLES language detector (EN, DE, FR, LA, IT, ES, EL, HE, AR, RU, PT, NL)
+    STOP_WORDS = {
+        # English
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'will', 'with', 'or', 'but', 'not', 'this', 'these',
+        # German
+        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer',
+        'eines', 'einem', 'einen', 'und', 'oder', 'aber', 'von', 'zu',
+        'im', 'am', 'um', 'bei', 'mit', 'für', 'aus', 'auf', 'durch',
+        # French
+        'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'et', 'ou',
+        'mais', 'dans', 'pour', 'par', 'sur', 'avec', 'au', 'aux', 'ce',
+        'cette', 'ces', 'est', 'sont', 'être', 'avoir', 'à', 'son', 'sa',
+        # Spanish
+        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o',
+        'pero', 'en', 'por', 'para', 'con', 'sin', 'sobre', 'del', 'al',
+        'es', 'son', 'ser', 'estar', 'haber', 'ha', 'han', 'su', 'sus',
+        # Italian
+        'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', 'e', 'o',
+        'ma', 'in', 'di', 'd', 'da', 'per', 'con', 'su', 'del', 'della', 'dei',
+        'degli', 'delle', 'al', 'alla', 'ai', 'agli', 'alle', 'è', 'sono',
+        # Portuguese
+        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'e', 'ou',
+        'mas', 'em', 'de', 'por', 'para', 'com', 'sem', 'sobre', 'do',
+        'da', 'dos', 'das', 'ao', 'à', 'aos', 'às', 'é', 'são', 'seu', 'sua',
+        # Dutch
+        'de', 'het', 'een', 'en', 'of', 'maar', 'in', 'op', 'voor', 'van',
+        'met', 'door', 'bij', 'aan', 'naar', 'om', 'over', 'is', 'zijn',
+        'was', 'waren', 'heeft', 'hebben', 'had', 'hadden', 'zijn', 'der',
+        # Latin
+        'et', 'in', 'ad', 'cum', 'ex', 'ab', 'a', 'e', 'de', 'per', 'pro', 'sub',
+        'atque', 'sed', 'aut', 'vel', 'ac', 'neque', 'nec', 'est', 'sunt',
+        # Russian (Cyrillic)
+        'и', 'в', 'на', 'с', 'по', 'для', 'к', 'от', 'за', 'о',
+        'из', 'у', 'это', 'как', 'но', 'или', 'а', 'не', 'что', 'он',
+        # Greek (ancient & modern)
+        'ο', 'η', 'το', 'οι', 'τα', 'και', 'ή', 'αλλά', 'σε', 'από',
+        'για', 'με', 'στο', 'στη', 'στον', 'στην', 'του', 'της', 'των', 'εν',
+        # Hebrew (with common particles)
+        'ה', 'ו', 'ב', 'ל', 'מ', 'ש', 'של', 'את', 'על', 'אל', 'עם',
+        'כי', 'אם', 'או', 'זה', 'זאת', 'אלה', 'הוא', 'היא',
+        # Arabic
+        'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
+        'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
+    }
+
     def __init__(
         self,
         db_path: str = "./archilles_rag_db",
@@ -731,6 +780,39 @@ class archillesRAG:
             'total_time': total_time,
         }
 
+    def _remove_stop_words(self, query_text: str) -> tuple:
+        """
+        Remove common stop words from query for better search results.
+
+        Args:
+            query_text: Original query string
+
+        Returns:
+            Tuple of (cleaned_query, removed_words)
+        """
+        words = query_text.lower().split()
+        removed = []
+        kept = []
+
+        for word in words:
+            # Remove punctuation for stop word matching
+            clean_word = word.strip('.,;:!?"\'()[]{}')
+            if clean_word in self.STOP_WORDS:
+                removed.append(word)
+            else:
+                kept.append(word)
+
+        # Keep original case for kept words
+        original_words = query_text.split()
+        result_words = []
+        for orig_word in original_words:
+            clean_orig = orig_word.lower().strip('.,;:!?"\'()[]{}')
+            if clean_orig not in self.STOP_WORDS:
+                result_words.append(orig_word)
+
+        cleaned_query = ' '.join(result_words)
+        return cleaned_query, removed
+
     def query(
         self,
         query_text: str,
@@ -766,6 +848,17 @@ class archillesRAG:
         Returns:
             List of relevant chunks with metadata and scores
         """
+        # Remove stop words for better search quality (unless exact phrase matching)
+        original_query = query_text
+        if not exact_phrase:
+            query_text, removed_words = self._remove_stop_words(query_text)
+            if removed_words:
+                print(f"  ℹ️  Removed common words: {', '.join(removed_words)}")
+            if not query_text.strip():
+                # All words were stop words!
+                print("  ⚠️  Query contains only common words. Using original query.")
+                query_text = original_query
+
         # Build filter message
         filters = []
         if language:
