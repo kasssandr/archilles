@@ -359,6 +359,26 @@ def main():
 
         max_per_book = st.slider("Max. pro Buch", min_value=1, max_value=10, value=2)
 
+        # Confidence threshold (only for semantic/hybrid)
+        if mode in ['semantic', 'hybrid']:
+            min_similarity = st.slider(
+                "Min. Ähnlichkeit",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                help="Filtert Ergebnisse unter diesem Schwellenwert. Höher = strenger."
+            )
+            # Show interpretation
+            if min_similarity >= 0.7:
+                st.caption("🎯 Streng: Nur sehr relevante Treffer")
+            elif min_similarity >= 0.5:
+                st.caption("⚖️ Ausgewogen: Gute Balance")
+            else:
+                st.caption("🔓 Tolerant: Mehr Treffer, evtl. weniger relevant")
+        else:
+            min_similarity = 0.0  # No filtering for keyword-only
+
         st.divider()
 
         # Filters
@@ -500,7 +520,8 @@ def main():
                         tag_filter=tag_filter,
                         section_filter=section_filter,
                         chunk_type_filter=chunk_type_filter,
-                        max_per_book=max_per_book
+                        max_per_book=max_per_book,
+                        min_similarity=min_similarity
                     )
                 except Exception as e:
                     error_msg = str(e)

@@ -824,7 +824,8 @@ class archillesRAG:
         tag_filter: List[str] = None,
         section_filter: str = None,
         chunk_type_filter: str = 'content',
-        max_per_book: int = 2
+        max_per_book: int = 2,
+        min_similarity: float = 0.0
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -844,6 +845,8 @@ class archillesRAG:
                               'calibre_comment' = Calibre comments only
                               None = all chunk types (book text + comments mixed)
             max_per_book: Maximum results per book (default: 2, use 999 for unlimited)
+            min_similarity: Minimum similarity score for semantic results (0.0-1.0, default: 0.0)
+                           Higher = stricter, fewer but more relevant results
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -962,6 +965,14 @@ class archillesRAG:
         else:
             # No diversification - just truncate to top_k
             results = results[:top_k]
+
+        # Apply minimum similarity threshold (for semantic/hybrid modes)
+        if min_similarity > 0.0 and mode in ['semantic', 'hybrid']:
+            original_count = len(results)
+            results = [r for r in results if r.get('score', 0) >= min_similarity]
+            filtered_count = original_count - len(results)
+            if filtered_count > 0:
+                print(f"  🎯 Filtered {filtered_count} results below {min_similarity:.0%} similarity")
 
         return results
 
