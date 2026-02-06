@@ -68,29 +68,107 @@ class archillesRAG:
     - Semantic + keyword search
     """
 
+    # Common stop words for multilingual queries
+    # These are automatically removed from queries to improve search quality
+    # Covers all languages supported by ARCHILLES language detector (EN, DE, FR, LA, IT, ES, EL, HE, AR, RU, PT, NL)
+    STOP_WORDS = {
+        # English
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'will', 'with', 'or', 'but', 'not', 'this', 'these',
+        # German
+        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer',
+        'eines', 'einem', 'einen', 'und', 'oder', 'aber', 'von', 'zu',
+        'im', 'am', 'um', 'bei', 'mit', 'für', 'aus', 'auf', 'durch',
+        # French
+        'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'et', 'ou',
+        'mais', 'dans', 'pour', 'par', 'sur', 'avec', 'au', 'aux', 'ce',
+        'cette', 'ces', 'est', 'sont', 'être', 'avoir', 'à', 'son', 'sa',
+        # Spanish
+        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o',
+        'pero', 'en', 'por', 'para', 'con', 'sin', 'sobre', 'del', 'al',
+        'es', 'son', 'ser', 'estar', 'haber', 'ha', 'han', 'su', 'sus',
+        # Italian
+        'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', 'e', 'o',
+        'ma', 'in', 'di', 'd', 'da', 'per', 'con', 'su', 'del', 'della', 'dei',
+        'degli', 'delle', 'al', 'alla', 'ai', 'agli', 'alle', 'è', 'sono',
+        # Portuguese
+        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'e', 'ou',
+        'mas', 'em', 'de', 'por', 'para', 'com', 'sem', 'sobre', 'do',
+        'da', 'dos', 'das', 'ao', 'à', 'aos', 'às', 'é', 'são', 'seu', 'sua',
+        # Dutch
+        'de', 'het', 'een', 'en', 'of', 'maar', 'in', 'op', 'voor', 'van',
+        'met', 'door', 'bij', 'aan', 'naar', 'om', 'over', 'is', 'zijn',
+        'was', 'waren', 'heeft', 'hebben', 'had', 'hadden', 'zijn', 'der',
+        # Latin
+        'et', 'in', 'ad', 'cum', 'ex', 'ab', 'a', 'e', 'de', 'per', 'pro', 'sub',
+        'atque', 'sed', 'aut', 'vel', 'ac', 'neque', 'nec', 'est', 'sunt',
+        # Russian (Cyrillic)
+        'и', 'в', 'на', 'с', 'по', 'для', 'к', 'от', 'за', 'о',
+        'из', 'у', 'это', 'как', 'но', 'или', 'а', 'не', 'что', 'он',
+        # Greek (ancient & modern)
+        'ο', 'η', 'το', 'οι', 'τα', 'και', 'ή', 'αλλά', 'σε', 'από',
+        'για', 'με', 'στο', 'στη', 'στον', 'στην', 'του', 'της', 'των', 'εν',
+        # Hebrew (with common particles)
+        'ה', 'ו', 'ב', 'ל', 'מ', 'ש', 'של', 'את', 'על', 'אל', 'עם',
+        'כי', 'אם', 'או', 'זה', 'זאת', 'אלה', 'הוא', 'היא',
+        # Arabic
+        'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
+        'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
+    }
+
     def __init__(
         self,
         db_path: str = "./archilles_rag_db",
-        model_name: str = "BAAI/bge-m3",
+        model_name: str = None,  # Will be set by profile or default to BGE-M3
         reset_db: bool = False,
         enable_ocr: bool = False,
         force_ocr: bool = False,
         ocr_backend: str = "auto",
-        ocr_language: str = "deu+eng"
+        ocr_language: str = "deu+eng",
+        profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
+        use_modular_pipeline: bool = False  # Future: use modular architecture
     ):
         """
         Initialize RAG system.
 
         Args:
             db_path: Path to LanceDB storage
-            model_name: Sentence transformer model (default: BGE-M3)
+            model_name: Sentence transformer model (overrides profile if set)
             reset_db: If True, delete and recreate the database
             enable_ocr: Enable OCR for scanned PDFs (auto-detect)
             force_ocr: Force OCR even for digital PDFs
             ocr_backend: OCR backend (auto, tesseract, lighton, olmocr)
             ocr_language: Language codes for Tesseract
+            profile: Hardware profile (minimal/balanced/maximal) - auto-detects if None
+            use_modular_pipeline: Use ModularPipeline architecture (future)
         """
-        print(f"Initializing ARCHILLES RAG...")
+        # Determine model and settings from profile
+        import torch
+        cuda_available = torch.cuda.is_available()
+
+        if profile:
+            from src.archilles.profiles import get_profile
+            profile_config = get_profile(profile)
+            if model_name is None:
+                model_name = profile_config.embedding_model
+            self.batch_size = profile_config.batch_size
+            # Auto-detect: use CUDA if profile wants it AND it's available
+            if profile_config.embedding_device == "cuda" and cuda_available:
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+                if profile_config.embedding_device == "cuda" and not cuda_available:
+                    print(f"  ⚠️  CUDA not available, falling back to CPU")
+            print(f"Initializing ARCHILLES RAG (profile: {profile})...")
+        else:
+            # Default to BGE-M3 and auto-detect device
+            if model_name is None:
+                model_name = "BAAI/bge-m3"
+            self.batch_size = 8  # Conservative default for 4GB GPUs
+            self.device = 'cuda' if cuda_available else 'cpu'
+            print(f"Initializing ARCHILLES RAG...")
+
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
@@ -119,8 +197,10 @@ class archillesRAG:
 
         # Initialize embedding model
         print(f"  Loading embedding model... (first time: ~500 MB download)")
-        self.embedding_model = SentenceTransformer(model_name)
-        print(f"  Model loaded: {model_name}")
+
+        # Use device from profile or auto-detected
+        self.embedding_model = SentenceTransformer(model_name, device=self.device)
+        print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested
         self.db_path = Path(db_path)
@@ -567,10 +647,9 @@ class archillesRAG:
         texts = [chunk['text'] for chunk in extracted.chunks]
         embeddings = []
 
-        # Batch process for speed
-        batch_size = 32
-        for i in tqdm(range(0, len(texts), batch_size), desc="    Embedding"):
-            batch = texts[i:i+batch_size]
+        # Batch process for speed (batch_size determined by profile)
+        for i in tqdm(range(0, len(texts), self.batch_size), desc="    Embedding"):
+            batch = texts[i:i+self.batch_size]
             batch_embeddings = self.embedding_model.encode(
                 batch,
                 show_progress_bar=False,
@@ -701,6 +780,39 @@ class archillesRAG:
             'total_time': total_time,
         }
 
+    def _remove_stop_words(self, query_text: str) -> tuple:
+        """
+        Remove common stop words from query for better search results.
+
+        Args:
+            query_text: Original query string
+
+        Returns:
+            Tuple of (cleaned_query, removed_words)
+        """
+        words = query_text.lower().split()
+        removed = []
+        kept = []
+
+        for word in words:
+            # Remove punctuation for stop word matching
+            clean_word = word.strip('.,;:!?"\'()[]{}')
+            if clean_word in self.STOP_WORDS:
+                removed.append(word)
+            else:
+                kept.append(word)
+
+        # Keep original case for kept words
+        original_words = query_text.split()
+        result_words = []
+        for orig_word in original_words:
+            clean_orig = orig_word.lower().strip('.,;:!?"\'()[]{}')
+            if clean_orig not in self.STOP_WORDS:
+                result_words.append(orig_word)
+
+        cleaned_query = ' '.join(result_words)
+        return cleaned_query, removed
+
     def query(
         self,
         query_text: str,
@@ -712,7 +824,8 @@ class archillesRAG:
         tag_filter: List[str] = None,
         section_filter: str = None,
         chunk_type_filter: str = 'content',
-        max_per_book: int = 2
+        max_per_book: int = 2,
+        min_similarity: float = 0.0
     ) -> List[Dict[str, Any]]:
         """
         Search for relevant passages.
@@ -732,10 +845,23 @@ class archillesRAG:
                               'calibre_comment' = Calibre comments only
                               None = all chunk types (book text + comments mixed)
             max_per_book: Maximum results per book (default: 2, use 999 for unlimited)
+            min_similarity: Minimum similarity score for semantic results (0.0-1.0, default: 0.0)
+                           Higher = stricter, fewer but more relevant results
 
         Returns:
             List of relevant chunks with metadata and scores
         """
+        # Remove stop words for better search quality (unless exact phrase matching)
+        original_query = query_text
+        if not exact_phrase:
+            query_text, removed_words = self._remove_stop_words(query_text)
+            if removed_words:
+                print(f"  ℹ️  Removed common words: {', '.join(removed_words)}")
+            if not query_text.strip():
+                # All words were stop words!
+                print("  ⚠️  Query contains only common words. Using original query.")
+                query_text = original_query
+
         # Build filter message
         filters = []
         if language:
@@ -839,6 +965,14 @@ class archillesRAG:
         else:
             # No diversification - just truncate to top_k
             results = results[:top_k]
+
+        # Apply minimum similarity threshold (for semantic/hybrid modes)
+        if min_similarity > 0.0 and mode in ['semantic', 'hybrid']:
+            original_count = len(results)
+            results = [r for r in results if r.get('score', 0) >= min_similarity]
+            filtered_count = original_count - len(results)
+            if filtered_count > 0:
+                print(f"  🎯 Filtered {filtered_count} results below {min_similarity:.0%} similarity")
 
         return results
 
@@ -1732,6 +1866,11 @@ Examples:
     index_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto',
                               help='OCR backend: auto (best available), tesseract, lighton, olmocr')
     index_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes (default: deu+eng)')
+    # Hardware profile options
+    index_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
+                              help='Hardware profile: minimal (CPU), balanced (GPU 6-12GB), maximal (GPU 12GB+)')
+    index_parser.add_argument('--use-modular-pipeline', action='store_true',
+                              help='Use new ModularPipeline architecture (parser→chunker→embedder)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1787,12 +1926,14 @@ Examples:
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:
-        # Initialize RAG with OCR options (only for index command)
+        # Initialize RAG with OCR and profile options (only for index command)
         reset_db = getattr(args, 'reset_db', False)
         enable_ocr = getattr(args, 'enable_ocr', False)
         force_ocr = getattr(args, 'force_ocr', False)
         ocr_backend = getattr(args, 'ocr_backend', 'auto')
         ocr_language = getattr(args, 'ocr_language', 'deu+eng')
+        profile = getattr(args, 'profile', None)
+        use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
 
         rag = archillesRAG(
             db_path=args.db_path,
@@ -1800,7 +1941,9 @@ Examples:
             enable_ocr=enable_ocr,
             force_ocr=force_ocr,
             ocr_backend=ocr_backend,
-            ocr_language=ocr_language
+            ocr_language=ocr_language,
+            use_modular_pipeline=use_modular_pipeline,
+            profile=profile
         )
 
         if args.command == 'index':

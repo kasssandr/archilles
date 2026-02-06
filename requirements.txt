@@ -34,9 +34,15 @@ rank-bm25==0.2.2  # BM25 keyword search (legacy, LanceDB has native FTS)
 # Progress bars & utilities
 tqdm==4.66.1  # Progress bars for indexing
 
+# Web UI
+streamlit>=1.30.0  # Interactive web interface
+
+# Hardware detection
+psutil>=5.9.0  # CPU/RAM detection for hardware profiles
+
 # OCR (optional, for scanned PDFs)
-# pytesseract==0.3.10  # Tesseract OCR wrapper
-# Pillow==10.1.0  # Image processing for OCR
+pytesseract>=0.3.10  # Tesseract OCR wrapper
+Pillow>=10.1.0  # Image processing for OCR
 
 # ===== CALIBRE METADATA ANALYZER (Legacy) =====
 # These are built-in, no external dependencies needed:

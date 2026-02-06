@@ -4,7 +4,19 @@ ARCHILLES Batch Indexer
 
 Index multiple books from Calibre library by tag, author, or other criteria.
 
+Hardware-Adaptive Profiles:
+    - minimal:  CPU-only, resource-efficient (for laptops, <6GB VRAM)
+    - balanced: GPU-accelerated, good quality (6-12GB VRAM)
+    - maximal:  Full GPU, maximum quality (>12GB VRAM)
+
 Usage:
+    # Index ALL books in the library (no filter required)
+    python scripts/batch_index.py --all
+
+    # Index with a specific profile (auto-detects hardware if not specified)
+    python scripts/batch_index.py --all --profile minimal
+    python scripts/batch_index.py --all --profile balanced
+
     # Index all books with tag "Leit-Literatur"
     python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -26,6 +38,9 @@ Usage:
     # Re-index books that were indexed before a certain date (with improved code)
     python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
 
+    # Re-index books with missing page labels (indexed before page label feature)
+    python scripts/batch_index.py --tag "Leit-Literatur" --reindex-missing-labels
+
     # Run in non-interactive mode (auto-resume sessions, no prompts)
     python scripts/batch_index.py --tag "Leit-Literatur" --non-interactive
 """
@@ -46,6 +61,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
 from scripts.safe_indexer import SafeIndexer
 from scripts.import_calibre_annotations import import_annotations, find_latest_export
+from scripts.find_books_missing_labels import find_books_missing_labels
+
+# Hardware-adaptive profile system
+from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
+from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
 
 
 def get_calibre_library_path() -> Path:
@@ -68,7 +88,7 @@ def get_calibre_library_path() -> Path:
     return Path(library_path)
 
 
-def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> List[Dict[str, Any]]:
+def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exclude_tags: List[str] = None) -> List[Dict[str, Any]]:
     """
     Get all books with a specific tag from Calibre database.
 
@@ -76,6 +96,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
         library_path: Path to Calibre library
         tag_name: Tag to filter by (case-insensitive)
         min_rating: Minimum star rating (1-5, 0 = no filter)
+        exclude_tags: List of tags to exclude (e.g., ['DeepL', 'Machine-translated'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -98,7 +119,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
         books.title,
         books.path,
         ratings.rating as rating,
-        authors.name as author
+        GROUP_CONCAT(authors.name, ' & ') as author
     FROM books
     INNER JOIN books_tags_link ON books.id = books_tags_link.book
     INNER JOIN tags ON books_tags_link.tag = tags.id
@@ -115,7 +136,22 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
         query += " AND ratings.rating >= ?"
         params.append(calibre_rating)
 
-    query += " ORDER BY ratings.rating DESC, authors.name, books.title"
+    # Exclude books that have any of the excluded tags
+    if exclude_tags:
+        placeholders = ', '.join(['LOWER(?)' for _ in exclude_tags])
+        query += f"""
+        AND NOT EXISTS (
+            SELECT 1 FROM books_tags_link btl_excl
+            INNER JOIN tags t_excl ON btl_excl.tag = t_excl.id
+            WHERE btl_excl.book = books.id
+            AND LOWER(t_excl.name) IN ({placeholders})
+        )
+        """
+        params.extend(exclude_tags)
+
+    # Group by book to avoid duplicates when books have multiple authors
+    query += " GROUP BY books.id"
+    query += " ORDER BY ratings.rating DESC, author, books.title"
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()
@@ -153,6 +189,72 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0) -> 
     return books
 
 
+def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
+    """
+    Get ALL books from Calibre database (no filtering).
+
+    Uses GROUP_CONCAT to handle multi-author books correctly.
+
+    Args:
+        library_path: Path to Calibre library
+
+    Returns:
+        List of book dictionaries with metadata and file paths
+    """
+    db_path = library_path / "metadata.db"
+
+    if not db_path.exists():
+        raise FileNotFoundError(f"Calibre database not found: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    query = """
+    SELECT
+        books.id,
+        books.title,
+        books.path,
+        GROUP_CONCAT(authors.name, ' & ') as author
+    FROM books
+    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
+    LEFT JOIN authors ON books_authors_link.author = authors.id
+    GROUP BY books.id
+    ORDER BY books.id
+    """
+
+    cursor = conn.execute(query)
+    rows = cursor.fetchall()
+
+    books = []
+    for row in rows:
+        book_path = library_path / row['path']
+
+        # Find available formats
+        formats = []
+        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
+            for file in book_path.glob(f'*{ext}'):
+                formats.append({
+                    'format': ext[1:].upper(),
+                    'path': str(file)
+                })
+
+        if formats:
+            books.append({
+                'id': row['id'],
+                'title': row['title'],
+                'author': row['author'] or 'Unknown',
+                'path': str(book_path),
+                'formats': formats,
+                'best_format': next(
+                    (f for f in formats if f['format'] == 'PDF'),
+                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
+                )
+            })
+
+    conn.close()
+    return books
+
+
 def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, Any]]:
     """
     Get all books by a specific author from Calibre database.
@@ -172,16 +274,21 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
 
+    # First find all books that have the author we're looking for
+    # Then get all authors for those books (to show co-authors)
     query = """
     SELECT
         books.id,
         books.title,
         books.path,
-        authors.name as author
+        GROUP_CONCAT(all_authors.name, ' & ') as author
     FROM books
-    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
-    LEFT JOIN authors ON books_authors_link.author = authors.id
+    INNER JOIN books_authors_link bal ON books.id = bal.book
+    INNER JOIN authors ON bal.author = authors.id
+    LEFT JOIN books_authors_link all_bal ON books.id = all_bal.book
+    LEFT JOIN authors all_authors ON all_bal.author = all_authors.id
     WHERE LOWER(authors.name) LIKE LOWER(?)
+    GROUP BY books.id
     ORDER BY books.title
     """
 
@@ -220,33 +327,20 @@ def get_books_by_author(library_path: Path, author_name: str) -> List[Dict[str, 
 
 def create_book_id(book: Dict[str, Any]) -> str:
     """
-    Create a unique, readable book ID for indexing.
+    Create a unique book ID for indexing.
 
-    Format: AuthorLastName_ShortTitle_CalibreID
-    Example: Arendt_VitaActiva_1234
+    Uses the Calibre ID directly for easy cross-referencing.
+    Example: "8127" (matches Calibre's "Id" column)
     """
-    # Extract last name from author
-    author = book['author']
-    if ',' in author:
-        # "LastName, FirstName" format
-        last_name = author.split(',')[0].strip()
-    else:
-        # "FirstName LastName" format
-        parts = author.split()
-        last_name = parts[-1] if parts else 'Unknown'
-
-    # Clean last name (remove special chars)
-    last_name = ''.join(c for c in last_name if c.isalnum())
-
-    # Create short title (first 20 chars, alphanumeric only)
-    title = book['title']
-    short_title = ''.join(c for c in title if c.isalnum() or c.isspace())[:20]
-    short_title = short_title.replace(' ', '')
-
-    return f"{last_name}_{short_title}_{book['id']}"
+    return str(book['id'])
 
 
-def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> set:
+def get_indexed_book_ids(
+    rag: archillesRAG,
+    reindex_before: datetime = None,
+    reindex_missing_labels: bool = False,
+    db_path: str = None
+) -> set:
     """
     Get set of already indexed book IDs from RAG database.
 
@@ -254,35 +348,42 @@ def get_indexed_book_ids(rag: archillesRAG, reindex_before: datetime = None) -> 
         rag: Initialized archillesRAG instance
         reindex_before: If provided, exclude books indexed before this date
                        (so they will be re-indexed)
+        reindex_missing_labels: If True, exclude books with missing page labels
+                               (so they will be re-indexed)
+        db_path: Path to LanceDB database (for missing labels check)
 
     Returns:
         Set of book_id strings that are already in the index
         (excluding books that should be re-indexed)
     """
-    try:
-        # Get all metadata from collection in batches
-        all_metadatas = []
-        batch_size = 500
-        offset = 0
+    # Get books with missing labels if requested
+    books_missing_labels = set()
+    if reindex_missing_labels and db_path:
+        print("🔍 Checking for books with missing page labels...")
+        missing = find_books_missing_labels(db_path)
+        books_missing_labels = set(missing.keys())
+        if books_missing_labels:
+            print(f"   Found {len(books_missing_labels)} books needing page label re-indexing")
+        else:
+            print("   All books have proper page labels!")
 
-        while True:
-            batch = rag.collection.get(limit=batch_size, offset=offset)
-            if not batch['ids']:
-                break
-            all_metadatas.extend(batch['metadatas'])
-            offset += batch_size
-            if len(batch['ids']) < batch_size:
-                break
+    try:
+        # Get all metadata from LanceDB store
+        all_chunks = rag.store.get_all(limit=100000)  # Get all chunks
 
         # Extract unique book_ids
         book_ids = set()
-        for metadata in all_metadatas:
-            if metadata and 'book_id' in metadata:
-                book_id = metadata['book_id']
+        for chunk in all_chunks:
+            if chunk and 'book_id' in chunk:
+                book_id = chunk['book_id']
+
+                # Check if this book should be re-indexed due to missing labels
+                if reindex_missing_labels and book_id in books_missing_labels:
+                    continue  # Don't add to set (will be re-indexed)
 
                 # Check if this book should be re-indexed based on date
                 if reindex_before:
-                    indexed_at_str = metadata.get('indexed_at')
+                    indexed_at_str = chunk.get('indexed_at')
                     if indexed_at_str:
                         try:
                             indexed_at = datetime.fromisoformat(indexed_at_str)
@@ -311,9 +412,11 @@ def batch_index(
     dry_run: bool = False,
     skip_existing: bool = False,
     reindex_before: datetime = None,
+    reindex_missing_labels: bool = False,
     log_file: Optional[Path] = None,
     safe_indexer: Optional[SafeIndexer] = None,
-    phase: str = 'phase2'
+    phase: str = 'phase2',
+    db_path: str = None
 ) -> Dict[str, Any]:
     """
     Index multiple books into the RAG database.
@@ -324,9 +427,11 @@ def batch_index(
         dry_run: If True, only show what would be indexed
         skip_existing: If True, skip books that are already indexed
         reindex_before: If provided, re-index books indexed before this date
+        reindex_missing_labels: If True, re-index books with missing page labels
         log_file: Optional path to write detailed log
         safe_indexer: Optional SafeIndexer for crash-safety and progress tracking
         phase: 'phase1' (metadata only) or 'phase2' (full content)
+        db_path: Path to LanceDB database
 
     Returns:
         Dictionary with indexing statistics
@@ -344,13 +449,18 @@ def batch_index(
     # Get already indexed books if skip_existing is enabled
     # If reindex_before is set, exclude old books from the existing set
     # Also check progress tracker if available
+    should_check = skip_existing or reindex_before or reindex_missing_labels
     if safe_indexer:
         # Check progress tracker for indexed books
         existing_ids_from_tracker = set(safe_indexer.tracker.get_indexed_books(phase))
-        existing_ids_from_chromadb = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+        existing_ids_from_chromadb = get_indexed_book_ids(
+            rag, reindex_before, reindex_missing_labels, db_path
+        ) if should_check else set()
         existing_ids = existing_ids_from_tracker | existing_ids_from_chromadb
     else:
-        existing_ids = get_indexed_book_ids(rag, reindex_before) if skip_existing or reindex_before else set()
+        existing_ids = get_indexed_book_ids(
+            rag, reindex_before, reindex_missing_labels, db_path
+        ) if should_check else set()
 
     print(f"\n{'='*60}")
     print(f"📚 ARCHILLES BATCH INDEXER")
@@ -362,6 +472,8 @@ def batch_index(
         reindex_count = len(books) - len(existing_ids)
         print(f"  📅 Re-indexing books indexed before: {reindex_before.strftime('%Y-%m-%d')}")
         print(f"     → {reindex_count} books will be re-indexed")
+    if reindex_missing_labels:
+        print(f"  📄 Re-indexing books with missing page labels")
     print(f"  Mode: {'DRY RUN' if dry_run else 'INDEXING'}")
     print(f"{'='*60}\n")
 
@@ -380,8 +492,9 @@ def batch_index(
         print(f"         Format: {format_type} | ID: {book_id}")
 
         # Check if already indexed (skip or progress tracker)
-        # BUT: Don't skip if reindex_before is set (force reindex mode)
-        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not reindex_before:
+        # BUT: Don't skip if reindex_before or reindex_missing_labels is set (force reindex mode)
+        force_reindex = reindex_before or reindex_missing_labels
+        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not force_reindex:
             print(f"         ⏭️  SKIPPED (already indexed in {phase})")
             stats['skipped'] += 1
             if safe_indexer:
@@ -515,6 +628,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # Index ALL books in the library (no filter required)
+  python scripts/batch_index.py --all
+
+  # Use a specific hardware profile (minimal/balanced/maximal)
+  python scripts/batch_index.py --all --profile minimal
+  python scripts/batch_index.py --all --profile balanced
+
   # Index all books tagged "Leit-Literatur"
   python scripts/batch_index.py --tag "Leit-Literatur"
 
@@ -535,17 +655,31 @@ Examples:
 
   # Re-index old books (e.g., indexed before Dec 1st with old code)
   python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
+
+  # Exclude machine-translated books
+  python scripts/batch_index.py --tag "Leit-Literatur" --exclude-tag "DeepL" --exclude-tag "Übersetzung"
+
+Profiles:
+  minimal  - CPU-only, resource-efficient (laptops, <6GB VRAM)
+  balanced - GPU-accelerated, good quality (6-12GB VRAM)
+  maximal  - Full GPU, maximum quality (>12GB VRAM)
         """
     )
 
     # Selection criteria (mutually exclusive)
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--all', action='store_true',
+                       help='Index ALL books in the library (no tag/author filter)')
     group.add_argument('--tag', help='Index books with this tag')
     group.add_argument('--author', help='Index books by this author (partial match)')
 
     # Rating filter
     parser.add_argument('--min-rating', type=int, choices=[1, 2, 3, 4, 5], default=0,
                         help='Minimum star rating (1-5)')
+
+    # Exclude filter (can be used multiple times)
+    parser.add_argument('--exclude-tag', action='append', dest='exclude_tags', metavar='TAG',
+                        help='Exclude books with this tag (can be used multiple times, e.g., --exclude-tag "DeepL" --exclude-tag "Übersetzung")')
 
     # Options
     parser.add_argument('--dry-run', action='store_true',
@@ -555,6 +689,9 @@ Examples:
     parser.add_argument('--reindex-before', metavar='DATE',
                         help='Re-index books indexed before this date (YYYY-MM-DD). '
                              'Useful for re-indexing old books with improved code.')
+    parser.add_argument('--reindex-missing-labels', action='store_true',
+                        help='Re-index books with missing page labels (indexed before '
+                             'page label extraction was implemented)')
     parser.add_argument('--limit', type=int,
                         help='Limit number of books to index (for testing)')
     parser.add_argument('--log', metavar='FILE',
@@ -567,8 +704,21 @@ Examples:
                         help='Phase 1: Quick indexing of metadata, comments, and annotations only (5-10 min)')
     parser.add_argument('--non-interactive', action='store_true',
                         help='Run in non-interactive mode (auto-resume sessions, no prompts)')
+    parser.add_argument('--enable-ocr', action='store_true',
+                        help='Enable OCR for scanned PDFs (auto-detect)')
+    parser.add_argument('--force-ocr', action='store_true',
+                        help='Force OCR even for digital PDFs')
+    parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
+                        help='Hardware profile to use (auto-detects if not specified)')
+    parser.add_argument('--show-profiles', action='store_true',
+                        help='Show available profiles and exit')
 
     args = parser.parse_args()
+
+    # Handle --show-profiles
+    if args.show_profiles:
+        list_profiles()
+        sys.exit(0)
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -584,13 +734,40 @@ Examples:
     library_path = get_calibre_library_path()
     print(f"📚 Calibre library: {library_path}")
 
+    # Determine hardware profile
+    if args.profile:
+        # User specified profile explicitly
+        profile_name = args.profile
+        profile = get_profile(profile_name)
+        print(f"⚙️  Using profile: {profile_name.upper()} (user-specified)")
+    elif args.non_interactive:
+        # Non-interactive mode: auto-detect and use recommended
+        hw = detect_hardware()
+        profile_name = hw.recommend_profile()
+        profile = get_profile(profile_name)
+        print(f"⚙️  Using profile: {profile_name.upper()} (auto-detected)")
+    else:
+        # Interactive mode: show hardware detection and let user choose
+        profile_name = select_profile_interactive()
+        profile = get_profile(profile_name)
+
+    print(f"    Model: {profile.embedding_model}")
+    print(f"    Device: {profile.embedding_device}")
+    print(f"    Chunk size: {profile.chunk_size} tokens")
+
     # Get books based on criteria
     min_rating = getattr(args, 'min_rating', 0) or 0
-    if args.tag:
+    if getattr(args, 'all', False):
+        print(f"📚 Indexing ALL books in the library")
+        books = get_all_books(library_path)
+    elif args.tag:
         print(f"  Filtering by tag: {args.tag}")
         if min_rating > 0:
             print(f"  Minimum rating: {'*' * min_rating}")
-        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating)
+        exclude_tags = getattr(args, 'exclude_tags', None)
+        if exclude_tags:
+            print(f"  Excluding tags: {', '.join(exclude_tags)}")
+        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=exclude_tags)
     elif args.author:
         print(f"  Filtering by author: {args.author}")
         books = get_books_by_author(library_path, args.author)
@@ -621,7 +798,13 @@ Examples:
         rag = DummyRAG()
     else:
         try:
-            rag = archillesRAG(db_path=args.db_path, reset_db=args.reset_db)
+            rag = archillesRAG(
+                db_path=args.db_path,
+                reset_db=args.reset_db,
+                enable_ocr=args.enable_ocr,
+                force_ocr=args.force_ocr,
+                profile=profile_name
+            )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message
             print(f"\n{'='*60}")
@@ -655,15 +838,27 @@ Examples:
         dry_run=args.dry_run,
         skip_existing=args.skip_existing,
         reindex_before=reindex_before,
+        reindex_missing_labels=args.reindex_missing_labels,
         log_file=log_file,
         safe_indexer=safe_indexer,
-        phase=phase if safe_indexer else 'phase2'
+        phase=phase if safe_indexer else 'phase2',
+        db_path=args.db_path
     )
 
     # End session (if not dry run)
     if safe_indexer:
         status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
         safe_indexer.end_session(status)
+
+    # Create FTS index for keyword search (if not dry run and we indexed something)
+    if not args.dry_run and stats['indexed'] > 0:
+        print("\n📇 Creating full-text search index...")
+        try:
+            rag.store.create_fts_index()
+            print("   ✅ FTS index created - keyword search now available")
+        except Exception as e:
+            print(f"   ⚠️  FTS index creation failed: {e}")
+            print("   Keyword search may not work. Run: python scripts/rag_demo.py create-index")
 
     # Exit with error code if any failures
     if stats['failed'] > 0:

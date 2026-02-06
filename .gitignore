@@ -52,8 +52,8 @@ metadata.db
 *.json
 analysis_*.txt
 
-# Achilles RAG exports (generated markdown files)
-achilles_search_*.md
+# ARCHILLES RAG exports (generated markdown files)
+archilles_search_*.md
 test_improved_export_*.md
 
 # Local RAG databases (not for GitHub)

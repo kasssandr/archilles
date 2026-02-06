@@ -202,6 +202,16 @@ class PDFExtractor(BaseExtractor):
         # Combine all pages
         full_text = '\n\n'.join(pages_text)
 
+        # Extract page labels from headers BEFORE removing them
+        # This captures printed page numbers (like "62" or "xiv") from running headers
+        extracted_labels = self._extract_page_labels_from_headers(pages_text)
+        for i, label in enumerate(extracted_labels):
+            if label and i < len(pages_metadata):
+                # Only update if we found a label and PDF didn't provide one
+                current_label = pages_metadata[i].get('page_label', '')
+                if not current_label or current_label == str(pages_metadata[i].get('page', '')):
+                    pages_metadata[i]['page_label'] = label
+
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
         if running_headers:
@@ -255,6 +265,13 @@ class PDFExtractor(BaseExtractor):
         except Exception:
             pass
 
+        # Get page labels (printed page numbers like "xiv", "1", "62")
+        # This handles Roman numerals in front matter correctly
+        try:
+            page_labels = doc.get_page_labels()
+        except Exception:
+            page_labels = None
+
         for page_num in range(len(doc)):
             page = doc[page_num]
             text = page.get_text()
@@ -262,15 +279,30 @@ class PDFExtractor(BaseExtractor):
             if not text.strip():
                 continue
 
+            # Use PDF page label if available, otherwise fall back to physical page
+            if page_labels and page_num < len(page_labels):
+                page_label = page_labels[page_num]
+            else:
+                page_label = str(page_num + 1)
+
             pages_text.append(text)
             pages_metadata.append({
-                'page': page_num + 1,
-                'page_label': str(page_num + 1),
+                'page': page_num + 1,  # Physical page (for navigation)
+                'page_label': page_label,  # Printed page label (for citation)
             })
 
         doc.close()
 
         full_text = '\n\n'.join(pages_text)
+
+        # Extract page labels from headers BEFORE removing them (fallback for PDFs without labels)
+        extracted_labels = self._extract_page_labels_from_headers(pages_text)
+        for i, label in enumerate(extracted_labels):
+            if label and i < len(pages_metadata):
+                current_label = pages_metadata[i].get('page_label', '')
+                # Only update if PDF didn't provide a proper label
+                if not current_label or current_label == str(pages_metadata[i].get('page', '')):
+                    pages_metadata[i]['page_label'] = label
 
         # Detect and remove running headers (Kolumnentitel)
         running_headers = self._detect_running_headers(pages_text)
@@ -617,6 +649,302 @@ class PDFExtractor(BaseExtractor):
             cleaned_pages.append('\n'.join(cleaned_lines))
 
         return cleaned_pages
+
+    def _roman_to_int(self, roman: str) -> int:
+        """Convert Roman numeral to integer."""
+        roman = roman.upper()
+        values = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+        result = 0
+        prev = 0
+        for char in reversed(roman):
+            curr = values.get(char, 0)
+            if curr < prev:
+                result -= curr
+            else:
+                result += curr
+            prev = curr
+        return result
+
+    def _is_roman(self, s: str) -> bool:
+        """Check if string is a valid Roman numeral."""
+        pattern = re.compile(
+            r'^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$',
+            re.IGNORECASE
+        )
+        return bool(pattern.match(s)) and len(s) > 0
+
+    def _is_likely_footnote_line(self, line: str) -> bool:
+        """
+        Check if a line looks like a footnote rather than a page number.
+
+        Footnote indicators:
+        - Line starts with number followed by text (e.g., "1 This is a footnote")
+        - Line starts with number followed by punctuation (e.g., "1. See also...")
+        - Superscript markers followed by text
+        - Multiple reference numbers with commas
+
+        Page number indicators:
+        - Standalone number (just "42")
+        - Number at start/end with only header text (title, author)
+        """
+        line = line.strip()
+        if not line:
+            return False
+
+        # If line is just a number, it's a page number, not footnote
+        if line.isdigit():
+            return False
+
+        # Footnote pattern: starts with number + punctuation + text
+        # e.g., "1. See also...", "1) Reference...", "1 Text continues..."
+        if re.match(r'^\d+[\.\)\s]\s*[A-Za-zÄÖÜäöüß]', line):
+            # But "123 Chapter Title" could be "page_num header_text"
+            # Check if the number is likely a page number (reasonable range)
+            match = re.match(r'^(\d+)', line)
+            if match:
+                num = int(match.group(1))
+                # Small numbers (1-20) at start with text are likely footnotes
+                # Larger numbers could be page numbers with header text
+                if num <= 20:
+                    return True
+
+        # Multiple numbers with separators = footnote references
+        # e.g., "1, 2, 3" or "see notes 1-5"
+        if re.search(r'\d+\s*[,\-]\s*\d+', line):
+            return True
+
+        return False
+
+    def _extract_page_number_from_lines(
+        self,
+        lines: List[str],
+        check_first: bool = True
+    ) -> str:
+        """
+        Extract page number from a set of lines (header or footer).
+
+        Args:
+            lines: Lines to check
+            check_first: If True, check first 3 non-empty lines (header)
+                        If False, check last 3 non-empty lines (footer)
+
+        Returns:
+            Extracted page label or empty string
+        """
+        # Filter to non-empty lines
+        non_empty = [l.strip() for l in lines if l.strip()]
+
+        if not non_empty:
+            return ""
+
+        # Select lines to check (first 3 or last 3)
+        if check_first:
+            lines_to_check = non_empty[:3]
+        else:
+            lines_to_check = non_empty[-3:]
+
+        for line in lines_to_check:
+            # Skip if line looks like a footnote
+            if not check_first and self._is_likely_footnote_line(line):
+                continue
+
+            # Pattern 1: Line is just a number (most reliable)
+            if line.isdigit():
+                return line
+
+            # Pattern 2: Line is just a Roman numeral
+            if self._is_roman(line):
+                return line.lower()
+
+            # Pattern 3: Line starts with number + space (then header text)
+            match = re.match(r'^(\d+)\s+', line)
+            if match:
+                num = match.group(1)
+                # For footers, be more strict - avoid footnote markers
+                if not check_first:
+                    # Skip small numbers that might be footnotes
+                    if int(num) <= 20 and len(line) > 10:
+                        continue
+                return num
+
+            # Pattern 4: Line ends with number (page number at end of header)
+            match = re.search(r'\s(\d+)$', line)
+            if match:
+                return match.group(1)
+
+            # Pattern 5: Roman numerals at start or end
+            parts = line.split()
+            if parts:
+                for candidate in [parts[0], parts[-1]]:
+                    if self._is_roman(candidate):
+                        return candidate.lower()
+
+        return ""
+
+    def _extract_page_labels_from_headers(
+        self,
+        pages_text: List[str]
+    ) -> List[str]:
+        """
+        Extract printed page numbers from running headers OR footers with validation.
+
+        Features:
+        - Checks both header (first 3 lines) and footer (last 3 lines)
+        - Extracts Arabic numerals (62, 123) and Roman numerals (xiv, VII)
+        - Distinguishes page numbers from footnote markers
+        - Validates sequence (numbers should be roughly increasing)
+        - Interpolates missing page numbers from neighbors
+        - Detects chapter starts (often omit page number)
+
+        Args:
+            pages_text: List of page texts (headers still present)
+
+        Returns:
+            List of extracted page labels (one per page, empty string if not found)
+        """
+        # Step 1: Raw extraction from headers AND footers
+        raw_labels = []
+        header_count = 0
+        footer_count = 0
+
+        for page_text in pages_text:
+            lines = page_text.strip().split('\n')
+            page_label = ""
+            source = None
+
+            # First try header (first 3 non-empty lines)
+            page_label = self._extract_page_number_from_lines(lines[:10], check_first=True)
+            if page_label:
+                source = "header"
+                header_count += 1
+
+            # If not found in header, try footer (last 3 non-empty lines)
+            if not page_label:
+                page_label = self._extract_page_number_from_lines(lines[-10:], check_first=False)
+                if page_label:
+                    source = "footer"
+                    footer_count += 1
+
+            raw_labels.append(page_label)
+
+        # Step 2: Convert to numeric for validation
+        numeric_labels = []
+        is_roman_sequence = False
+
+        for label in raw_labels:
+            if not label:
+                numeric_labels.append(None)
+            elif label.isdigit():
+                numeric_labels.append(int(label))
+            elif self._is_roman(label):
+                numeric_labels.append(self._roman_to_int(label))
+                is_roman_sequence = True  # At least some Roman numerals
+            else:
+                numeric_labels.append(None)
+
+        # Step 3: Validate sequence and detect outliers
+        # A valid page sequence should be roughly increasing (with some tolerance for errors)
+        validated = numeric_labels.copy()
+
+        # Find the dominant sequence (should be roughly n, n+1, n+2, ...)
+        # Check window of 5 pages to detect if a value is an outlier
+        for i in range(len(validated)):
+            if validated[i] is None:
+                continue
+
+            # Get neighbors (within 3 pages)
+            neighbors = []
+            for j in range(max(0, i-3), min(len(validated), i+4)):
+                if j != i and validated[j] is not None:
+                    neighbors.append((j, validated[j]))
+
+            if len(neighbors) >= 2:
+                # Check if current value fits the sequence
+                # Expected value based on neighbors: interpolate
+                expected_values = []
+                for j, val in neighbors:
+                    expected = val + (i - j)  # If page j has value val, page i should have val + (i-j)
+                    expected_values.append(expected)
+
+                avg_expected = sum(expected_values) / len(expected_values)
+                current = validated[i]
+
+                # If current value differs by more than 5 from expected, it's likely wrong
+                if abs(current - avg_expected) > 5:
+                    validated[i] = None  # Mark as invalid
+
+        # Step 4: Interpolate missing values (including chapter starts)
+        interpolated = validated.copy()
+
+        for i in range(len(interpolated)):
+            if interpolated[i] is not None:
+                continue
+
+            # Find previous valid value
+            prev_idx, prev_val = None, None
+            for j in range(i - 1, -1, -1):
+                if interpolated[j] is not None:
+                    prev_idx, prev_val = j, interpolated[j]
+                    break
+
+            # Find next valid value
+            next_idx, next_val = None, None
+            for j in range(i + 1, len(interpolated)):
+                if interpolated[j] is not None:
+                    next_idx, next_val = j, interpolated[j]
+                    break
+
+            # Interpolate if we have both neighbors
+            if prev_val is not None and next_val is not None:
+                # Check if the gap makes sense (next should be > prev)
+                if next_val > prev_val:
+                    # Linear interpolation
+                    step = (next_val - prev_val) / (next_idx - prev_idx)
+                    interpolated[i] = int(prev_val + step * (i - prev_idx))
+            elif prev_val is not None:
+                # Only have previous, assume +1 per page
+                interpolated[i] = prev_val + (i - prev_idx)
+            elif next_val is not None:
+                # Only have next, assume -1 per page backwards
+                interpolated[i] = next_val - (next_idx - i)
+
+        # Step 5: Convert back to strings (preserving Roman numerals in front matter)
+        final_labels = []
+        for i, val in enumerate(interpolated):
+            if val is None:
+                final_labels.append("")
+            elif is_roman_sequence and i < len(interpolated) // 4:
+                # Keep Roman numerals for front matter (first quarter of book)
+                # This is a heuristic - front matter is usually < 25% of pages
+                original = raw_labels[i]
+                if original and self._is_roman(original):
+                    final_labels.append(original.lower())
+                else:
+                    final_labels.append(str(val))
+            else:
+                final_labels.append(str(val))
+
+        # Log extraction results
+        raw_found = sum(1 for l in raw_labels if l)
+        final_found = sum(1 for l in final_labels if l)
+        interpolated_count = final_found - raw_found
+
+        if final_found > 0:
+            msg = f"  📄 Page labels: {raw_found} extracted"
+            # Show source breakdown (header vs footer)
+            if header_count > 0 or footer_count > 0:
+                sources = []
+                if header_count > 0:
+                    sources.append(f"{header_count} header")
+                if footer_count > 0:
+                    sources.append(f"{footer_count} footer")
+                msg += f" ({', '.join(sources)})"
+            if interpolated_count > 0:
+                msg += f", {interpolated_count} interpolated"
+            msg += f" → total: {final_found}/{len(pages_text)}"
+            print(msg, flush=True)
+
+        return final_labels
 
     def _detect_section_type(
         self,
