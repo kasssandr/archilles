@@ -712,6 +712,8 @@ Profiles:
                         help='Hardware profile to use (auto-detects if not specified)')
     parser.add_argument('--show-profiles', action='store_true',
                         help='Show available profiles and exit')
+    parser.add_argument('--hierarchical', action='store_true',
+                        help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
 
     args = parser.parse_args()
 
@@ -803,7 +805,8 @@ Profiles:
                 reset_db=args.reset_db,
                 enable_ocr=args.enable_ocr,
                 force_ocr=args.force_ocr,
-                profile=profile_name
+                profile=profile_name,
+                hierarchical=getattr(args, 'hierarchical', False)
             )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message
