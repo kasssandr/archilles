@@ -127,7 +127,8 @@ class archillesRAG:
         ocr_backend: str = "auto",
         ocr_language: str = "deu+eng",
         profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
-        use_modular_pipeline: bool = False  # Future: use modular architecture
+        use_modular_pipeline: bool = False,  # Future: use modular architecture
+        hierarchical: bool = False  # Enable parent-child chunking
     ):
         """
         Initialize RAG system.
@@ -142,7 +143,9 @@ class archillesRAG:
             ocr_language: Language codes for Tesseract
             profile: Hardware profile (minimal/balanced/maximal) - auto-detects if None
             use_modular_pipeline: Use ModularPipeline architecture (future)
+            hierarchical: Enable parent-child chunking (parents ~2048, children ~512 tokens)
         """
+        self.hierarchical = hierarchical
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
@@ -637,8 +640,45 @@ class archillesRAG:
         extracted = self.extractor.extract(book_path)
         extract_time = time.time() - start_time
 
-        print(f"    ? Extracted {len(extracted.chunks)} chunks in {extract_time:.1f}s")
-        print(f"    ? {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages\n")
+        # If hierarchical mode, re-chunk using parent-child hierarchy
+        if self.hierarchical and extracted.full_text:
+            from src.extractors.base import BaseExtractor
+            from src.extractors.models import ChunkMetadata
+
+            print(f"    Extracted {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages")
+            print(f"    Re-chunking with parent-child hierarchy...")
+
+            # Create a temporary chunker instance for hierarchical chunking
+            chunker = type('HierarchicalChunker', (BaseExtractor,), {
+                'extract': lambda self, fp: None,
+                'supports': lambda self, fp: True
+            })(chunk_size=512, overlap=100)
+
+            base_meta = ChunkMetadata(
+                book_id=book_metadata.get('calibre_id'),
+                title=book_metadata.get('title'),
+                author=book_metadata.get('author'),
+                year=book_metadata.get('year'),
+                source_file=str(book_path),
+            )
+
+            extracted.chunks = chunker._create_hierarchical_chunks(
+                text=extracted.full_text,
+                book_id=book_id,
+                base_metadata=base_meta,
+                parent_size=2048,
+                parent_overlap=400,
+                child_size=512,
+                child_overlap=100,
+                window_chars=500
+            )
+            parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'parent')
+            child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'child')
+            print(f"    Hierarchical: {parent_count} parents, {child_count} children ({len(extracted.chunks)} total)")
+        else:
+            print(f"    Extracted {len(extracted.chunks)} chunks in {extract_time:.1f}s")
+
+        print(f"    {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages\n")
 
         # Step 2: Generate embeddings
         print("  [2/3] Generating embeddings...")
@@ -667,16 +707,33 @@ class archillesRAG:
         # Prepare chunks with metadata
         chunks = []
         for i, chunk in enumerate(extracted.chunks):
+            # Use hierarchical chunk_id if available, otherwise generate
+            chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', 'content')
+
             chunk_data = {
-                'id': f"{book_id}_chunk_{i}",
+                'id': chunk_id,
                 'text': chunk['text'],
                 'book_id': book_id,
                 'book_title': extracted.metadata.file_path.stem,
                 'chunk_index': i,
-                'chunk_type': 'content',
+                'chunk_type': chunk_type,
                 'format': extracted.metadata.detected_format,
                 'indexed_at': datetime.now().isoformat(),
             }
+
+            # Context expansion fields (Small-to-Big Retrieval)
+            if 'metadata' in chunk:
+                if chunk['metadata'].get('char_start') is not None:
+                    chunk_data['char_start'] = chunk['metadata']['char_start']
+                if chunk['metadata'].get('char_end') is not None:
+                    chunk_data['char_end'] = chunk['metadata']['char_end']
+            if chunk.get('window_text'):
+                chunk_data['window_text'] = chunk['window_text']
+
+            # Parent-Child hierarchy
+            if chunk.get('parent_id') is not None:
+                chunk_data['parent_id'] = chunk['parent_id']
 
             # Add book metadata
             if book_metadata:
@@ -1679,53 +1736,35 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         expansion_chars: int = 400
     ) -> str:
         """
-        Expand chunk context by adding surrounding text (Small-to-Big Retrieval).
+        Expand chunk context using stored window_text or parent chunk (Small-to-Big Retrieval).
 
-        IMPORTANT: Requires char_start, char_end, and original_text in metadata!
-        Currently NOT IMPLEMENTED because these fields are not stored in the index.
-
-        To activate this feature:
-        1. Modify index_book() to store char_start, char_end in metadata
-        2. Store full book text somewhere accessible (e.g., metadata['original_text_ref'])
-        3. This function will then retrieve and expand the context
+        Priority:
+        1. Use window_text if stored in the index (pre-computed context window)
+        2. Use parent chunk text if parent_id is available (hierarchical retrieval)
+        3. Fall back to original chunk text
 
         Args:
             chunk_text: Original chunk text from search result
-            metadata: Chunk metadata (must contain char_start, char_end, original_text)
-            expansion_chars: Characters to add before and after (default: 400)
+            metadata: Chunk metadata (may contain window_text, parent_id)
+            expansion_chars: Characters to add before and after (not used for window_text)
 
         Returns:
             Expanded text with context, or original chunk if expansion not possible
         """
-        # Check if we have the required fields
-        if not all(k in metadata for k in ['char_start', 'char_end', 'original_text']):
-            # Graceful degradation: return original chunk
-            # No error - just log a debug message
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug("Context expansion not available (char_offsets not in index)")
-            return chunk_text
+        # Option 1: Use pre-computed window_text from the index
+        window_text = metadata.get('window_text', '')
+        if window_text and len(window_text) > len(chunk_text):
+            return window_text
 
-        # Extract required data
-        char_start = metadata['char_start']
-        char_end = metadata['char_end']
-        original_text = metadata['original_text']
+        # Option 2: Load parent chunk for context (hierarchical retrieval)
+        parent_id = metadata.get('parent_id', '')
+        if parent_id and hasattr(self, 'store'):
+            parent = self.store.get_by_id(parent_id)
+            if parent and parent.get('text'):
+                return parent['text']
 
-        # Calculate expanded boundaries
-        expanded_start = max(0, char_start - expansion_chars)
-        expanded_end = min(len(original_text), char_end + expansion_chars)
-
-        # Extract expanded context
-        expanded_text = original_text[expanded_start:expanded_end]
-
-        # Optional: Mark the original chunk within the expanded context
-        # This helps Claude identify the most relevant part
-        # prefix = expanded_text[:char_start - expanded_start]
-        # core = expanded_text[char_start - expanded_start:char_end - expanded_start]
-        # suffix = expanded_text[char_end - expanded_start:]
-        # return f"{prefix}>>>{core}<<<{suffix}"
-
-        return expanded_text
+        # Graceful degradation: return original chunk
+        return chunk_text
 
     def _build_inline_metadata(self, metadata: Dict[str, Any], doc_id: str) -> str:
         """
@@ -1871,6 +1910,8 @@ Examples:
                               help='Hardware profile: minimal (CPU), balanced (GPU 6-12GB), maximal (GPU 12GB+)')
     index_parser.add_argument('--use-modular-pipeline', action='store_true',
                               help='Use new ModularPipeline architecture (parser→chunker→embedder)')
+    index_parser.add_argument('--hierarchical', action='store_true',
+                              help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
 
     # Query command
     query_parser = subparsers.add_parser('query', help='Search indexed books')
@@ -1934,6 +1975,7 @@ Examples:
         ocr_language = getattr(args, 'ocr_language', 'deu+eng')
         profile = getattr(args, 'profile', None)
         use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
+        hierarchical = getattr(args, 'hierarchical', False)
 
         rag = archillesRAG(
             db_path=args.db_path,
@@ -1943,7 +1985,8 @@ Examples:
             ocr_backend=ocr_backend,
             ocr_language=ocr_language,
             use_modular_pipeline=use_modular_pipeline,
-            profile=profile
+            profile=profile,
+            hierarchical=hierarchical
         )
 
         if args.command == 'index':

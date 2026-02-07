@@ -44,15 +44,23 @@ class LanceDBStore:
 
         # Position metadata
         "chunk_index": int,
-        "chunk_type": str,
-        "page_number": int,  # Physical PDF page (for navigation)
-        "page_label": str,   # Printed page label (for citations, e.g. "xiv", "62")
+        "chunk_type": str,    # "content", "parent", "child", "calibre_comment"
+        "page_number": int,   # Physical PDF page (for navigation)
+        "page_label": str,    # Printed page label (for citations, e.g. "xiv", "62")
         "chapter": str,
 
         # Section metadata (EPUB)
         "section": str,
         "section_title": str,
         "section_type": str,
+
+        # Context expansion (Small-to-Big Retrieval)
+        "char_start": int,    # Character offset in extracted full text
+        "char_end": int,      # Character offset end in extracted full text
+        "window_text": str,   # Chunk + ~500 chars context (for expanded retrieval)
+
+        # Parent-Child hierarchy
+        "parent_id": str,     # Empty for parents, references parent chunk ID for children
 
         # Technical metadata
         "source_file": str,
@@ -191,6 +199,14 @@ class LanceDBStore:
                 "section_title": chunk.get("section_title", ""),
                 "section_type": chunk.get("section_type", ""),
 
+                # Context expansion (Small-to-Big Retrieval)
+                "char_start": chunk.get("char_start") or 0,
+                "char_end": chunk.get("char_end") or 0,
+                "window_text": chunk.get("window_text", ""),
+
+                # Parent-Child hierarchy
+                "parent_id": chunk.get("parent_id", ""),
+
                 # Technical metadata
                 "source_file": chunk.get("source_file", ""),
                 "format": chunk.get("format", ""),
@@ -200,6 +216,11 @@ class LanceDBStore:
             # Add page_label only if table supports it or is new
             if not existing_columns or "page_label" in existing_columns:
                 record["page_label"] = chunk.get("page_label", "")
+
+            # Backward compat: only add new fields if table supports them or is new
+            if existing_columns and "char_start" not in existing_columns:
+                for field in ("char_start", "char_end", "window_text", "parent_id"):
+                    record.pop(field, None)
 
             records.append(record)
 
@@ -501,6 +522,23 @@ class LanceDBStore:
 
         df = self.table.search().where(f"calibre_id = {calibre_id}").limit(limit).to_pandas()
         return self._results_to_dicts(df)
+
+    def get_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get a single chunk by its ID (used for parent lookup).
+
+        Args:
+            chunk_id: The chunk ID to retrieve
+
+        Returns:
+            Chunk dictionary, or None if not found
+        """
+        if self.table is None:
+            return None
+
+        df = self.table.search().where(f"id = '{chunk_id}'").limit(1).to_pandas()
+        results = self._results_to_dicts(df)
+        return results[0] if results else None
 
     def get_all(self, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
         """

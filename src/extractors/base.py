@@ -59,25 +59,34 @@ class BaseExtractor(ABC):
         """
         pass
 
+    # Separators for recursive splitting (German + English academic texts)
+    SEPARATORS = ["\n\n", "\n", ". ", "? ", "! ", "; ", " ", ""]
+
     def _create_chunks(
         self,
         text: str,
         base_metadata: ChunkMetadata = None,
-        detect_language: bool = True
+        detect_language: bool = True,
+        window_chars: int = 500
     ) -> List[Dict[str, Any]]:
         """
-        Split text into semantic chunks.
+        Split text into semantic chunks with context windows (Small-to-Big).
 
         Uses paragraph boundaries to avoid splitting mid-sentence.
         For humanities texts, preserving argument structure is critical.
+
+        Each chunk includes:
+        - char_start/char_end: Character offsets in the full text
+        - window_text: Chunk text + surrounding context (~window_chars before/after)
 
         Args:
             text: Full text to chunk
             base_metadata: Base metadata to copy to each chunk
             detect_language: If True, automatically detect language for each chunk
+            window_chars: Characters of context to add before/after for window_text
 
         Returns:
-            List of chunks with text and metadata (including language if detected)
+            List of chunks with text, window_text, and metadata
         """
         if not text:
             return []
@@ -104,7 +113,6 @@ class BaseExtractor(ABC):
                 # Create metadata for this chunk
                 chunk_meta = ChunkMetadata()
                 if base_metadata:
-                    # Copy base metadata
                     for key, value in base_metadata.__dict__.items():
                         setattr(chunk_meta, key, value)
 
@@ -145,11 +153,140 @@ class BaseExtractor(ABC):
                 'metadata': chunk_meta.__dict__
             })
 
+        # Generate window_text for each chunk (Small-to-Big context expansion)
+        if window_chars > 0:
+            for chunk in chunks:
+                cs = chunk['metadata'].get('char_start', 0)
+                ce = chunk['metadata'].get('char_end', 0)
+                win_start = max(0, cs - window_chars)
+                win_end = min(len(text), ce + window_chars)
+                chunk['window_text'] = text[win_start:win_end]
+
         # Detect language for all chunks
         if detect_language and LanguageDetector.is_available():
             chunks = LanguageDetector.detect_for_chunks(chunks)
 
         return chunks
+
+    def _create_hierarchical_chunks(
+        self,
+        text: str,
+        book_id: str,
+        base_metadata: ChunkMetadata = None,
+        detect_language: bool = True,
+        parent_size: int = 2048,
+        parent_overlap: int = 400,
+        child_size: int = 512,
+        child_overlap: int = 100,
+        window_chars: int = 500
+    ) -> List[Dict[str, Any]]:
+        """
+        Create two-level hierarchical chunks (parent + child).
+
+        Parents are large chunks (~2048 chars) representing sections/paragraphs.
+        Children are small chunks (~512 chars) for precise retrieval.
+        Each child has a parent_id linking to its parent.
+
+        At retrieval time:
+        1. Search on child level (high precision)
+        2. Load parent for broader context
+        3. Pass both to Claude
+
+        Args:
+            text: Full text to chunk
+            book_id: Book identifier for generating chunk IDs
+            base_metadata: Base metadata to copy to each chunk
+            detect_language: If True, detect language per chunk
+            parent_size: Target parent chunk size in tokens
+            parent_overlap: Overlap between parent chunks in tokens
+            child_size: Target child chunk size in tokens
+            child_overlap: Overlap between child chunks in tokens
+            window_chars: Characters of context for window_text
+
+        Returns:
+            List of all chunks (parents + children), each with chunk_type
+            set to "parent" or "child" and children having parent_id set.
+        """
+        if not text:
+            return []
+
+        all_chunks = []
+
+        # Step 1: Create parent chunks (large)
+        saved_chunk_size = self.chunk_size
+        saved_overlap = self.overlap
+        self.chunk_size = parent_size
+        self.overlap = parent_overlap
+
+        parent_chunks = self._create_chunks(
+            text, base_metadata, detect_language=False, window_chars=0
+        )
+
+        self.chunk_size = saved_chunk_size
+        self.overlap = saved_overlap
+
+        # Step 2: For each parent, create child chunks
+        for p_idx, parent in enumerate(parent_chunks):
+            parent_id = f"{book_id}_parent_{p_idx}"
+            parent['metadata']['chunk_type'] = 'parent'
+            parent['chunk_id'] = parent_id
+            parent['parent_id'] = ''  # Parents have no parent
+
+            # Generate window_text for parent
+            if window_chars > 0:
+                cs = parent['metadata'].get('char_start', 0)
+                ce = parent['metadata'].get('char_end', 0)
+                win_start = max(0, cs - window_chars)
+                win_end = min(len(text), ce + window_chars)
+                parent['window_text'] = text[win_start:win_end]
+
+            all_chunks.append(parent)
+
+            # Create children from parent text
+            parent_text = parent['text']
+            saved_chunk_size = self.chunk_size
+            saved_overlap = self.overlap
+            self.chunk_size = child_size
+            self.overlap = child_overlap
+
+            children = self._create_chunks(
+                parent_text, base_metadata, detect_language=False, window_chars=0
+            )
+
+            self.chunk_size = saved_chunk_size
+            self.overlap = saved_overlap
+
+            # Adjust child offsets relative to full text and link to parent
+            parent_char_start = parent['metadata'].get('char_start', 0)
+            for c_idx, child in enumerate(children):
+                child_id = f"{book_id}_parent_{p_idx}_child_{c_idx}"
+                child['chunk_id'] = child_id
+                child['parent_id'] = parent_id
+                child['metadata']['chunk_type'] = 'child'
+
+                # Adjust char offsets to be relative to full text
+                child['metadata']['char_start'] = (
+                    parent_char_start + child['metadata'].get('char_start', 0)
+                )
+                child['metadata']['char_end'] = (
+                    parent_char_start + child['metadata'].get('char_end', 0)
+                )
+
+                # Generate window_text for child using full text
+                if window_chars > 0:
+                    cs = child['metadata']['char_start']
+                    ce = child['metadata']['char_end']
+                    win_start = max(0, cs - window_chars)
+                    win_end = min(len(text), ce + window_chars)
+                    child['window_text'] = text[win_start:win_end]
+
+                all_chunks.append(child)
+
+        # Detect language for all chunks
+        if detect_language and LanguageDetector.is_available():
+            all_chunks = LanguageDetector.detect_for_chunks(all_chunks)
+
+        return all_chunks
 
     def _create_extraction_metadata(
         self,
