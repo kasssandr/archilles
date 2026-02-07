@@ -29,7 +29,7 @@ Everything runs locally on your machine. Your library, your annotations, your re
 - **Retrieval-Augmented Generation (RAG)**: Combines semantic embeddings with keyword search for best-of-both-worlds accuracy
 - **Model Context Protocol (MCP)**: Native integration with Claude and other AI assistants
 - **Calibre Integration**: Works seamlessly with your existing library structure
-- **Local-First**: ChromaDB for vector storage, all processing happens on your hardware
+- **Local-First**: LanceDB for vector storage, all processing happens on your hardware
 
 ---
 
@@ -185,7 +185,7 @@ Archilles builds a semantic index of your Calibre library that enables intellige
        │
        ▼
 ┌─────────────┐
-│  ChromaDB   │ ← Local vector database (embeddings + BM25 keyword index)
+│   LanceDB   │ ← Local vector database (native hybrid search: vector + FTS)
 └──────┬──────┘
        │
        ▼
@@ -251,23 +251,27 @@ Search through your collection of primary sources and secondary literature simul
 
 ## Product Roadmap
 
-### Current Release: v0.9 Gamma (December 2024)
+### Current Release: v0.9 Gamma (February 2026)
 
 ✅ **Core functionality complete:**
 - Full-text indexing (30+ formats)
-- Semantic + keyword hybrid search
+- Semantic + keyword hybrid search (LanceDB native)
 - Calibre metadata integration (tags, comments, custom fields)
-- MCP server for Claude integration
+- MCP server for Claude Desktop integration (productive)
 - Multi-language support (75+ languages)
+- BGE-M3 embeddings (multilingual, 1024 dimensions)
+- OCR support for scanned PDFs (Tesseract)
+- Hardware-adaptive indexing profiles
+- Streamlit Web UI
 
-### Coming in v1.0 (Q1 2025)
+### Coming in v1.0
 
 🚧 **Planned improvements:**
-- PDF & EPUB annotations extraction (highlights, notes, bookmarks)
-- Incremental indexing (update only changed books)
+- Hierarchical chunking (parent-child) for better retrieval
+- Context expansion (Small-to-Big retrieval)
 - Improved embedding models (domain-specific options)
-- Web UI for non-technical users
-- Collection-level search (search across multiple books simultaneously)
+- VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)
+- Graph RAG (entity relationships)
 
 ### Future Development
 
@@ -353,7 +357,7 @@ You are responsible for ensuring your use of Archilles complies with copyright l
 Archilles is built on the shoulders of giants:
 
 - **[Calibre](https://calibre-ebook.com/)** by Kovid Goyal – The gold standard for e-book library management
-- **[ChromaDB](https://www.trychroma.com/)** – Elegant vector database for RAG applications
+- **[LanceDB](https://lancedb.github.io/lancedb/)** – High-performance vector database with native hybrid search
 - **[Model Context Protocol](https://modelcontextprotocol.io/)** by Anthropic – Standardized AI assistant integration
 - **[BGE-M3](https://huggingface.co/BAAI/bge-m3)** – State-of-the-art multilingual embeddings
 - **[Anthropic Claude](https://www.anthropic.com/claude)** – AI assistant that respects user privacy

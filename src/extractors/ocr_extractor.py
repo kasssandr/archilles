@@ -28,12 +28,25 @@ class OCRBackend(Enum):
     AUTO = "auto"                # Automatic selection
 
 
+class OCROutputFormat(Enum):
+    """Output format for OCR results.
+
+    VLM backends (LightOnOCR-2, GOT-OCR 2.0) can produce structured Markdown
+    with headings, lists, and tables. The chunking pipeline uses this to
+    determine whether Markdown headings can serve as chunk boundaries.
+    """
+    PLAINTEXT = "plaintext"
+    MARKDOWN = "markdown"
+    HTML = "html"
+
+
 @dataclass
 class OCRPage:
     """Result of OCR processing for a single page."""
     page_number: int
     text: str
     confidence: float = 0.0
+    output_format: OCROutputFormat = OCROutputFormat.PLAINTEXT
     layout_blocks: Optional[List[Dict[str, Any]]] = None  # For structured VLM output
     processing_time: float = 0.0
 
