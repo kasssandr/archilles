@@ -1383,16 +1383,21 @@ class archillesRAG:
                 citation_parts.append(metadata['chapter'])
 
             # Also show page number if available (in addition to section)
+            # Priority: page_label > printed_page > PDF page number
             printed_page = metadata.get('printed_page')
             printed_conf = metadata.get('printed_page_confidence', 0.0)
+            page_label = metadata.get('page_label')
             page_warning = None
 
             # Debug mode: show raw metadata values
             if os.environ.get('DEBUG_METADATA'):
                 print(f"    [DEBUG] section: {repr(section)}, section_title: {repr(section_title)}")
-                print(f"    [DEBUG] printed_page: {repr(printed_page)} (type: {type(printed_page).__name__})")
+                print(f"    [DEBUG] page_label: {repr(page_label)}, printed_page: {repr(printed_page)}")
 
-            if printed_page and printed_conf >= 0.8:
+            if page_label:
+                # Use page label from index (most reliable)
+                citation_parts.append(f"S. {page_label}")
+            elif printed_page and printed_conf >= 0.8:
                 # Use printed page number (high confidence)
                 printed_page_str = str(printed_page) if printed_page else ""
                 citation_parts.append(f"S. {printed_page_str}")
@@ -1400,9 +1405,10 @@ class archillesRAG:
                 # Add warning if confidence < 0.9
                 if printed_conf < 0.9:
                     page_warning = f"Seitenzahl-Konfidenz: {printed_conf:.2f} - bitte verifizieren"
-            elif metadata.get('page'):
+            elif metadata.get('page') or metadata.get('page_number'):
                 # Fallback to PDF page number
-                citation_parts.append(f"PDF S. {metadata['page']}")
+                page = metadata.get('page') or metadata.get('page_number')
+                citation_parts.append(f"PDF S. {page}")
 
                 # Add warning if printed page exists but low confidence
                 if printed_page:
@@ -1686,7 +1692,7 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
             if expand_context:
                 text = self.expand_chunk_context(text, metadata, expansion_chars)
 
-            # Build metadata line
+            # Build metadata line (matches inline metadata format)
             meta_parts = []
 
             if metadata.get('author'):
@@ -1698,15 +1704,25 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
             if metadata.get('year'):
                 meta_parts.append(f"Jahr: {metadata['year']}")
 
-            # Page number (prefer printed page if available)
-            if metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
-                meta_parts.append(f"Seite: {metadata['printed_page']}")
-            elif metadata.get('page'):
-                meta_parts.append(f"Seite: {metadata['page']}")
+            # Chapter/Section
+            section_title = metadata.get('section_title')
+            section = metadata.get('section')
+            if section and section_title:
+                meta_parts.append(f"Kapitel: {section} - {section_title}")
+            elif section_title:
+                meta_parts.append(f"Kapitel: {section_title}")
             elif metadata.get('chapter'):
                 meta_parts.append(f"Kapitel: {metadata['chapter']}")
 
-            meta_str = ", ".join(meta_parts) if meta_parts else "Metadaten nicht verfügbar"
+            # Page number (prefer page_label, then printed page, then PDF page)
+            if metadata.get('page_label'):
+                meta_parts.append(f"Seite: {metadata['page_label']}")
+            elif metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
+                meta_parts.append(f"Seite: {metadata['printed_page']}")
+            elif metadata.get('page'):
+                meta_parts.append(f"Seite: {metadata['page']}")
+
+            meta_str = " | ".join(meta_parts) if meta_parts else "Metadaten nicht verfügbar"
 
             # Build inline metadata for content injection
             inline_meta = self._build_inline_metadata(metadata, doc_id)
@@ -1771,33 +1787,50 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         Build inline metadata string to inject before chunk text.
 
         Format: <<<QUELLE ID=doc_1>>>
-                [Metadaten: Autor="X", Titel="Y", Jahr=Z, Seite=123]
+                [Autor: Arendt | Titel: Vita activa | Jahr: 1958 | Kapitel: Das Handeln | Seite: 213]
 
-        This provides context for interpretation (Arendt vs. Heidegger matters!)
+        This provides context for interpretation — a sentence from Arendt
+        means something different than the same sentence from Heidegger.
         """
         meta_parts = []
 
         if metadata.get('author'):
-            # Quote the author name to handle special characters
-            meta_parts.append(f'Autor="{metadata["author"]}"')
+            meta_parts.append(f"Autor: {metadata['author']}")
 
         if metadata.get('book_title'):
-            meta_parts.append(f'Titel="{metadata["book_title"]}"')
+            meta_parts.append(f"Titel: {metadata['book_title']}")
 
         if metadata.get('year'):
-            meta_parts.append(f'Jahr={metadata["year"]}')
+            meta_parts.append(f"Jahr: {metadata['year']}")
 
-        # Page number
-        if metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
-            meta_parts.append(f'Seite={metadata["printed_page"]}')
-        elif metadata.get('page'):
-            meta_parts.append(f'Seite={metadata["page"]}')
+        # Chapter/Section info (critical for academic texts)
+        section = metadata.get('section')
+        section_title = metadata.get('section_title')
+        if section and section_title:
+            meta_parts.append(f"Kapitel: {section} - {section_title}")
+        elif section_title:
+            meta_parts.append(f"Kapitel: {section_title}")
+        elif section:
+            meta_parts.append(f"Abschnitt: {section}")
         elif metadata.get('chapter'):
-            meta_parts.append(f'Kapitel="{metadata["chapter"]}"')
+            meta_parts.append(f"Kapitel: {metadata['chapter']}")
 
-        meta_str = ", ".join(meta_parts) if meta_parts else "keine Metadaten"
+        # Page number (prefer page_label, then printed_page, then PDF page)
+        if metadata.get('page_label'):
+            meta_parts.append(f"Seite: {metadata['page_label']}")
+        elif metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
+            meta_parts.append(f"Seite: {metadata['printed_page']}")
+        elif metadata.get('page_number') or metadata.get('page'):
+            page = metadata.get('page_number') or metadata.get('page')
+            meta_parts.append(f"Seite: {page}")
 
-        return f"<<<QUELLE ID={doc_id}>>>\n[Metadaten: {meta_str}]"
+        # Language (useful for multilingual corpora)
+        if metadata.get('language'):
+            meta_parts.append(f"Sprache: {metadata['language']}")
+
+        meta_str = " | ".join(meta_parts) if meta_parts else "keine Metadaten"
+
+        return f"<<<QUELLE ID={doc_id}>>>\n[{meta_str}]"
 
     def _escape_xml(self, text: str) -> str:
         """Escape XML special characters."""
