@@ -411,7 +411,12 @@ class LanceDBStore:
                 conditions.append(f"section_type = '{section_type}'")
 
         if chunk_type:
-            conditions.append(f"chunk_type = '{chunk_type}'")
+            if chunk_type == "content":
+                # Include both flat chunks ("content") and hierarchical children ("child")
+                # Parents are excluded — they serve as context, not search targets
+                conditions.append("(chunk_type = 'content' OR chunk_type = 'child')")
+            else:
+                conditions.append(f"chunk_type = '{chunk_type}'")
 
         if language:
             conditions.append(f"language = '{language}'")
