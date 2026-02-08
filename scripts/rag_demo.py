@@ -1800,9 +1800,14 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
     @staticmethod
     def _is_bibliography_or_index(text: str) -> bool:
         """
-        Detect if a chunk is a bibliography, index, or reference list.
+        Detect if a chunk is a bibliography, index, or reference list
+        while preserving footnotes (which share many bibliographic signals).
 
-        Uses multiple heuristics based on patterns common in academic texts.
+        Key insight: Bibliographies are pure reference lists. Footnotes contain
+        scholarly connectives ("Vgl.", "Siehe", "hierzu"), numbered markers,
+        and argumentative prose mixed with citations. When footnote signals
+        are present, the threshold is raised to avoid false positives.
+
         Returns True if the text is likely bibliography/index noise.
         """
         if not text or len(text) < 100:
@@ -1811,11 +1816,13 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         text_len = len(text)
         score = 0
 
-        # 1. Parenthesized years like (1985), (2003) — very common in bibliographies
+        # --- Positive signals (bibliography/index) ---
+
+        # 1. Parenthesized years like (1985), (2003)
         year_matches = re.findall(r'\(\d{4}\)', text)
-        year_density = len(year_matches) / (text_len / 1000)  # per 1000 chars
+        year_density = len(year_matches) / (text_len / 1000)
         if year_density > 6:
-            score += 3  # Very strong signal alone
+            score += 3
         elif year_density > 4:
             score += 2
         elif year_density > 2:
@@ -1844,7 +1851,6 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
             score += 1
 
         # 4. Page-number sequences (e.g., "42, 44, 50, 86, 123")
-        # Match 3+ numbers separated by commas/spaces
         page_sequences = re.findall(
             r'\d{1,4}(?:\s*[,]\s*\d{1,4}){2,}',
             text
@@ -1856,7 +1862,7 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         elif len(page_sequences) >= 1:
             score += 1
 
-        # 5. Index-style lines: "Name 123, 456, 789" or "Keyword 42, 44f"
+        # 5. Index-style lines: "Name 123, 456, 789"
         lines = text.split('\n')
         index_line_count = 0
         for line in lines:
@@ -1872,8 +1878,42 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         elif index_line_count >= 1:
             score += 1
 
-        # Threshold: score >= 3 means likely bibliography/index
-        return score >= 3
+        # --- Negative signals (footnote indicators → raise threshold) ---
+
+        # Scholarly connectives typical for footnotes, not bibliographies
+        footnote_connectives = len(re.findall(
+            r'\b(?:Vgl|vgl|Siehe|siehe|hierzu|hierbei|dagegen|ähnlich|dazu'
+            r'|Cf|cf|See also|see also|similarly|contra|but see'
+            r'|insbesondere|besonders|ferner|ebenso|allerdings)\b\.?',
+            text
+        ))
+
+        # Numbered footnote markers: "1 Vgl...", "23 Siehe...", "¹²³"
+        footnote_markers = len(re.findall(
+            r'(?:^|\n)\s*\d{1,3}\s+[A-ZÄÖÜ]',
+            text
+        ))
+
+        # Prose density: footnotes have longer sentences with verbs
+        # Bibliography entries are short, formulaic lines
+        # Count sentences with verbs (rough proxy: words > 8 per sentence)
+        sentences = re.split(r'[.!?]\s+', text)
+        long_sentences = sum(1 for s in sentences if len(s.split()) > 8)
+        prose_ratio = long_sentences / max(len(sentences), 1)
+
+        # Calculate footnote evidence
+        has_footnote_signals = (
+            footnote_connectives >= 2
+            or footnote_markers >= 2
+            or (footnote_connectives >= 1 and footnote_markers >= 1)
+            or (footnote_connectives >= 1 and prose_ratio > 0.3)
+        )
+
+        # Apply threshold: bibliography needs score >= 3,
+        # but if footnote signals are present, raise to >= 6
+        # (most footnote chunks score ~5, pure bibliographies score 6+)
+        threshold = 6 if has_footnote_signals else 3
+        return score >= threshold
 
     def _build_inline_metadata(self, metadata: Dict[str, Any], doc_id: str) -> str:
         """
