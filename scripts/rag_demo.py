@@ -965,6 +965,13 @@ class archillesRAG:
         if short_count > 0:
             print(f"  Filtered {short_count} trivially short chunks (<{min_chunk_length} chars)")
 
+        # Filter out bibliography/index noise
+        # These pass the length filter but are not meaningful content passages
+        bib_count = sum(1 for r in results if self._is_bibliography_or_index(r.get('text', '')))
+        results = [r for r in results if not self._is_bibliography_or_index(r.get('text', ''))]
+        if bib_count > 0:
+            print(f"  Filtered {bib_count} bibliography/index chunks")
+
         # Post-filter by tags (if specified)
         if tag_filter:
             filtered_results = []
@@ -1789,6 +1796,84 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
         # Graceful degradation: return original chunk
         return chunk_text
+
+    @staticmethod
+    def _is_bibliography_or_index(text: str) -> bool:
+        """
+        Detect if a chunk is a bibliography, index, or reference list.
+
+        Uses multiple heuristics based on patterns common in academic texts.
+        Returns True if the text is likely bibliography/index noise.
+        """
+        if not text or len(text) < 100:
+            return False
+
+        text_len = len(text)
+        score = 0
+
+        # 1. Parenthesized years like (1985), (2003) — very common in bibliographies
+        year_matches = re.findall(r'\(\d{4}\)', text)
+        year_density = len(year_matches) / (text_len / 1000)  # per 1000 chars
+        if year_density > 6:
+            score += 3  # Very strong signal alone
+        elif year_density > 4:
+            score += 2
+        elif year_density > 2:
+            score += 1
+
+        # 2. Publication abbreviations (German + English)
+        bib_abbrevs = len(re.findall(
+            r'\b(?:Hrsg|eds?|Hg|vol|Vol|Bd|Nr|pp|SS|Aufl|Diss)\b\.?'
+            r'|(?:S\.\s*\d)|(?:p\.\s*\d)',
+            text
+        ))
+        abbrev_density = bib_abbrevs / (text_len / 1000)
+        if abbrev_density > 3:
+            score += 2
+        elif abbrev_density > 1.5:
+            score += 1
+
+        # 3. Publisher names (University Press, Verlag, etc.)
+        publishers = len(re.findall(
+            r'(?:University\s+Press|Verlag|Press|Publishers?|Éditions)',
+            text
+        ))
+        if publishers >= 3:
+            score += 2
+        elif publishers >= 2:
+            score += 1
+
+        # 4. Page-number sequences (e.g., "42, 44, 50, 86, 123")
+        # Match 3+ numbers separated by commas/spaces
+        page_sequences = re.findall(
+            r'\d{1,4}(?:\s*[,]\s*\d{1,4}){2,}',
+            text
+        )
+        if len(page_sequences) >= 3:
+            score += 3
+        elif len(page_sequences) >= 2:
+            score += 2
+        elif len(page_sequences) >= 1:
+            score += 1
+
+        # 5. Index-style lines: "Name 123, 456, 789" or "Keyword 42, 44f"
+        lines = text.split('\n')
+        index_line_count = 0
+        for line in lines:
+            line = line.strip()
+            if line and re.match(
+                r'^[A-ZÄÖÜ][\w\s,\.\-\']+\s+\d{1,4}'
+                r'(?:\s*[,f–-]\s*\d{1,4})*\s*$',
+                line
+            ):
+                index_line_count += 1
+        if index_line_count >= 3:
+            score += 2
+        elif index_line_count >= 1:
+            score += 1
+
+        # Threshold: score >= 3 means likely bibliography/index
+        return score >= 3
 
     def _build_inline_metadata(self, metadata: Dict[str, Any], doc_id: str) -> str:
         """
