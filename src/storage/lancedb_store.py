@@ -273,10 +273,21 @@ class LanceDBStore:
         )
 
         try:
-            # Try hybrid search first using explicit vector() and text() methods
+            # Use RRF (Reciprocal Rank Fusion) for hybrid reranking.
+            # RRF combines by rank position, not raw scores, which handles
+            # the scale mismatch between vector similarity (0-1) and BM25 scores.
+            try:
+                from lancedb.rerankers import RRFReranker
+                reranker = RRFReranker()
+            except ImportError:
+                reranker = None
+
             search = self.table.search(query_type="hybrid") \
                 .vector(query_vector.tolist()) \
                 .text(query_text)
+
+            if reranker is not None:
+                search = search.rerank(reranker=reranker)
 
             if filters:
                 search = search.where(filters)
@@ -411,7 +422,12 @@ class LanceDBStore:
                 conditions.append(f"section_type = '{section_type}'")
 
         if chunk_type:
-            conditions.append(f"chunk_type = '{chunk_type}'")
+            if chunk_type == "content":
+                # Include both flat chunks ("content") and hierarchical children ("child")
+                # Parents are excluded — they serve as context, not search targets
+                conditions.append("(chunk_type = 'content' OR chunk_type = 'child')")
+            else:
+                conditions.append(f"chunk_type = '{chunk_type}'")
 
         if language:
             conditions.append(f"language = '{language}'")
