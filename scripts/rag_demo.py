@@ -957,6 +957,14 @@ class archillesRAG:
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
 
+        # Filter out trivially short chunks (titles, headings, bibliography entries)
+        # A meaningful academic passage should be at least ~100 characters
+        min_chunk_length = 100
+        short_count = sum(1 for r in results if len(r.get('text', '')) < min_chunk_length)
+        results = [r for r in results if len(r.get('text', '')) >= min_chunk_length]
+        if short_count > 0:
+            print(f"  Filtered {short_count} trivially short chunks (<{min_chunk_length} chars)")
+
         # Post-filter by tags (if specified)
         if tag_filter:
             filtered_results = []
