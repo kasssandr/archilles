@@ -879,7 +879,7 @@ class archillesRAG:
         book_id: str = None,
         exact_phrase: bool = False,
         tag_filter: List[str] = None,
-        section_filter: str = None,
+        section_filter: str = 'main',
         chunk_type_filter: str = 'content',
         max_per_book: int = 2,
         min_similarity: float = 0.0
@@ -895,8 +895,10 @@ class archillesRAG:
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
             tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
-            section_filter: Filter by section type ('main_content', 'front_matter', 'back_matter')
-                           Use 'main' to exclude front/back matter from results
+            section_filter: Filter by section type (default: 'main' = exclude front/back matter)
+                           'main' = main content only (excludes bibliography, index, etc.)
+                           'main_content' / 'front_matter' / 'back_matter' = exact match
+                           None = all sections (no filtering)
             chunk_type_filter: Filter by chunk type (default: 'content' - book text only)
                               'content' = book text only (DEFAULT - excludes Calibre comments)
                               'calibre_comment' = Calibre comments only
@@ -949,11 +951,11 @@ class archillesRAG:
 
         # Route to appropriate search method
         if mode == 'semantic':
-            results = self._semantic_search(query_text, search_top_k, language, book_id, chunk_type_filter)
+            results = self._semantic_search(query_text, search_top_k, language, book_id, chunk_type_filter, section_type=section_filter)
         elif mode == 'keyword':
-            results = self._keyword_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase)
+            results = self._keyword_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase, section_type=section_filter)
         elif mode == 'hybrid':
-            results = self._hybrid_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase)
+            results = self._hybrid_search(query_text, search_top_k, language, book_id, chunk_type_filter, exact_phrase=exact_phrase, section_type=section_filter)
         else:
             raise ValueError(f"Invalid mode: {mode}. Must be 'semantic', 'keyword', or 'hybrid'")
 
@@ -964,13 +966,6 @@ class archillesRAG:
         results = [r for r in results if len(r.get('text', '')) >= min_chunk_length]
         if short_count > 0:
             print(f"  Filtered {short_count} trivially short chunks (<{min_chunk_length} chars)")
-
-        # Filter out bibliography/index noise
-        # These pass the length filter but are not meaningful content passages
-        bib_count = sum(1 for r in results if self._is_bibliography_or_index(r.get('text', '')))
-        results = [r for r in results if not self._is_bibliography_or_index(r.get('text', ''))]
-        if bib_count > 0:
-            print(f"  Filtered {bib_count} bibliography/index chunks")
 
         # Post-filter by tags (if specified)
         if tag_filter:
@@ -983,25 +978,6 @@ class archillesRAG:
                     filter_tag_list = [t.strip().lower() for t in tag_filter]
                     if any(ft in result_tag_list for ft in filter_tag_list):
                         filtered_results.append(result)
-
-            # Re-rank after filtering
-            for i, result in enumerate(filtered_results):
-                result['rank'] = i + 1
-
-            results = filtered_results  # Don't truncate yet - need data for diversification
-
-        # Post-filter by section type (if specified)
-        if section_filter:
-            filtered_results = []
-            for result in results:
-                section_type = result['metadata'].get('section_type', 'main_content')
-
-                # 'main' is shorthand for main_content only (exclude front/back matter)
-                if section_filter == 'main':
-                    if section_type == 'main_content' or section_type is None:
-                        filtered_results.append(result)
-                elif section_type == section_filter:
-                    filtered_results.append(result)
 
             # Re-rank after filtering
             for i, result in enumerate(filtered_results):
@@ -1054,7 +1030,8 @@ class archillesRAG:
         top_k: int,
         language: str = None,
         book_id: str = None,
-        chunk_type_filter: str = None
+        chunk_type_filter: str = None,
+        section_type: str = None
     ) -> List[Dict[str, Any]]:
         """Semantic search using BGE-M3 embeddings via LanceDB."""
         # Generate query embedding
@@ -1077,7 +1054,8 @@ class archillesRAG:
             book_id=resolved_book_id,
             calibre_id=calibre_id,
             chunk_type=chunk_type_filter,
-            language=language
+            language=language,
+            section_type=section_type
         )
 
         # Format results
@@ -1090,7 +1068,8 @@ class archillesRAG:
         language: str = None,
         book_id: str = None,
         chunk_type_filter: str = None,
-        exact_phrase: bool = False
+        exact_phrase: bool = False,
+        section_type: str = None
     ) -> List[Dict[str, Any]]:
         """Keyword search using LanceDB full-text search."""
         # For exact phrase matching, use different approach
@@ -1111,7 +1090,8 @@ class archillesRAG:
             book_id=resolved_book_id,
             calibre_id=calibre_id,
             chunk_type=chunk_type_filter,
-            language=language
+            language=language,
+            section_type=section_type
         )
 
         # Format results
@@ -1195,7 +1175,8 @@ class archillesRAG:
         language: str = None,
         book_id: str = None,
         chunk_type_filter: str = None,
-        exact_phrase: bool = False
+        exact_phrase: bool = False,
+        section_type: str = None
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search using LanceDB native hybrid search (vector + FTS).
@@ -1204,7 +1185,7 @@ class archillesRAG:
         """
         # For exact phrase matching, skip hybrid search entirely
         if exact_phrase:
-            return self._keyword_search(query_text, top_k, language, book_id, chunk_type_filter, exact_phrase=True)
+            return self._keyword_search(query_text, top_k, language, book_id, chunk_type_filter, exact_phrase=True, section_type=section_type)
 
         # Generate query embedding
         query_embedding = self.embedding_model.encode(
@@ -1227,7 +1208,8 @@ class archillesRAG:
             book_id=resolved_book_id,
             calibre_id=calibre_id,
             chunk_type=chunk_type_filter,
-            language=language
+            language=language,
+            section_type=section_type
         )
 
         # Format and apply boost factors
@@ -1797,124 +1779,6 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         # Graceful degradation: return original chunk
         return chunk_text
 
-    @staticmethod
-    def _is_bibliography_or_index(text: str) -> bool:
-        """
-        Detect if a chunk is a bibliography, index, or reference list
-        while preserving footnotes (which share many bibliographic signals).
-
-        Key insight: Bibliographies are pure reference lists. Footnotes contain
-        scholarly connectives ("Vgl.", "Siehe", "hierzu"), numbered markers,
-        and argumentative prose mixed with citations. When footnote signals
-        are present, the threshold is raised to avoid false positives.
-
-        Returns True if the text is likely bibliography/index noise.
-        """
-        if not text or len(text) < 100:
-            return False
-
-        text_len = len(text)
-        score = 0
-
-        # --- Positive signals (bibliography/index) ---
-
-        # 1. Parenthesized years like (1985), (2003)
-        year_matches = re.findall(r'\(\d{4}\)', text)
-        year_density = len(year_matches) / (text_len / 1000)
-        if year_density > 6:
-            score += 3
-        elif year_density > 4:
-            score += 2
-        elif year_density > 2:
-            score += 1
-
-        # 2. Publication abbreviations (German + English)
-        bib_abbrevs = len(re.findall(
-            r'\b(?:Hrsg|eds?|Hg|vol|Vol|Bd|Nr|pp|SS|Aufl|Diss)\b\.?'
-            r'|(?:S\.\s*\d)|(?:p\.\s*\d)',
-            text
-        ))
-        abbrev_density = bib_abbrevs / (text_len / 1000)
-        if abbrev_density > 3:
-            score += 2
-        elif abbrev_density > 1.5:
-            score += 1
-
-        # 3. Publisher names (University Press, Verlag, etc.)
-        publishers = len(re.findall(
-            r'(?:University\s+Press|Verlag|Press|Publishers?|Éditions)',
-            text
-        ))
-        if publishers >= 3:
-            score += 2
-        elif publishers >= 2:
-            score += 1
-
-        # 4. Page-number sequences (e.g., "42, 44, 50, 86, 123")
-        page_sequences = re.findall(
-            r'\d{1,4}(?:\s*[,]\s*\d{1,4}){2,}',
-            text
-        )
-        if len(page_sequences) >= 3:
-            score += 3
-        elif len(page_sequences) >= 2:
-            score += 2
-        elif len(page_sequences) >= 1:
-            score += 1
-
-        # 5. Index-style lines: "Name 123, 456, 789"
-        lines = text.split('\n')
-        index_line_count = 0
-        for line in lines:
-            line = line.strip()
-            if line and re.match(
-                r'^[A-ZÄÖÜ][\w\s,\.\-\']+\s+\d{1,4}'
-                r'(?:\s*[,f–-]\s*\d{1,4})*\s*$',
-                line
-            ):
-                index_line_count += 1
-        if index_line_count >= 3:
-            score += 2
-        elif index_line_count >= 1:
-            score += 1
-
-        # --- Negative signals (footnote indicators → raise threshold) ---
-
-        # Scholarly connectives typical for footnotes, not bibliographies
-        footnote_connectives = len(re.findall(
-            r'\b(?:Vgl|vgl|Siehe|siehe|hierzu|hierbei|dagegen|ähnlich|dazu'
-            r'|Cf|cf|See also|see also|similarly|contra|but see'
-            r'|insbesondere|besonders|ferner|ebenso|allerdings)\b\.?',
-            text
-        ))
-
-        # Numbered footnote markers: "1 Vgl...", "23 Siehe...", "¹²³"
-        footnote_markers = len(re.findall(
-            r'(?:^|\n)\s*\d{1,3}\s+[A-ZÄÖÜ]',
-            text
-        ))
-
-        # Prose density: footnotes have longer sentences with verbs
-        # Bibliography entries are short, formulaic lines
-        # Count sentences with verbs (rough proxy: words > 8 per sentence)
-        sentences = re.split(r'[.!?]\s+', text)
-        long_sentences = sum(1 for s in sentences if len(s.split()) > 8)
-        prose_ratio = long_sentences / max(len(sentences), 1)
-
-        # Calculate footnote evidence
-        has_footnote_signals = (
-            footnote_connectives >= 2
-            or footnote_markers >= 2
-            or (footnote_connectives >= 1 and footnote_markers >= 1)
-            or (footnote_connectives >= 1 and prose_ratio > 0.3)
-        )
-
-        # Apply threshold: bibliography needs score >= 3,
-        # but if footnote signals are present, raise to >= 6
-        # (most footnote chunks score ~5, pure bibliographies score 6+)
-        threshold = 6 if has_footnote_signals else 3
-        return score >= threshold
-
     def _build_inline_metadata(self, metadata: Dict[str, Any], doc_id: str) -> str:
         """
         Build inline metadata string to inject before chunk text.
@@ -2091,7 +1955,10 @@ Examples:
     query_parser.add_argument('--book-id', help='Filter by specific book ID')
     query_parser.add_argument('--tag-filter', nargs='+', help='Filter by Calibre tags (e.g., --tag-filter Geschichte Philosophie)')
     query_parser.add_argument('--section', choices=['main', 'main_content', 'front_matter', 'back_matter'],
-                              help='Filter by section type: main (exclude index/TOC), front_matter, back_matter')
+                              default='main',
+                              help='Filter by section type (default: main = exclude bibliography/index/TOC)')
+    query_parser.add_argument('--all-sections', action='store_true',
+                              help='Search all sections including bibliography and index (overrides --section)')
     query_parser.add_argument('--chunk-type', choices=['phase1_metadata', 'content', 'calibre_comment', 'all'],
                               default='content',
                               help='Filter by chunk type: content (book text only, DEFAULT), calibre_comment (Calibre comments), all (both)')
@@ -2173,7 +2040,7 @@ Examples:
                 book_id=args.book_id,
                 exact_phrase=args.exact,
                 tag_filter=args.tag_filter if hasattr(args, 'tag_filter') else None,
-                section_filter=args.section if hasattr(args, 'section') else None,
+                section_filter=None if getattr(args, 'all_sections', False) else getattr(args, 'section', 'main'),
                 chunk_type_filter=chunk_type_filter,
                 max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 2
             )
