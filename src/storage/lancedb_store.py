@@ -273,10 +273,21 @@ class LanceDBStore:
         )
 
         try:
-            # Try hybrid search first using explicit vector() and text() methods
+            # Use RRF (Reciprocal Rank Fusion) for hybrid reranking.
+            # RRF combines by rank position, not raw scores, which handles
+            # the scale mismatch between vector similarity (0-1) and BM25 scores.
+            try:
+                from lancedb.rerankers import RRFReranker
+                reranker = RRFReranker()
+            except ImportError:
+                reranker = None
+
             search = self.table.search(query_type="hybrid") \
                 .vector(query_vector.tolist()) \
                 .text(query_text)
+
+            if reranker is not None:
+                search = search.rerank(reranker=reranker)
 
             if filters:
                 search = search.where(filters)
