@@ -380,11 +380,10 @@ def main():
     # Header in Courier Prime
     st.markdown(
         '<link href="https://fonts.googleapis.com/css2?family=Courier+Prime&display=swap" rel="stylesheet">'
-        '<h1 style="font-family: \'Courier Prime\', monospace;">📚 ARCHILLES</h1>'
-        '<p style="font-family: \'Courier Prime\', monospace; color: gray; font-size: 0.9em;">'
-        'Semantic Search for Your Book Collection</p>',
+        '<h1 style="font-family: \'Courier Prime\', monospace;">📚 ARCHILLES</h1>',
         unsafe_allow_html=True
     )
+    st.caption("Semantic Search for Your Book Collection")
 
     # Load RAG system
     rag = load_rag()
