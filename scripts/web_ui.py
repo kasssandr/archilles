@@ -312,7 +312,11 @@ def render_books_tab(rag, stats):
     st.header("Indexierte Bücher")
 
     # Get indexed books
-    books = rag.store.get_indexed_books()
+    try:
+        books = rag.store.get_indexed_books()
+    except Exception as e:
+        st.error(f"Fehler beim Laden der Bücher: {e}")
+        return
 
     if not books:
         st.info("Noch keine Bücher indexiert.")
@@ -340,11 +344,25 @@ def render_books_tab(rag, stats):
         reverse=reverse
     )
 
-    # Display books
+    # Display count
     st.markdown(f"**{len(books_sorted)} Bücher** indexiert mit **{stats.get('total_chunks', 0):,}** Chunks")
+
+    # Pagination
+    page_size = 50
+    total_pages = max(1, (len(books_sorted) + page_size - 1) // page_size)
+    if total_pages > 1:
+        page = st.number_input("Seite", min_value=1, max_value=total_pages, value=1, step=1)
+    else:
+        page = 1
+    start = (page - 1) * page_size
+    end = min(start + page_size, len(books_sorted))
+
+    if total_pages > 1:
+        st.caption(f"Zeige {start + 1}–{end} von {len(books_sorted)}")
+
     st.divider()
 
-    for book in books_sorted:
+    for book in books_sorted[start:end]:
         with st.container():
             col1, col2 = st.columns([4, 1])
             with col1:
@@ -538,11 +556,7 @@ def main():
                 "Sprachen": stats.get('languages', {})
             })
 
-    # Books tab
-    with tab_books:
-        render_books_tab(rag, stats)
-
-    # Search tab
+    # Search tab (rendered first to ensure it's always available)
     with tab_search:
         # Search input
         query = st.text_input(
@@ -635,6 +649,10 @@ def main():
 
         elif query and not search_clicked:
             st.info("Drücke 'Suchen' oder Enter um zu suchen.")
+
+    # Books tab
+    with tab_books:
+        render_books_tab(rag, stats)
 
     # Footer
     st.divider()
