@@ -311,12 +311,8 @@ def render_books_tab(rag, stats):
     """Render the indexed books browser tab."""
     st.header("Indexierte Bücher")
 
-    # Get indexed books
-    try:
-        books = rag.store.get_indexed_books()
-    except Exception as e:
-        st.error(f"Fehler beim Laden der Bücher: {e}")
-        return
+    # Reuse cached book list (same data as sidebar dropdown)
+    books = get_indexed_books_list(rag)
 
     if not books:
         st.info("Noch keine Bücher indexiert.")
