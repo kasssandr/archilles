@@ -6,7 +6,7 @@ Usage:
     streamlit run scripts/web_ui.py
 
 Environment:
-    CALIBRE_LIBRARY: Path to Calibre library (required)
+    CALIBRE_LIBRARY_PATH: Path to Calibre library (required)
 """
 
 import sys
@@ -34,9 +34,10 @@ def load_rag():
     """Load RAG system (cached for performance)."""
     from scripts.rag_demo import archillesRAG
 
-    library_path = os.getenv('CALIBRE_LIBRARY')
+    library_path = os.getenv('CALIBRE_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY')
     if not library_path:
-        st.error("CALIBRE_LIBRARY environment variable not set")
+        st.error("CALIBRE_LIBRARY_PATH nicht gesetzt!")
+        st.info('PowerShell: `$env:CALIBRE_LIBRARY_PATH = "C:\\Pfad\\zur\\Calibre-Library"`')
         st.stop()
 
     db_path = str(Path(library_path) / ".archilles" / "rag_db")
@@ -52,7 +53,10 @@ def load_rag():
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_available_tags(_rag) -> List[str]:
     """Get all unique tags from indexed books."""
-    books = _rag.store.get_indexed_books()
+    try:
+        books = _rag.store.get_indexed_books()
+    except Exception:
+        return []
     all_tags = set()
     for book in books:
         tags_str = book.get('tags', '')
@@ -67,7 +71,10 @@ def get_available_tags(_rag) -> List[str]:
 @st.cache_data(ttl=300)  # Cache for 5 minutes
 def get_indexed_books_list(_rag) -> List[Dict[str, Any]]:
     """Get list of indexed books for dropdown."""
-    books = _rag.store.get_indexed_books()
+    try:
+        books = _rag.store.get_indexed_books()
+    except Exception:
+        return []
     return sorted(books, key=lambda x: x.get('title', '') or '')
 
 
@@ -370,15 +377,23 @@ def render_books_tab(rag, stats):
 
 
 def main():
-    # Header
-    st.title("📚 ARCHILLES")
-    st.caption("Semantic Search for Your Book Collection")
+    # Header in Courier Prime
+    st.markdown(
+        '<link href="https://fonts.googleapis.com/css2?family=Courier+Prime&display=swap" rel="stylesheet">'
+        '<h1 style="font-family: \'Courier Prime\', monospace;">📚 ARCHILLES</h1>'
+        '<p style="font-family: \'Courier Prime\', monospace; color: gray; font-size: 0.9em;">'
+        'Semantic Search for Your Book Collection</p>',
+        unsafe_allow_html=True
+    )
 
     # Load RAG system
     rag = load_rag()
 
-    # Get stats
-    stats = rag.store.get_stats()
+    # Get stats (with fallback for empty/new databases)
+    try:
+        stats = rag.store.get_stats()
+    except Exception:
+        stats = {'total_books': 0, 'total_chunks': 0, 'languages': {}, 'file_types': {}}
 
     # Tabs
     tab_search, tab_books = st.tabs(["🔍 Suche", "📚 Bücher"])
