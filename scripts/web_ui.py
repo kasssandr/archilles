@@ -112,7 +112,8 @@ def extract_snippet(text: str, query_terms: List[str], context_chars: int = 200)
     return snippet
 
 
-def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
+def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
+                  show_expanded_context: bool = False, rag=None):
     """Render a single search result."""
     score = result.get('score', 0)
     text = result.get('text', '')
@@ -128,6 +129,11 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
     section_type = metadata.get('section_type', '') or result.get('section_type', '')
     tags = metadata.get('tags', '') or result.get('tags', '')
     calibre_id = metadata.get('calibre_id', 0) or result.get('calibre_id', 0)
+    chapter = metadata.get('chapter', '') or result.get('chapter', '')
+    section_title = metadata.get('section_title', '') or result.get('section_title', '')
+    chunk_type = metadata.get('chunk_type', '') or result.get('chunk_type', '')
+    window_text = metadata.get('window_text', '') or ''
+    parent_id = metadata.get('parent_id', '') or ''
 
     # Fallback for title
     if not book_title or book_title == 'Unknown':
@@ -168,28 +174,63 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str]):
         if meta_parts:
             st.markdown(" | ".join(meta_parts))
 
-        # Tags
+        # Chapter / Section
+        location_parts = []
+        if chapter:
+            location_parts.append(f"**Kapitel:** {chapter}")
+        if section_title:
+            location_parts.append(f"**Abschnitt:** {section_title}")
+        if location_parts:
+            st.markdown(" | ".join(location_parts))
+
+        # Tags and badges
+        badge_row = []
         if tags:
-            st.markdown(f"**Tags:** {tags}")
+            badge_row.append(f"🏷️ {tags}")
 
         # Section type badge
-        if section_type:
+        if section_type and section_type != 'main_content':
             section_labels = {
-                'main_content': '📖 Haupttext',
                 'front_matter': '📄 Vorwort/Einleitung',
                 'back_matter': '📑 Anhang/Register'
             }
             label = section_labels.get(section_type, section_type)
-            st.caption(label)
+            badge_row.append(label)
+
+        # Chunk type badge (only for hierarchical chunks)
+        if chunk_type and chunk_type not in ('content', ''):
+            chunk_labels = {
+                'child': '🧩 Teil-Chunk',
+                'parent': '📦 Eltern-Chunk',
+                'calibre_comment': '💬 Calibre-Kommentar',
+                'phase1_metadata': '📋 Metadaten'
+            }
+            label = chunk_labels.get(chunk_type, chunk_type)
+            badge_row.append(label)
+
+        if badge_row:
+            st.caption(" · ".join(badge_row))
 
         # Snippet with highlighting
         snippet = extract_snippet(text, query_terms)
         highlighted = highlight_text(snippet, query_terms)
         st.markdown(f"> {highlighted}")
 
-        # Expander for full text
+        # Expandable sections
         with st.expander("Volltext anzeigen"):
             st.text(text)
+
+        # Context expansion (window_text or parent chunk)
+        if show_expanded_context and (window_text or parent_id):
+            with st.expander("Erweiterter Kontext"):
+                if window_text and len(window_text) > len(text):
+                    st.caption("Umgebender Text (window_text):")
+                    st.text(window_text)
+                elif parent_id and rag:
+                    parent = rag.store.get_by_id(parent_id)
+                    if parent and parent.get('text'):
+                        st.caption(f"Eltern-Chunk ({parent_id}):")
+                        st.text(parent['text'])
 
         st.divider()
 
@@ -222,7 +263,10 @@ def generate_markdown_export(results: List[Dict[str, Any]], query: str, filters:
         author = metadata.get('author', '')
         year = metadata.get('year', 0)
         page = metadata.get('page_number', 0)
+        page_label = metadata.get('page_label', '')
         calibre_id = metadata.get('calibre_id', 0)
+        chapter = metadata.get('chapter', '')
+        section_title = metadata.get('section_title', '')
 
         lines.append(f"## {i}. {book_title}")
         lines.append("")
@@ -232,7 +276,13 @@ def generate_markdown_export(results: List[Dict[str, Any]], query: str, filters:
             meta_parts.append(f"**Autor:** {author}")
         if year and year > 0:
             meta_parts.append(f"**Jahr:** {year}")
-        if page and page > 0:
+        if chapter:
+            meta_parts.append(f"**Kapitel:** {chapter}")
+        if section_title:
+            meta_parts.append(f"**Abschnitt:** {section_title}")
+        if page_label:
+            meta_parts.append(f"**Seite:** {page_label}")
+        elif page and page > 0:
             meta_parts.append(f"**Seite:** {page}")
         if calibre_id and calibre_id > 0:
             meta_parts.append(f"**Calibre-ID:** {calibre_id}")
@@ -393,12 +443,12 @@ def main():
         else:
             language_filter = None
 
-        # Section filter
+        # Section filter — default to 'main' (exclude bibliography/index)
         section_options = {
-            'Alle': None,
             '📖 Nur Haupttext': 'main',
+            '📑 Nur Anhang': 'back_matter',
             '📄 Nur Vorwort': 'front_matter',
-            '📑 Nur Anhang': 'back_matter'
+            'Alle Abschnitte': None,
         }
         selected_section = st.selectbox("Abschnitt", options=list(section_options.keys()))
         section_filter = section_options[selected_section]
@@ -455,6 +505,11 @@ def main():
                 "Exakte Phrase",
                 value=False,
                 help="Findet nur exakte Übereinstimmungen (gut für Zitate, Latein)"
+            )
+            show_expanded_context = st.checkbox(
+                "Erweiterter Kontext",
+                value=False,
+                help="Zeigt umgebenden Text (window_text) oder Eltern-Chunk an"
             )
 
         st.divider()
@@ -557,7 +612,9 @@ def main():
 
                 # Results
                 for i, result in enumerate(results, 1):
-                    render_result(result, i, query_terms)
+                    render_result(result, i, query_terms,
+                                  show_expanded_context=show_expanded_context,
+                                  rag=rag)
             else:
                 st.warning("Keine Ergebnisse gefunden.")
                 st.info("Versuche andere Suchbegriffe oder deaktiviere Filter.")
