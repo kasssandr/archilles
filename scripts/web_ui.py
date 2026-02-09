@@ -146,11 +146,13 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
     if not book_title or book_title == 'Unknown':
         book_title = metadata.get('title', '') or 'Unknown'
 
-    # Score color
-    if score > 0.8:
-        score_color = "green"
-    elif score > 0.6:
-        score_color = "orange"
+    # Score color — adapt to score range (RRF scores are much smaller than cosine)
+    if score > 0.5:
+        # Cosine similarity range (semantic mode)
+        score_color = "green" if score > 0.8 else "orange"
+    elif score > 0:
+        # RRF range (hybrid mode) — rank-based, typically 0.01-0.05
+        score_color = "green" if score > 0.03 else "orange"
     else:
         score_color = "gray"
 
@@ -401,25 +403,18 @@ def main():
 
         max_per_book = st.slider("Max. pro Buch", min_value=1, max_value=10, value=2)
 
-        # Confidence threshold (only for semantic/hybrid)
-        if mode in ['semantic', 'hybrid']:
+        # Confidence threshold (only meaningful for semantic mode)
+        if mode == 'semantic':
             min_similarity = st.slider(
                 "Min. Ähnlichkeit",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.5,
+                value=0.0,
                 step=0.05,
-                help="Filtert Ergebnisse unter diesem Schwellenwert. Höher = strenger."
+                help="Filtert Ergebnisse unter diesem Schwellenwert (Cosine-Ähnlichkeit). Höher = strenger."
             )
-            # Show interpretation
-            if min_similarity >= 0.7:
-                st.caption("🎯 Streng: Nur sehr relevante Treffer")
-            elif min_similarity >= 0.5:
-                st.caption("⚖️ Ausgewogen: Gute Balance")
-            else:
-                st.caption("🔓 Tolerant: Mehr Treffer, evtl. weniger relevant")
         else:
-            min_similarity = 0.0  # No filtering for keyword-only
+            min_similarity = 0.0  # RRF/keyword scores are not on 0-1 scale
 
         st.divider()
 
