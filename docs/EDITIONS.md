@@ -103,11 +103,11 @@ Rather than bloating the core with niche features, Editions keep the base system
 
 ## Development Timeline
 
-- **2024 Q4**: Core v0.9 (free, open source) ✅
-- **2025 Q1**: Core v1.0 (free)
-- **2025 Q2-Q3**: First Edition MVP (likely Historical)
-- **2025 Q4**: Second Edition
-- **2026**: Additional Editions based on community demand
+- **2026 Q1**: Core v0.9 (free, open source) ✅
+- **2026 Q2**: Core v1.0 (free)
+- **2026 Q3-Q4**: First Edition MVP (likely Historical)
+- **2027 Q1**: Second Edition
+- **2027**: Additional Editions based on community demand
 
 ## Community Input
 
