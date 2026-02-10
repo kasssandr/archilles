@@ -146,11 +146,13 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
     if not book_title or book_title == 'Unknown':
         book_title = metadata.get('title', '') or 'Unknown'
 
-    # Score color
-    if score > 0.8:
-        score_color = "green"
-    elif score > 0.6:
-        score_color = "orange"
+    # Score color — adapt to score range (RRF scores are much smaller than cosine)
+    if score > 0.5:
+        # Cosine similarity range (semantic mode)
+        score_color = "green" if score > 0.8 else "orange"
+    elif score > 0:
+        # RRF range (hybrid mode) — rank-based, typically 0.01-0.05
+        score_color = "green" if score > 0.03 else "orange"
     else:
         score_color = "gray"
 
@@ -308,86 +310,50 @@ def generate_markdown_export(results: List[Dict[str, Any]], query: str, filters:
 
 
 def render_books_tab(rag, stats):
-    """Render the indexed books browser tab."""
-    st.header("Indexierte Bücher")
+    """Render index status overview — what's indexed, what's not."""
+    st.header("Index-Status")
 
-    # Reuse cached book list (same data as sidebar dropdown)
     books = get_indexed_books_list(rag)
 
     if not books:
         st.info("Noch keine Bücher indexiert.")
         return
 
-    # Sort options
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        sort_by = st.selectbox(
-            "Sortieren nach",
-            options=['title', 'author', 'year', 'chunks'],
-            format_func=lambda x: {
-                'title': 'Titel',
-                'author': 'Autor',
-                'year': 'Jahr',
-                'chunks': 'Chunks'
-            }.get(x, x)
-        )
+    total_chunks = stats.get('total_chunks', 0)
+    st.markdown(f"**{len(books)} Bücher** indexiert · **{total_chunks:,}** Chunks")
 
-    # Sort books
-    reverse = sort_by in ['year', 'chunks']
-    books_sorted = sorted(
-        books,
-        key=lambda x: x.get(sort_by, '') or '',
-        reverse=reverse
+    # Search/filter within indexed books
+    filter_text = st.text_input(
+        "Bücher filtern",
+        placeholder="Titel oder Autor eingeben...",
+        key="book_filter"
     )
 
-    # Display count
-    st.markdown(f"**{len(books_sorted)} Bücher** indexiert mit **{stats.get('total_chunks', 0):,}** Chunks")
-
-    # Pagination
-    page_size = 50
-    total_pages = max(1, (len(books_sorted) + page_size - 1) // page_size)
-    if total_pages > 1:
-        page = st.number_input("Seite", min_value=1, max_value=total_pages, value=1, step=1)
-    else:
-        page = 1
-    start = (page - 1) * page_size
-    end = min(start + page_size, len(books_sorted))
-
-    if total_pages > 1:
-        st.caption(f"Zeige {start + 1}–{end} von {len(books_sorted)}")
+    filtered = books
+    if filter_text:
+        q = filter_text.lower()
+        filtered = [b for b in books if
+                    q in (b.get('title', '') or '').lower() or
+                    q in (b.get('author', '') or '').lower()]
+        st.caption(f"{len(filtered)} von {len(books)} Büchern")
 
     st.divider()
 
-    for book in books_sorted[start:end]:
-        with st.container():
-            col1, col2 = st.columns([4, 1])
-            with col1:
-                title = book.get('title', 'Unbekannt')
-                author = book.get('author', '')
-                year = book.get('year', 0)
+    # Compact table-like display
+    for book in filtered:
+        title = book.get('title', 'Unbekannt')
+        author = book.get('author', '')
+        chunks = book.get('chunks', 0)
+        calibre_id = book.get('calibre_id', 0)
 
-                st.markdown(f"**{title}**")
-                meta = []
-                if author:
-                    meta.append(author)
-                if year and year > 0:
-                    meta.append(str(year))
-                if meta:
-                    st.caption(" | ".join(meta))
-
-            with col2:
-                chunks = book.get('chunks', 0)
-                calibre_id = book.get('calibre_id', 0)
-                st.metric("Chunks", chunks, label_visibility="collapsed")
-                if calibre_id:
-                    st.caption(f"ID: {calibre_id}")
-
-            # Tags
-            tags = book.get('tags', '')
-            if tags:
-                st.caption(f"Tags: {tags}")
-
-            st.divider()
+        col1, col2 = st.columns([5, 1])
+        with col1:
+            line = f"**{title}**"
+            if author:
+                line += f"  \n{author}"
+            st.markdown(line)
+        with col2:
+            st.caption(f"{chunks} Chunks")
 
 
 def main():
@@ -437,25 +403,18 @@ def main():
 
         max_per_book = st.slider("Max. pro Buch", min_value=1, max_value=10, value=2)
 
-        # Confidence threshold (only for semantic/hybrid)
-        if mode in ['semantic', 'hybrid']:
+        # Confidence threshold (only meaningful for semantic mode)
+        if mode == 'semantic':
             min_similarity = st.slider(
                 "Min. Ähnlichkeit",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.5,
+                value=0.0,
                 step=0.05,
-                help="Filtert Ergebnisse unter diesem Schwellenwert. Höher = strenger."
+                help="Filtert Ergebnisse unter diesem Schwellenwert (Cosine-Ähnlichkeit). Höher = strenger."
             )
-            # Show interpretation
-            if min_similarity >= 0.7:
-                st.caption("🎯 Streng: Nur sehr relevante Treffer")
-            elif min_similarity >= 0.5:
-                st.caption("⚖️ Ausgewogen: Gute Balance")
-            else:
-                st.caption("🔓 Tolerant: Mehr Treffer, evtl. weniger relevant")
         else:
-            min_similarity = 0.0  # No filtering for keyword-only
+            min_similarity = 0.0  # RRF/keyword scores are not on 0-1 scale
 
         st.divider()
 
