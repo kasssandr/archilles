@@ -59,6 +59,9 @@ Built-in language detection for 75+ languages. Search in German, English, Latin,
 ### ⚡ **Hybrid Search**
 Combines semantic understanding (BGE-M3 embeddings) with keyword precision (BM25). Get the best of both approaches.
 
+### 🎯 **Cross-Encoder Reranking** *(optional)*
+Enable a second-stage reranker (BAAI/bge-reranker-v2-m3) that scores each query-document pair for significantly improved relevance ranking. Graceful fallback if your system has limited memory.
+
 ---
 
 ## Why Archilles?
@@ -86,7 +89,7 @@ Archilles gives you the semantic search capabilities of modern RAG systems while
 
 ```bash
 # Clone the repository
-git clone https://github.com/archilles/archilles.git
+git clone https://github.com/kasssandr/archilles.git
 cd archilles
 
 # Install dependencies
@@ -179,25 +182,22 @@ Archilles builds a semantic index of your Calibre library that enables intellige
        │
        ▼
 ┌─────────────┐
-│  Archilles  │ ← Extracts text, generates embeddings, builds search index
-│   Indexer   │
+│  Extractors │ ← Text extraction from 30+ formats (PDF, EPUB, MOBI, DJVU...)
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│   LanceDB   │ ← Local vector database (native hybrid search: vector + FTS)
+│   LanceDB   │ ← Local vector database (semantic + keyword hybrid search)
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│     MCP     │ ← Model Context Protocol server
-│   Server    │
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│   Claude    │ ← Your AI assistant can now search your library
-└─────────────┘
+│   Service   │ ← ArchillesService: central facade for all consumers
+│    Layer    │   Optional: cross-encoder reranking (bge-reranker-v2-m3)
+└──┬───┬───┬──┘
+   │   │   │
+   ▼   ▼   ▼
+ MCP  Web  CLI  ← Claude Desktop, Streamlit UI, command line
 ```
 
 ### What Gets Indexed
@@ -214,7 +214,25 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 - **BGE-M3 embeddings**: State-of-the-art multilingual semantic understanding (1024 dimensions)
 - **BM25 keyword search**: Precision matching for exact terms (especially useful for names, Latin phrases, technical terms)
 - **Reciprocal Rank Fusion (RRF)**: Intelligently combines semantic and keyword results
+- **Cross-encoder reranking** *(optional)*: BAAI/bge-reranker-v2-m3 scores each query-document pair for more accurate relevance ranking
+- **Section filtering**: Exclude bibliography, index, and front matter noise from results
+- **Context expansion**: Small-to-Big retrieval shows surrounding text for better understanding
 - **Smart boosting**: Calibre comments and tag matches get priority in results
+
+### Configuration
+
+Archilles reads optional configuration from `.archilles/config.json` inside your Calibre library:
+
+```json
+{
+  "enable_reranking": true
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `enable_reranking` | `false` | Enable cross-encoder reranking (more accurate but slower; downloads ~560MB model on first use) |
+| `rag_db_path` | `.archilles/rag_db` | Custom path for the vector database |
 
 **🏗️ [Architecture Details →](docs/ARCHITECTURE.md)**
 
@@ -263,12 +281,15 @@ Search through your collection of primary sources and secondary literature simul
 - OCR support for scanned PDFs (Tesseract)
 - Hardware-adaptive indexing profiles
 - Streamlit Web UI
+- Section-type filtering (exclude bibliography/index noise)
+- Context expansion (Small-to-Big retrieval with `window_text`)
+- Parent-child chunk hierarchy
+- Service layer architecture (decoupled MCP/Web-UI/CLI)
+- Optional cross-encoder reranking (BAAI/bge-reranker-v2-m3)
 
 ### Coming in v1.0
 
 🚧 **Planned improvements:**
-- Hierarchical chunking (parent-child) for better retrieval
-- Context expansion (Small-to-Big retrieval)
 - Improved embedding models (domain-specific options)
 - VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)
 - Graph RAG (entity relationships)
@@ -306,15 +327,15 @@ These editions are commercial add-ons to support ongoing development. The core w
 
 ### Get Help
 
-- **Issues**: [GitHub Issues](https://github.com/archilles/archilles/issues) for bugs and feature requests
-- **Discussions**: [GitHub Discussions](https://github.com/archilles/archilles/discussions) for questions and ideas
+- **Issues**: [GitHub Issues](https://github.com/kasssandr/archilles/issues) for bugs and feature requests
+- **Discussions**: [GitHub Discussions](https://github.com/kasssandr/archilles/discussions) for questions and ideas
 - **Documentation**: [Full documentation](docs/) for guides and troubleshooting
 
 ### Contribute
 
 Archilles is open source (MIT License). Contributions are welcome!
 
-- Found a bug? [Open an issue](https://github.com/archilles/archilles/issues)
+- Found a bug? [Open an issue](https://github.com/kasssandr/archilles/issues)
 - Want to add a feature? Check [CONTRIBUTING.md](CONTRIBUTING.md)
 - Improved documentation? Pull requests appreciated
 
@@ -371,8 +392,8 @@ Thanks to our beta testing community (you know who you are!).
 ## Contact & Links
 
 🌐 **Website**: [archilles.org](https://archilles.org) • [archilles.de](https://archilles.de)
-💻 **GitHub**: [github.com/archilles/archilles](https://github.com/archilles/archilles)
-💬 **Discussions**: [GitHub Discussions](https://github.com/archilles/archilles/discussions)
+💻 **GitHub**: [github.com/kasssandr/archilles](https://github.com/kasssandr/archilles)
+💬 **Discussions**: [GitHub Discussions](https://github.com/kasssandr/archilles/discussions)
 📧 **Contact**: [hello@archilles.org](mailto:hello@archilles.org)
 
 ---
