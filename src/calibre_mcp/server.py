@@ -15,13 +15,13 @@ from typing import Any, Optional
 # Import CalibreAnalyzer from local module
 from .calibre_analyzer import CalibreAnalyzer
 
-# Import RAG system for XML prompt generation
+# Import service layer for RAG search
 try:
-    from scripts.rag_demo import archillesRAG
-    RAG_AVAILABLE = True
+    from src.service import ArchillesService
+    SERVICE_AVAILABLE = True
 except ImportError:
-    RAG_AVAILABLE = False
-    logging.warning("archillesRAG not available. XML prompt generation disabled.")
+    SERVICE_AVAILABLE = False
+    logging.warning("ArchillesService not available. XML prompt generation disabled.")
 
 from .annotations import (
     compute_book_hash,
@@ -57,7 +57,8 @@ class CalibreMCPServer:
         annotations_dir: Optional[str] = None,
         enable_semantic_search: bool = False,
         chroma_persist_dir: Optional[str] = None,
-        rag_db_path: Optional[str] = None
+        rag_db_path: Optional[str] = None,
+        enable_reranking: bool = False
     ):
         """
         Initialize the Calibre MCP Server.
@@ -68,6 +69,7 @@ class CalibreMCPServer:
             enable_semantic_search: Enable semantic search with ChromaDB
             chroma_persist_dir: Directory to persist ChromaDB data
             rag_db_path: Path to RAG database (default: ./archilles_rag_db)
+            enable_reranking: Enable cross-encoder reranking for search results
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
@@ -102,53 +104,24 @@ class CalibreMCPServer:
                 )
                 self.enable_semantic_search = False
 
-        # Initialize RAG system for XML prompt generation (lazy loading)
-        # RAG initialization is deferred until first use to avoid blocking server startup
-        self.rag = None
-        self.rag_db_path = rag_db_path or "./archilles_rag_db"
-        self.rag_initialization_attempted = False
+        # Initialize service layer for RAG search (lazy loading)
+        # Initialization is deferred until first use to avoid blocking server startup
+        self.service = ArchillesService(
+            db_path=rag_db_path or "./archilles_rag_db",
+            enable_reranking=enable_reranking,
+        ) if SERVICE_AVAILABLE else None
 
     def _ensure_rag_initialized(self) -> bool:
         """
-        Ensure RAG system is initialized (lazy loading).
+        Ensure RAG system is initialized (lazy loading via service layer).
 
         Returns:
             True if RAG is available, False otherwise
         """
-        if self.rag is not None:
-            return True  # Already initialized
-
-        if self.rag_initialization_attempted:
-            return False  # Already tried and failed
-
-        self.rag_initialization_attempted = True
-
-        if not RAG_AVAILABLE:
-            logger.warning("RAG system not available (archillesRAG not imported)")
+        if self.service is None:
+            logger.warning("ArchillesService not available")
             return False
-
-        try:
-            logger.info("Initializing RAG system (lazy loading)...")
-
-            # Redirect stdout during RAG initialization to prevent MCP protocol interference
-            # archillesRAG prints status messages that would corrupt JSON-RPC communication
-            old_stdout = sys.stdout
-            sys.stdout = sys.stderr  # Redirect prints to stderr
-
-            try:
-                self.rag = archillesRAG(db_path=self.rag_db_path)
-                logger.info(f"RAG system initialized: {self.rag_db_path}")
-                return True
-            finally:
-                sys.stdout = old_stdout  # Restore stdout
-
-        except Exception as e:
-            # Ensure stdout is restored even if initialization fails
-            if 'old_stdout' in locals():
-                sys.stdout = old_stdout
-            logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
-            self.rag = None
-            return False
+        return self.service._ensure_initialized()
 
     def get_book_annotations_tool(
         self,
@@ -554,28 +527,25 @@ class CalibreMCPServer:
         if not self._ensure_rag_initialized():
             return {
                 'error': 'RAG system not available',
-                'help': 'RAG system requires archillesRAG to be installed and initialized',
+                'help': 'RAG system requires ArchillesService to be installed and initialized',
                 'initialization_log': 'Check ~/.archilles/mcp_server.log for details'
             }
 
         try:
-            # Redirect stdout during search to prevent MCP protocol interference
-            # The query() method prints status messages that corrupt JSON-RPC
-            old_stdout = sys.stdout
-            sys.stdout = sys.stderr
+            # Delegate to service layer (handles stdout redirection internally)
+            result = self.service.search_with_citations(
+                query=query,
+                top_k=top_k,
+                mode=mode,
+                language=language,
+                tags=tags,
+                expand_context=expand_context,
+            )
 
-            try:
-                # Perform search
-                results = self.rag.query(
-                    query_text=query,
-                    top_k=top_k,
-                    mode=mode,
-                    language=language,
-                    tag_filter=tags
-                )
-            finally:
-                sys.stdout = old_stdout
+            if "error" in result:
+                return result
 
+            results = result.get("results", [])
             if not results:
                 return {
                     'results': [],
@@ -583,22 +553,14 @@ class CalibreMCPServer:
                     'query': query
                 }
 
-            # Generate XML prompts
-            claude_prompt = self.rag.create_claude_prompt(
-                results=results,
-                query_text=query,
-                expand_context=expand_context
-            )
-
             # Return structured response
             return {
                 'query': query,
-                'num_results': len(results),
+                'num_results': result['num_results'],
                 'search_mode': mode,
                 'language_filter': language,
-                'system_prompt': claude_prompt['system'],
-                'user_prompt': claude_prompt['user'],
-                'approx_tokens': claude_prompt['total_tokens_approx'],
+                'system_prompt': result['system_prompt'],
+                'user_prompt': result['user_prompt'],
                 'usage_instructions': (
                     "Copy 'system_prompt' to Claude's System Prompt field, "
                     "then copy 'user_prompt' to the message. "
