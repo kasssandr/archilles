@@ -525,9 +525,9 @@ def batch_index(
         # Actually index the book
         try:
             start_time = time.time()
-            # Use force=True when re-indexing old books
-            force_reindex = reindex_before is not None
-            result = rag.index_book(file_path, book_id, force=force_reindex, phase=phase)
+            # Use force=True when re-indexing old books or books with missing labels
+            should_force = reindex_before is not None or reindex_missing_labels
+            result = rag.index_book(file_path, book_id, force=should_force, phase=phase)
             elapsed = time.time() - start_time
 
             # Handle already-indexed books (from ChromaDB check, not progress tracker)
