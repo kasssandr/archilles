@@ -265,13 +265,19 @@ def main():
     logger.info(f"RAG database path: {rag_db_path}")
     logger.info(f"ChromaDB path: {chroma_persist_dir}")
 
+    # Reranking config (optional, off by default)
+    enable_reranking = config.get('enable_reranking', False)
+    if enable_reranking:
+        logger.info("Cross-encoder reranking enabled")
+
     # Initialize server
     server = CalibreMCPServer(
         library_path=library_path,
         annotations_dir=None,  # Will auto-detect
         enable_semantic_search=True,
         chroma_persist_dir=chroma_persist_dir,
-        rag_db_path=rag_db_path
+        rag_db_path=rag_db_path,
+        enable_reranking=enable_reranking
     )
 
     logger.info(f"Server initialized with library: {library_path}")

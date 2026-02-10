@@ -30,9 +30,9 @@ st.set_page_config(
 
 
 @st.cache_resource
-def load_rag():
-    """Load RAG system (cached for performance)."""
-    from scripts.rag_demo import archillesRAG
+def load_service():
+    """Load ARCHILLES service (cached for performance)."""
+    from src.service import ArchillesService
 
     library_path = os.getenv('CALIBRE_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY')
     if not library_path:
@@ -47,14 +47,14 @@ def load_rag():
         st.info("Run batch_index.py first to index your books.")
         st.stop()
 
-    return archillesRAG(db_path=db_path)
+    return ArchillesService(db_path=db_path)
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_available_tags(_rag) -> List[str]:
+def get_available_tags(_service) -> List[str]:
     """Get all unique tags from indexed books."""
     try:
-        books = _rag.store.get_indexed_books()
+        books = _service.get_book_list()
     except Exception:
         return []
     all_tags = set()
@@ -69,10 +69,10 @@ def get_available_tags(_rag) -> List[str]:
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def get_indexed_books_list(_rag) -> List[Dict[str, Any]]:
+def get_indexed_books_list(_service) -> List[Dict[str, Any]]:
     """Get list of indexed books for dropdown."""
     try:
-        books = _rag.store.get_indexed_books()
+        books = _service.get_book_list()
     except Exception:
         return []
     return sorted(books, key=lambda x: x.get('title', '') or '')
@@ -120,7 +120,7 @@ def extract_snippet(text: str, query_terms: List[str], context_chars: int = 200)
 
 
 def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
-                  show_expanded_context: bool = False, rag=None):
+                  show_expanded_context: bool = False, service=None):
     """Render a single search result."""
     score = result.get('score', 0)
     text = result.get('text', '')
@@ -235,8 +235,8 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
                 if window_text and len(window_text) > len(text):
                     st.caption("Umgebender Text (window_text):")
                     st.text(window_text)
-                elif parent_id and rag:
-                    parent = rag.store.get_by_id(parent_id)
+                elif parent_id and service:
+                    parent = service.get_chunk_by_id(parent_id)
                     if parent and parent.get('text'):
                         st.caption(f"Eltern-Chunk ({parent_id}):")
                         st.text(parent['text'])
@@ -309,11 +309,11 @@ def generate_markdown_export(results: List[Dict[str, Any]], query: str, filters:
     return "\n".join(lines)
 
 
-def render_books_tab(rag, stats):
+def render_books_tab(service, stats):
     """Render index status overview — what's indexed, what's not."""
     st.header("Index-Status")
 
-    books = get_indexed_books_list(rag)
+    books = get_indexed_books_list(service)
 
     if not books:
         st.info("Noch keine Bücher indexiert.")
@@ -365,12 +365,12 @@ def main():
     )
     st.caption("Semantic Search for Your Book Collection")
 
-    # Load RAG system
-    rag = load_rag()
+    # Load ARCHILLES service
+    service = load_service()
 
     # Get stats (with fallback for empty/new databases)
     try:
-        stats = rag.store.get_stats()
+        stats = service.get_index_status()
     except Exception:
         stats = {'total_books': 0, 'total_chunks': 0, 'languages': {}, 'file_types': {}}
 
@@ -450,7 +450,7 @@ def main():
         chunk_type_filter = chunk_options[selected_chunk]
 
         # Tag filter
-        available_tags = get_available_tags(rag)
+        available_tags = get_available_tags(service)
         if available_tags:
             tag_options = ['Alle Tags'] + available_tags
             selected_tags = st.multiselect(
@@ -464,7 +464,7 @@ def main():
             tag_filter = None
 
         # Book filter
-        indexed_books = get_indexed_books_list(rag)
+        indexed_books = get_indexed_books_list(service)
         if indexed_books:
             book_options = [{'label': 'Alle Bücher', 'id': None}]
             for book in indexed_books:
@@ -548,8 +548,8 @@ def main():
 
             with st.spinner(f"Suche in {stats.get('total_chunks', 0):,} Chunks{filter_msg}..."):
                 try:
-                    results = rag.query(
-                        query_text=query,
+                    results = service.search(
+                        query=query,
                         top_k=top_k,
                         mode=mode,
                         language=language_filter,
@@ -597,7 +597,7 @@ def main():
                 for i, result in enumerate(results, 1):
                     render_result(result, i, query_terms,
                                   show_expanded_context=show_expanded_context,
-                                  rag=rag)
+                                  service=service)
             else:
                 st.warning("Keine Ergebnisse gefunden.")
                 st.info("Versuche andere Suchbegriffe oder deaktiviere Filter.")
@@ -607,7 +607,7 @@ def main():
 
     # Books tab
     with tab_books:
-        render_books_tab(rag, stats)
+        render_books_tab(service, stats)
 
     # Footer
     st.divider()
