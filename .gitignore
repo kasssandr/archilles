@@ -61,6 +61,9 @@ archilles_rag_db/
 chroma_db/
 .archilles/
 
+# Claude Code worktrees
+.claude/
+
 # Logs
 logs/
 *.log
