@@ -193,48 +193,49 @@ class LanceDBStore:
 
         records = []
         for i, chunk in enumerate(chunks):
+            # Use `or` instead of default arg to also catch explicit None values
             record = {
-                "id": chunk.get("id", f"chunk_{i}"),
-                "text": chunk.get("text", ""),
+                "id": chunk.get("id") or f"chunk_{i}",
+                "text": chunk.get("text") or "",
                 "vector": embeddings[i].tolist(),
 
                 # Book metadata
-                "book_id": chunk.get("book_id", ""),
-                "book_title": chunk.get("book_title", chunk.get("title", "")),
-                "author": chunk.get("author", ""),
-                "publisher": chunk.get("publisher", ""),
+                "book_id": chunk.get("book_id") or "",
+                "book_title": chunk.get("book_title") or chunk.get("title") or "",
+                "author": chunk.get("author") or "",
+                "publisher": chunk.get("publisher") or "",
                 "year": chunk.get("year") or 0,
                 "calibre_id": chunk.get("calibre_id") or 0,
-                "tags": chunk.get("tags", ""),
-                "language": chunk.get("language", ""),
+                "tags": chunk.get("tags") or "",
+                "language": chunk.get("language") or "",
 
                 # Position metadata
-                "chunk_index": chunk.get("chunk_index", i),
-                "chunk_type": chunk.get("chunk_type", "content"),
+                "chunk_index": chunk.get("chunk_index") if chunk.get("chunk_index") is not None else i,
+                "chunk_type": chunk.get("chunk_type") or "content",
                 "page_number": chunk.get("page_number") or chunk.get("page") or 0,
-                "chapter": chunk.get("chapter", ""),
+                "chapter": chunk.get("chapter") or "",
 
                 # Section metadata (EPUB)
-                "section": chunk.get("section", ""),
-                "section_title": chunk.get("section_title", ""),
-                "section_type": chunk.get("section_type", ""),
+                "section": chunk.get("section") or "",
+                "section_title": chunk.get("section_title") or "",
+                "section_type": chunk.get("section_type") or "",
 
                 # Context expansion (Small-to-Big Retrieval)
                 "char_start": chunk.get("char_start") or 0,
                 "char_end": chunk.get("char_end") or 0,
-                "window_text": chunk.get("window_text", ""),
+                "window_text": chunk.get("window_text") or "",
 
                 # Parent-Child hierarchy
-                "parent_id": chunk.get("parent_id", ""),
+                "parent_id": chunk.get("parent_id") or "",
+
+                # Printed page label (for citations)
+                "page_label": chunk.get("page_label") or "",
 
                 # Technical metadata
-                "source_file": chunk.get("source_file", ""),
-                "format": chunk.get("format", ""),
-                "indexed_at": chunk.get("indexed_at", datetime.now().isoformat()),
+                "source_file": chunk.get("source_file") or "",
+                "format": chunk.get("format") or "",
+                "indexed_at": chunk.get("indexed_at") or datetime.now().isoformat(),
             }
-
-            # Always include page_label
-            record["page_label"] = chunk.get("page_label", "")
 
             records.append(record)
 
