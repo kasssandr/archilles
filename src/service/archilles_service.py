@@ -157,7 +157,7 @@ class ArchillesService:
             return []
 
         reranker = self._get_reranker()
-        use_reranking = reranker is not None and reranker.is_available
+        use_reranking = reranker is not None
 
         # Redirect stdout during search (MCP safety)
         old_stdout = sys.stdout
