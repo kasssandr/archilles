@@ -828,6 +828,8 @@ class archillesRAG:
             # Add page info if available
             if 'metadata' in chunk and chunk['metadata'].get('page'):
                 chunk_data['page_number'] = chunk['metadata']['page']
+            if 'metadata' in chunk and chunk['metadata'].get('page_label'):
+                chunk_data['page_label'] = chunk['metadata']['page_label']
 
             # Add chapter info if available
             if 'metadata' in chunk and chunk['metadata'].get('chapter'):
