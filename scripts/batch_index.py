@@ -413,6 +413,7 @@ def batch_index(
     skip_existing: bool = False,
     reindex_before: datetime = None,
     reindex_missing_labels: bool = False,
+    force: bool = False,
     log_file: Optional[Path] = None,
     safe_indexer: Optional[SafeIndexer] = None,
     phase: str = 'phase2',
@@ -492,8 +493,8 @@ def batch_index(
         print(f"         Format: {format_type} | ID: {book_id}")
 
         # Check if already indexed (skip or progress tracker)
-        # BUT: Don't skip if reindex_before or reindex_missing_labels is set (force reindex mode)
-        force_reindex = reindex_before or reindex_missing_labels
+        # BUT: Don't skip if force, reindex_before, or reindex_missing_labels is set
+        force_reindex = force or reindex_before or reindex_missing_labels
         if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not force_reindex:
             print(f"         ⏭️  SKIPPED (already indexed in {phase})")
             stats['skipped'] += 1
@@ -525,8 +526,8 @@ def batch_index(
         # Actually index the book
         try:
             start_time = time.time()
-            # Use force=True when re-indexing old books or books with missing labels
-            should_force = reindex_before is not None or reindex_missing_labels
+            # Use force=True when re-indexing old books, missing labels, or --force
+            should_force = force or reindex_before is not None or reindex_missing_labels
             result = rag.index_book(file_path, book_id, force=should_force, phase=phase)
             elapsed = time.time() - start_time
 
@@ -684,6 +685,9 @@ Profiles:
     # Options
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what would be indexed without actually indexing')
+    parser.add_argument('--force', action='store_true',
+                        help='Force re-indexing of ALL books (delete old chunks first). '
+                             'Use after extractor upgrades (e.g. pdfplumber → PyMuPDF).')
     parser.add_argument('--skip-existing', action='store_true',
                         help='Skip books that are already in the index')
     parser.add_argument('--reindex-before', metavar='DATE',
@@ -845,6 +849,7 @@ Profiles:
         skip_existing=args.skip_existing,
         reindex_before=reindex_before,
         reindex_missing_labels=args.reindex_missing_labels,
+        force=args.force,
         log_file=log_file,
         safe_indexer=safe_indexer,
         phase=phase if safe_indexer else 'phase2',
