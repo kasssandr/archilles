@@ -84,8 +84,8 @@ class PDFExtractor(BaseExtractor):
 
         Tries in order:
         1. If force_ocr: Use OCR directly
-        2. pdfplumber (best for layout-aware extraction)
-        3. PyMuPDF (faster, good for simple PDFs)
+        2. PyMuPDF (best word boundaries, especially for German block-set text)
+        3. pdfplumber (fallback, better for some table-heavy layouts)
         4. If enable_ocr and result is empty/scanned: Use OCR
 
         Args:
@@ -116,17 +116,6 @@ class PDFExtractor(BaseExtractor):
         # Try extraction methods in order
         errors = []
 
-        if PDFPLUMBER_AVAILABLE:
-            try:
-                result = self._extract_with_pdfplumber(file_path)
-                # Check if extraction yielded meaningful text
-                if self.enable_ocr and self._is_extraction_empty(result):
-                    print(f"  [OCR] Text extraction yielded little text, trying OCR", flush=True)
-                    return self._extract_with_ocr(file_path)
-                return result
-            except Exception as e:
-                errors.append(f"pdfplumber failed: {e}")
-
         if PYMUPDF_AVAILABLE:
             try:
                 result = self._extract_with_pymupdf(file_path)
@@ -137,6 +126,17 @@ class PDFExtractor(BaseExtractor):
                 return result
             except Exception as e:
                 errors.append(f"PyMuPDF failed: {e}")
+
+        if PDFPLUMBER_AVAILABLE:
+            try:
+                result = self._extract_with_pdfplumber(file_path)
+                # Check if extraction yielded meaningful text
+                if self.enable_ocr and self._is_extraction_empty(result):
+                    print(f"  [OCR] Text extraction yielded little text, trying OCR", flush=True)
+                    return self._extract_with_ocr(file_path)
+                return result
+            except Exception as e:
+                errors.append(f"pdfplumber failed: {e}")
 
         # Last resort: OCR
         if self.enable_ocr:
