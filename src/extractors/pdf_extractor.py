@@ -281,7 +281,13 @@ class PDFExtractor(BaseExtractor):
 
             # Use PDF page label if available, otherwise fall back to physical page
             if page_labels and page_num < len(page_labels):
-                page_label = page_labels[page_num]
+                raw_label = page_labels[page_num]
+                # PyMuPDF sometimes returns the raw PageLabel spec as dict
+                # instead of a resolved string — normalize to string
+                if isinstance(raw_label, dict):
+                    page_label = str(page_num + 1)
+                else:
+                    page_label = str(raw_label)
             else:
                 page_label = str(page_num + 1)
 
