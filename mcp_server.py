@@ -267,8 +267,9 @@ def main():
 
     # Reranking config (optional, off by default)
     enable_reranking = config.get('enable_reranking', False)
+    reranker_device = config.get('reranker_device', 'cpu')  # CPU default to avoid GPU OOM with BGE-M3
     if enable_reranking:
-        logger.info("Cross-encoder reranking enabled")
+        logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
 
     # Initialize server
     server = CalibreMCPServer(
@@ -277,7 +278,8 @@ def main():
         enable_semantic_search=True,
         chroma_persist_dir=chroma_persist_dir,
         rag_db_path=rag_db_path,
-        enable_reranking=enable_reranking
+        enable_reranking=enable_reranking,
+        reranker_device=reranker_device,
     )
 
     logger.info(f"Server initialized with library: {library_path}")

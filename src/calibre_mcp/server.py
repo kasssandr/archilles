@@ -58,7 +58,8 @@ class CalibreMCPServer:
         enable_semantic_search: bool = False,
         chroma_persist_dir: Optional[str] = None,
         rag_db_path: Optional[str] = None,
-        enable_reranking: bool = False
+        enable_reranking: bool = False,
+        reranker_device: Optional[str] = 'cpu',
     ):
         """
         Initialize the Calibre MCP Server.
@@ -70,6 +71,7 @@ class CalibreMCPServer:
             chroma_persist_dir: Directory to persist ChromaDB data
             rag_db_path: Path to RAG database (default: ./archilles_rag_db)
             enable_reranking: Enable cross-encoder reranking for search results
+            reranker_device: Device for reranker model ('cpu' to avoid GPU OOM)
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
@@ -109,6 +111,7 @@ class CalibreMCPServer:
         self.service = ArchillesService(
             db_path=rag_db_path or "./archilles_rag_db",
             enable_reranking=enable_reranking,
+            reranker_device=reranker_device,
         ) if SERVICE_AVAILABLE else None
 
     def _ensure_rag_initialized(self) -> bool:
