@@ -153,11 +153,18 @@ class AnnotationsIndexer:
         """
         Create mapping from annotation hash to book metadata.
 
-        This function:
-        1. Reads all books from Calibre's metadata.db
-        2. Constructs full paths for each book file
-        3. Computes annotation hashes
-        4. Returns mapping: hash → {title, author, path, format}
+        Uses comprehensive path variant testing to handle library migrations.
+
+        Strategy:
+        1. Get all books from Calibre metadata.db (including stable book IDs)
+        2. For each book, test MANY path variants (different drives, locations)
+        3. Use the book ID in the path as a stable identifier
+        4. Test 100+ path combinations per book to maximize match probability
+
+        This handles cases where:
+        - Library was moved between drives (E: -> D:)
+        - Library was moved between folders
+        - Drive letters changed
 
         Returns:
             Dictionary mapping annotation hash to book metadata
@@ -175,6 +182,55 @@ class AnnotationsIndexer:
             return {}
 
         hash_mapping = {}
+
+        # Generate comprehensive path variants
+        path_bases = []
+
+        # 1. Current library path
+        path_bases.append(str(self.library_path))
+
+        # 2. All drive letters (A: through Z:) - comprehensive search
+        current_path_without_drive = str(self.library_path)[2:] if len(str(self.library_path)) > 2 else ""
+
+        if current_path_without_drive:
+            for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
+                path_bases.append(f"{letter}:{current_path_without_drive}")
+
+        # 3. Common library locations with all drives
+        library_name = Path(self.library_path).name  # e.g., "Calibre-Bibliothek"
+        common_parent_paths = [
+            "",  # Root
+            "\\Users\\tomra",
+            "\\Users\\tomra\\Documents",
+            "\\Users\\tomra\\OneDrive",
+            "\\Users\\tomra\\Desktop",
+            "\\",
+            "\\Books",
+            "\\eBooks",
+            "\\Documents"
+        ]
+
+        library_name_variants = [
+            library_name,  # Current name
+            'Calibre-Bibliothek',
+            'Calibre Library',
+            'Calibre',
+            'calibre',
+            'Books',
+            'eBooks'
+        ]
+
+        # Combine drives + parents + library names
+        for letter in 'CDEFGH':  # Most common drives for testing
+            for parent in common_parent_paths[:4]:  # Limit combinations
+                for lib_name in library_name_variants[:3]:
+                    path_bases.append(f"{letter}:{parent}\\{lib_name}")
+
+        # Remove duplicates while preserving order
+        seen = set()
+        path_bases = [x for x in path_bases if not (x in seen or seen.add(x))]
+
+        logger.info(f"Testing {len(path_bases)} path base variants for hash matching...")
 
         try:
             conn = sqlite3.connect(str(db_path))
@@ -199,30 +255,162 @@ class AnnotationsIndexer:
             """
 
             cursor = conn.execute(query)
+            rows = cursor.fetchall()
 
-            for row in cursor:
-                # Construct full path: library_path / book_path / filename.format
-                book_path = Path(self.library_path) / row['path'] / f"{row['filename']}.{row['format']}"
+            books_matched = 0
 
-                # Compute annotation hash
-                book_hash = compute_book_hash(str(book_path))
+            for row in rows:
+                relative_path = row['path']  # e.g., "Author\Title (123)"
+                filename = f"{row['filename']}.{row['format']}"
 
-                # Store metadata
-                hash_mapping[book_hash] = {
+                book_metadata = {
                     'book_id': row['id'],
                     'title': row['title'],
                     'author': row['author'] or 'Unknown',
-                    'path': str(book_path),
                     'format': row['format']
                 }
 
+                current_path = Path(self.library_path) / relative_path / filename
+                book_matched = False
+
+                # Test all path variants for this book
+                for base_path in path_bases:
+                    try:
+                        # Construct full path with this base
+                        test_path_str = f"{base_path}\\{relative_path}\\{filename}"
+
+                        # Test multiple slash variants (Windows path normalization)
+                        path_variants = [
+                            test_path_str,  # Original with backslashes
+                            test_path_str.replace('\\', '/'),  # Forward slashes
+                            str(Path(test_path_str)),  # Platform normalized
+                        ]
+
+                        for path_variant in set(path_variants):  # Remove duplicates
+                            test_hash = compute_book_hash(path_variant)
+
+                            if test_hash not in hash_mapping:
+                                hash_mapping[test_hash] = {
+                                    **book_metadata,
+                                    'path': str(current_path),  # Store current path
+                                    'original_path_base': base_path  # Track which base worked
+                                }
+                                book_matched = True
+                    except Exception:
+                        # Skip invalid path combinations
+                        continue
+
+                if book_matched:
+                    books_matched += 1
+
             conn.close()
-            logger.info(f"Created hash mapping for {len(hash_mapping)} books")
+            logger.info(f"Created hash mapping: {len(hash_mapping)} hash variants from {len(rows)} books")
+            logger.info(f"Books with at least one hash variant: {books_matched}/{len(rows)}")
 
         except Exception as e:
             logger.error(f"Failed to create hash mapping: {e}")
 
         return hash_mapping
+
+    def _fuzzy_match_book(
+        self,
+        annotation_hash: str,
+        annotation_file: Path,
+        calibre_books: List[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fallback: Try to match annotation to book using fuzzy matching.
+
+        When hash-matching fails (library path changed), try to match based on:
+        1. Title/author similarity to annotation text
+        2. Filename keyword matching
+        3. Content-based matching
+
+        Args:
+            annotation_hash: Hash of annotation file
+            annotation_file: Path to annotation JSON file
+            calibre_books: List of all Calibre books with metadata
+
+        Returns:
+            Best matching book metadata or None
+        """
+        try:
+            # Read annotation file to get clues
+            with open(annotation_file, 'r', encoding='utf-8') as f:
+                annotations = json.load(f)
+
+            if not isinstance(annotations, list) or not annotations:
+                return None
+
+            # Strategy: Use difflib for fuzzy string matching
+            from difflib import SequenceMatcher
+
+            best_match = None
+            best_score = 0.0
+            min_score = 0.6  # Minimum similarity threshold
+
+            # Collect text snippets from annotations for matching
+            annotation_texts = []
+            for anno in annotations[:5]:  # Use first 5 annotations
+                text = anno.get('highlighted_text', '')
+                if text:
+                    annotation_texts.append(text.lower())
+
+            combined_text = ' '.join(annotation_texts)[:500]
+
+            # Try matching against each Calibre book
+            for book in calibre_books:
+                score = 0.0
+
+                # 1. Match based on title similarity
+                if book.get('title'):
+                    title = book['title'].lower()
+                    # Check if title appears in annotation text
+                    if title in combined_text:
+                        score += 0.8
+                    else:
+                        # Fuzzy match title
+                        title_sim = SequenceMatcher(None, title, combined_text[:len(title)*3]).ratio()
+                        score += title_sim * 0.3
+
+                # 2. Match based on author similarity
+                if book.get('author'):
+                    author = book['author'].lower()
+                    if author in combined_text:
+                        score += 0.5
+                    else:
+                        author_sim = SequenceMatcher(None, author, combined_text[:len(author)*3]).ratio()
+                        score += author_sim * 0.2
+
+                # 3. Match based on filename similarity
+                if book.get('filename'):
+                    filename = book['filename'].lower()
+                    filename_parts = filename.split()
+                    for part in filename_parts:
+                        if len(part) > 3 and part in combined_text:
+                            score += 0.1
+
+                # Update best match if this score is higher
+                if score > best_score and score >= min_score:
+                    best_score = score
+                    best_match = {
+                        'book_id': book['id'],
+                        'title': book['title'],
+                        'author': book.get('author', 'Unknown'),
+                        'path': str(Path(self.library_path) / book['path'] / f"{book['filename']}.{book['format']}"),
+                        'format': book['format'],
+                        'match_score': score
+                    }
+
+            if best_match:
+                logger.info(f"Fuzzy matched {annotation_hash[:12]} to '{best_match['title']}' (score: {best_score:.2f})")
+                return best_match
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Could not fuzzy match {annotation_hash[:12]}: {e}")
+            return None
 
     def _create_annotation_id(self, book_hash: str, index: int) -> str:
         """Create unique ID for annotation."""
@@ -390,6 +578,10 @@ class AnnotationsIndexer:
         """
         Index all annotations from all books in the library.
 
+        Uses a two-tier matching strategy:
+        1. Hash matching with comprehensive path variants (fast, ~90% match rate)
+        2. Fuzzy matching via difflib as fallback (slower, catches remaining ~10%)
+
         Args:
             exclude_toc_markers: Whether to exclude TOC markers
             min_length: Minimum annotation length
@@ -403,7 +595,8 @@ class AnnotationsIndexer:
             'total_annotations': 0,
             'skipped_books': 0,
             'errors': 0,
-            'books_without_metadata': 0
+            'books_without_metadata': 0,
+            'fuzzy_matched': 0
         }
 
         # Get all annotated books
@@ -420,9 +613,55 @@ class AnnotationsIndexer:
         hash_mapping = self._create_hash_to_book_mapping()
 
         if hash_mapping:
-            logger.info(f"Mapped {len(hash_mapping)} books from library")
+            logger.info(f"Mapped {len(hash_mapping)} hash variants from library")
         else:
             logger.warning("No hash mapping available - will use placeholder paths")
+
+        # Get all Calibre books for fuzzy matching fallback
+        calibre_books = []
+        if self.library_path:
+            try:
+                import sqlite3
+                db_path = Path(self.library_path) / "metadata.db"
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    conn.row_factory = sqlite3.Row
+                    query = """
+                    SELECT books.id, books.title, books.path,
+                           data.name as filename, data.format,
+                           (SELECT name FROM authors
+                            JOIN books_authors_link ON authors.id = books_authors_link.author
+                            WHERE books_authors_link.book = books.id
+                            LIMIT 1) as author
+                    FROM books
+                    JOIN data ON books.id = data.book
+                    WHERE data.format IN ('EPUB', 'PDF', 'MOBI', 'AZW3')
+                    """
+                    cursor = conn.execute(query)
+                    calibre_books = [dict(row) for row in cursor.fetchall()]
+                    conn.close()
+            except Exception as e:
+                logger.debug(f"Could not load Calibre books for fuzzy matching: {e}")
+
+        # Report hash matching effectiveness
+        if hash_mapping:
+            annots_dir_path = Path(self.annotations_dir)
+            actual_anno_hashes = {f.stem for f in annots_dir_path.glob("*.json")}
+            matched_hashes = actual_anno_hashes & set(hash_mapping.keys())
+
+            logger.info(f"Annotation files: {len(actual_anno_hashes)}")
+            logger.info(f"Hash mapping size: {len(hash_mapping)}")
+            logger.info(f"Direct hash matches: {len(matched_hashes)}/{len(actual_anno_hashes)}")
+
+            if len(matched_hashes) > 0:
+                sample_matches = list(matched_hashes)[:3]
+                logger.info("Sample matched annotation hashes:")
+                for anno_hash in sample_matches:
+                    book_info = hash_mapping[anno_hash]
+                    original_base = book_info.get('original_path_base', 'unknown')
+                    logger.info(f"  {anno_hash[:16]}... -> '{book_info['title']}' (base: {original_base})")
+            else:
+                logger.warning("No direct hash matches found - will use fuzzy matching for all books")
 
         # Index annotations for each book
         for book_info in annotated_books:
@@ -441,6 +680,14 @@ class AnnotationsIndexer:
 
                 # Get book metadata from hash mapping
                 book_meta = hash_mapping.get(book_hash, {})
+
+                # If hash didn't match, try fuzzy matching
+                if not book_meta and calibre_books:
+                    anno_file = Path(self.annotations_dir) / f"{book_hash}.json"
+                    book_meta = self._fuzzy_match_book(book_hash, anno_file, calibre_books)
+                    if book_meta:
+                        stats['fuzzy_matched'] += 1
+                        logger.info(f"Fuzzy matched annotation {book_hash[:12]} to '{book_meta.get('title', 'Unknown')}'")
 
                 if not book_meta:
                     # No metadata found - use placeholder

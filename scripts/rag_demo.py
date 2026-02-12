@@ -146,6 +146,8 @@ class archillesRAG:
             hierarchical: Enable parent-child chunking (parents ~2048, children ~512 tokens)
         """
         self.hierarchical = hierarchical
+        self.use_modular_pipeline = use_modular_pipeline
+        self.profile_name = profile
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
@@ -455,6 +457,72 @@ class archillesRAG:
 
         return metadata
 
+    def _index_book_modular_pipeline(self, book_path: Path, book_id: str, book_metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Index a book using the ModularPipeline architecture.
+
+        Uses the new parser → chunker → embedder pipeline instead of
+        UniversalExtractor + manual embedding. Activated by --use-modular-pipeline flag.
+
+        Args:
+            book_path: Path to book file
+            book_id: Book identifier
+            book_metadata: Metadata from _extract_metadata()
+
+        Returns:
+            Dictionary with indexing statistics
+        """
+        from src.archilles.pipeline import ModularPipeline
+
+        profile_name = self.profile_name or 'minimal'
+        print(f"  Using ModularPipeline (profile: {profile_name})")
+
+        try:
+            pipeline = ModularPipeline.from_profile(profile_name)
+            processed = pipeline.process(book_path)
+
+            print(f"  Parsed: {processed.page_count or 'N/A'} pages in {processed.parse_time:.1f}s")
+            print(f"  Chunked: {processed.chunk_count} chunks in {processed.chunk_time:.1f}s")
+            print(f"  Embedded: {processed.chunk_count} vectors in {processed.embed_time:.1f}s")
+
+            # Store via the LanceDB adapter
+            calibre_id = book_metadata.get('calibre_id', 0)
+            chunks_added = self.store.add_processed_documents(
+                processed,
+                book_metadata={
+                    "book_id": book_id,
+                    "author": book_metadata.get('author', ''),
+                    "publisher": book_metadata.get('publisher', ''),
+                    "year": book_metadata.get('year', 0),
+                    "tags": book_metadata.get('tags', ''),
+                    "language": book_metadata.get('language', ''),
+                },
+                calibre_id=calibre_id if calibre_id else None,
+            )
+
+            # Unload model to free GPU memory
+            pipeline.unload()
+
+            print(f"\n  Indexed {chunks_added} chunks in {processed.total_time:.1f}s total")
+
+            return {
+                'book_id': book_id,
+                'status': 'indexed',
+                'chunks_indexed': chunks_added,
+                'pipeline': 'modular',
+                'profile': profile_name,
+                'parse_time': processed.parse_time,
+                'chunk_time': processed.chunk_time,
+                'embed_time': processed.embed_time,
+                'total_time': processed.total_time,
+            }
+
+        except Exception as e:
+            print(f"\n  ModularPipeline failed: {e}")
+            print(f"  Falling back to legacy extractor...")
+            self.use_modular_pipeline = False  # Disable for this session
+            return self.index_book(str(book_path), book_id, force=True)
+
     def _index_book_phase1(self, book_path: Path, book_id: str, book_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
         Phase 1 indexing: Metadata + comments only (fast).
@@ -628,6 +696,10 @@ class archillesRAG:
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
         book_metadata = self._extract_metadata(book_path)
+
+        # MODULAR PIPELINE PATH: Use new architecture if flag is set
+        if self.use_modular_pipeline:
+            return self._index_book_modular_pipeline(book_path, book_id, book_metadata)
 
         # PHASE 1: Metadata + Comments only (fast indexing)
         if phase == 'phase1':

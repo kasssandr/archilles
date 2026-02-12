@@ -714,6 +714,8 @@ Profiles:
                         help='Show available profiles and exit')
     parser.add_argument('--hierarchical', action='store_true',
                         help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
+    parser.add_argument('--use-modular-pipeline', action='store_true',
+                        help='Use ModularPipeline architecture (parser -> chunker -> embedder)')
 
     args = parser.parse_args()
 
@@ -806,7 +808,8 @@ Profiles:
                 enable_ocr=args.enable_ocr,
                 force_ocr=args.force_ocr,
                 profile=profile_name,
-                hierarchical=getattr(args, 'hierarchical', False)
+                hierarchical=getattr(args, 'hierarchical', False),
+                use_modular_pipeline=getattr(args, 'use_modular_pipeline', False)
             )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message

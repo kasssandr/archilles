@@ -246,6 +246,104 @@ class LanceDBStore:
 
         return len(records)
 
+    def add_processed_documents(
+        self,
+        processed_docs,
+        book_metadata: Optional[Dict[str, Any]] = None,
+        calibre_id: Optional[int] = None,
+    ) -> int:
+        """
+        Add documents processed by the ModularPipeline to the database.
+
+        Bridges between ProcessedDocument (from src.archilles.pipeline)
+        and the LanceDB storage format.
+
+        Args:
+            processed_docs: Single ProcessedDocument or list of them
+                (from ModularPipeline.process())
+            book_metadata: Optional dict with book_id, tags, language, publisher, year
+            calibre_id: Optional Calibre book ID
+
+        Returns:
+            Total number of chunks added
+        """
+        # Handle single document
+        if not isinstance(processed_docs, list):
+            processed_docs = [processed_docs]
+
+        total_added = 0
+        book_meta = book_metadata or {}
+
+        for doc in processed_docs:
+            if not doc.chunks or not doc.embeddings:
+                continue
+
+            # Build book_id from metadata or filename
+            book_id = book_meta.get("book_id", "")
+            if not book_id:
+                # Generate book_id from author + title or filename
+                author_part = doc.authors[0] if doc.authors else "Unknown"
+                title_part = doc.title or Path(doc.file_path).stem
+                book_id = f"{author_part}_{title_part}_{calibre_id or 0}"
+
+            # Convert TextChunk objects to the dict format expected by add_chunks()
+            chunks = []
+            for i, chunk in enumerate(doc.chunks):
+                chunk_dict = {
+                    "id": f"{book_id}_chunk_{i}",
+                    "text": chunk.text,
+
+                    # Book metadata
+                    "book_id": book_id,
+                    "book_title": doc.title or Path(doc.file_path).stem,
+                    "author": " & ".join(doc.authors) if doc.authors else book_meta.get("author", ""),
+                    "publisher": book_meta.get("publisher", ""),
+                    "year": book_meta.get("year", 0),
+                    "calibre_id": calibre_id or book_meta.get("calibre_id", 0),
+                    "tags": book_meta.get("tags", ""),
+                    "language": book_meta.get("language", ""),
+
+                    # Position metadata
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_type": chunk.metadata.get("chunk_type", "content"),
+                    "page_number": chunk.page_start or 0,
+                    "page_label": str(chunk.page_start) if chunk.page_start else "",
+                    "chapter": chunk.chapter or "",
+
+                    # Section metadata (if EPUB)
+                    "section": chunk.metadata.get("section", ""),
+                    "section_title": chunk.section_title or "",
+                    "section_type": chunk.metadata.get("section_type", ""),
+
+                    # Context expansion
+                    "char_start": chunk.start_char or 0,
+                    "char_end": chunk.end_char or 0,
+                    "window_text": "",
+
+                    # Parent-Child hierarchy
+                    "parent_id": "",
+
+                    # Technical metadata
+                    "source_file": doc.file_path,
+                    "format": Path(doc.file_path).suffix.lstrip(".").upper(),
+                }
+                chunks.append(chunk_dict)
+
+            # Convert embeddings list to numpy array
+            embeddings = np.array(doc.embeddings, dtype=np.float32)
+
+            # Use existing add_chunks method
+            added = self.add_chunks(chunks, embeddings)
+            total_added += added
+
+            logger.info(
+                f"Pipeline: Added {added} chunks from '{doc.file_name}' "
+                f"(parse: {doc.parse_time:.1f}s, chunk: {doc.chunk_time:.1f}s, "
+                f"embed: {doc.embed_time:.1f}s)"
+            )
+
+        return total_added
+
     def hybrid_search(
         self,
         query_text: str,

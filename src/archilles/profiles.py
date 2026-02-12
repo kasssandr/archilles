@@ -163,7 +163,7 @@ class IndexMetadata:
     hardware_ram_gb: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for ChromaDB metadata."""
+        """Convert to dictionary for database metadata."""
         return asdict(self)
 
     @classmethod
