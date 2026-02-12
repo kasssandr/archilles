@@ -182,18 +182,22 @@ Archilles builds a semantic index of your Calibre library that enables intellige
        │
        ▼
 ┌─────────────┐
-│  Extractors │ ← Text extraction from 30+ formats (PDF, EPUB, MOBI, DJVU...)
+│  Extractors │ ← PyMuPDF (primary), pdfplumber, EPUB, MOBI, DJVU...
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
-│   LanceDB   │ ← Local vector database (semantic + keyword hybrid search)
+│   LanceDB   │ ← BGE-M3 embeddings + BM25 full-text (hybrid search)
+└──────┬──────┘
+       │
+       ▼
+┌─────────────┐
+│  Retriever  │ ← RRF fusion + optional cross-encoder reranking
 └──────┬──────┘
        │
        ▼
 ┌─────────────┐
 │   Service   │ ← ArchillesService: central facade for all consumers
-│    Layer    │   Optional: cross-encoder reranking (bge-reranker-v2-m3)
 └──┬───┬───┬──┘
    │   │   │
    ▼   ▼   ▼
@@ -202,7 +206,7 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 
 ### What Gets Indexed
 
-- **Book text**: Full-text extraction from 30+ formats (PDF, EPUB, MOBI, DJVU, etc.)
+- **Book text**: Full-text extraction from 30+ formats (PDF via PyMuPDF, EPUB, MOBI, DJVU, etc.)
 - **Calibre metadata**: Title, author, publisher, ISBN, language
 - **Tags**: Your Calibre tags become searchable
 - **Comments**: Calibre's comments field (HTML cleaned automatically)
@@ -211,10 +215,10 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 
 ### Search Technology
 
-- **BGE-M3 embeddings**: State-of-the-art multilingual semantic understanding (1024 dimensions)
-- **BM25 keyword search**: Precision matching for exact terms (especially useful for names, Latin phrases, technical terms)
-- **Reciprocal Rank Fusion (RRF)**: Intelligently combines semantic and keyword results
-- **Cross-encoder reranking** *(optional)*: BAAI/bge-reranker-v2-m3 scores each query-document pair for more accurate relevance ranking
+- **BGE-M3 embeddings**: State-of-the-art multilingual semantic understanding (1024 dimensions, GPU)
+- **BM25 keyword search**: Precision matching for exact terms (names, Latin phrases, technical terms)
+- **Reciprocal Rank Fusion (RRF)**: Intelligently combines semantic and keyword results (stage 1)
+- **Cross-encoder reranking** *(optional)*: BAAI/bge-reranker-v2-m3 rescores top candidates for more accurate ranking (stage 2, CPU)
 - **Section filtering**: Exclude bibliography, index, and front matter noise from results
 - **Context expansion**: Small-to-Big retrieval shows surrounding text for better understanding
 - **Smart boosting**: Calibre comments and tag matches get priority in results
@@ -225,13 +229,15 @@ Archilles reads optional configuration from `.archilles/config.json` inside your
 
 ```json
 {
-  "enable_reranking": true
+  "enable_reranking": true,
+  "reranker_device": "cpu"
 }
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `enable_reranking` | `false` | Enable cross-encoder reranking (more accurate but slower; downloads ~560MB model on first use) |
+| `reranker_device` | `"cpu"` | Device for reranker inference (`"cpu"` or `"cuda"`). CPU recommended when GPU runs BGE-M3 |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for the vector database |
 
 **🏗️ [Architecture Details →](docs/ARCHITECTURE.md)**
@@ -272,8 +278,9 @@ Search through your collection of primary sources and secondary literature simul
 ### Current Release: v0.9 Gamma (February 2026)
 
 ✅ **Core functionality complete:**
-- Full-text indexing (30+ formats)
+- Full-text indexing (30+ formats, PyMuPDF primary for PDFs)
 - Semantic + keyword hybrid search (LanceDB native)
+- Two-stage retrieval: RRF fusion + optional cross-encoder reranking
 - Calibre metadata integration (tags, comments, custom fields)
 - MCP server for Claude Desktop integration (productive)
 - Multi-language support (75+ languages)
@@ -285,7 +292,7 @@ Search through your collection of primary sources and secondary literature simul
 - Context expansion (Small-to-Big retrieval with `window_text`)
 - Parent-child chunk hierarchy
 - Service layer architecture (decoupled MCP/Web-UI/CLI)
-- Optional cross-encoder reranking (BAAI/bge-reranker-v2-m3)
+- Page labels (printed page numbers) for citation accuracy
 
 ### Coming in v1.0
 
