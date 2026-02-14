@@ -2,9 +2,9 @@
 
 **Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring)
 
-This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
+This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/app.asar/DECISIONS.md "DECISIONS.md").
 
----
+* * *
 
 ## System Overview
 
@@ -46,9 +46,9 @@ The system is built around three principles: privacy by architecture (not by pol
                     │  │  (full-text book chunks)   │  │
                     │  └──────────────────────────┘   │
                     │  ┌──────────────────────────┐   │
-                    │  │  ChromaDB (annotations)    │  │
+                    │  │  LanceDB (annotations)    │  │
                     │  │  (highlights, notes)       │  │
-                    │  │  → planned: LanceDB        │  │
+                    │  │  BGE-M3 embeddings        │  │
                     │  └──────────────────────────┘   │
                     └────────────────┬────────────────┘
                                      │
@@ -73,11 +73,11 @@ The system is built around three principles: privacy by architecture (not by pol
                   └─────────┘  └─────────┘  └─────────┘
 ```
 
----
+* * *
 
 ## Core Components
 
-### 1. Calibre Database Layer (`src/calibre_db.py`)
+### 1\. Calibre Database Layer (`src/calibre_db.py`)
 
 Read-only interface to Calibre's `metadata.db`. This component never modifies the database—a firm architectural boundary documented in DECISIONS.md (ADR-005).
 
@@ -89,14 +89,14 @@ The comments field deserves special attention. In many researchers' Calibre libr
 
 **Custom field discovery** works by querying Calibre's `custom_columns` table at startup and mapping each field to the appropriate search metadata. This means a user who has created fields like `research_project`, `source_reliability`, or `century` gets those fields indexed automatically without touching any configuration.
 
-### 2. Extractors Layer (`src/extractors/`)
+### 2\. Extractors Layer (`src/extractors/`)
 
 Each extractor is responsible for turning a book file into structured text with metadata. The extractors are modular and independently deployable, coordinated by a `UniversalExtractor` that delegates to the appropriate format-specific extractor. A `FormatDetector` identifies file types, and a `LanguageDetector` (Lingua, 75+ languages) assigns language codes to extracted text.
 
 **Available extractors:**
 
 | Extractor | File | Formats | Notes |
-|-----------|------|---------|-------|
+| --- | --- | --- | --- |
 | `PDFExtractor` | `pdf_extractor.py` | PDF | Primary: PyMuPDF (fitz); fallback: pdfplumber; OCR path |
 | `EPUBExtractor` | `epub_extractor.py` | EPUB 2/3 | ebooklib with custom TOC parser |
 | `TXTExtractor` | `txt_extractor.py` | TXT | Plain text with encoding detection |
@@ -124,7 +124,7 @@ Section metadata classification (introduced January 2026) automatically labels c
 
 Tesseract serves as the baseline for modern printed text. The interface is designed for drop-in replacement with VLM-based OCR systems (LightOnOCR-2, GOT-OCR 2.0) as they mature. The `ArchillesService` exposes `ocr_backend` configuration (auto/tesseract/lighton/olmocr) to select backends.
 
-### 3. Modular Pipeline (`src/archilles/`)
+### 3\. Modular Pipeline (`src/archilles/`)
 
 The `src/archilles/` package implements the modular processing pipeline with formal Registry patterns. This is the core infrastructure for document processing, separate from the extractors which handle raw text extraction.
 
@@ -132,11 +132,12 @@ The `src/archilles/` package implements the modular processing pipeline with for
 
 The pipeline is orchestrated by `ModularPipeline` (`pipeline.py`), which chains three stages:
 
-1. **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry`.
-
-2. **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. `FixedSizeChunker` and `SemanticChunker` (sentence-boundary-aware) are registered in `ChunkerRegistry`. Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
-
-3. **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Registered in `EmbedderRegistry`.
+1.  **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry`.
+    
+2.  **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. `FixedSizeChunker` and `SemanticChunker` (sentence-boundary-aware) are registered in `ChunkerRegistry`. Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
+    
+3.  **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Registered in `EmbedderRegistry`.
+    
 
 Each registry provides `register()`, `get()`, `list_*()`, and `get_default()`. Factory functions like `create_chunker_for_profile()` select and configure components based on hardware profiles.
 
@@ -145,10 +146,10 @@ Each registry provides `register()`, `get()`, `list_*()`, and `get_default()`. F
 Three pre-defined profiles adapt indexing to available hardware. All use BGE-M3 for consistent embedding quality—only batch size and speed differ:
 
 | Profile | GPU VRAM | Batch Size | Speed | Use Case |
-|---------|----------|------------|-------|----------|
-| `minimal` | 4–6 GB | 8 | ~2 min/book | Quadro T1000, GTX 1650 |
-| `balanced` | 8–12 GB | 32 | ~30s/book | RTX 3060, RTX 2070 |
-| `maximal` | 16+ GB | 64 | ~15s/book | RTX 3090, RTX 4080 |
+| --- | --- | --- | --- | --- |
+| `minimal` | 4–6 GB | 8   | ~2 min/book | Quadro T1000, GTX 1650 |
+| `balanced` | 8–12 GB | 32  | ~30s/book | RTX 3060, RTX 2070 |
+| `maximal` | 16+ GB | 64  | ~15s/book | RTX 3090, RTX 4080 |
 
 Hardware detection (`hardware.py`) auto-selects the appropriate profile when none is specified.
 
@@ -156,7 +157,7 @@ Hardware detection (`hardware.py`) auto-selects the appropriate profile when non
 
 `IndexingCheckpoint` provides checkpoint-based resume for long-running batch operations, tracking per-book progress (chunks processed, errors, timing) with JSON persistence.
 
-### 4. Storage Layer (`src/storage/`)
+### 4\. Storage Layer (`src/storage/`)
 
 #### LanceDB Store (`lancedb_store.py`)
 
@@ -172,34 +173,36 @@ The central storage backend for book content. `LanceDBStore` provides:
 **Database schema** (LanceDB table "chunks"):
 
 | Column | Type | Purpose |
-|--------|------|---------|
+| --- | --- | --- |
 | `id` | str | Unique chunk identifier |
 | `text` | str | Chunk text content |
-| `vector` | float[1024] | BGE-M3 embedding |
-| `book_id`, `book_title`, `author`, `publisher`, `year` | — | Book metadata |
+| `vector` | float\[1024\] | BGE-M3 embedding |
+| `book_id`, `book_title`, `author`, `publisher`, `year` | —   | Book metadata |
 | `calibre_id` | int | Calibre internal book ID |
 | `tags`, `language` | str | Calibre tags, detected language |
-| `chunk_index`, `chunk_type` | — | Position and type (content/parent/child/calibre_comment) |
-| `page_number`, `page_label` | — | Physical page + printed label ("xiv", "62") |
-| `chapter`, `section`, `section_title`, `section_type` | — | Structural metadata |
-| `char_start`, `char_end`, `window_text` | — | Context expansion (Small-to-Big) |
+| `chunk_index`, `chunk_type` | —   | Position and type (content/parent/child/calibre_comment) |
+| `page_number`, `page_label` | —   | Physical page + printed label ("xiv", "62") |
+| `chapter`, `section`, `section_title`, `section_type` | —   | Structural metadata |
+| `char_start`, `char_end`, `window_text` | —   | Context expansion (Small-to-Big) |
 | `parent_id` | str | Parent chunk reference (hierarchical chunking) |
-| `source_file`, `format`, `indexed_at` | — | Technical metadata |
+| `source_file`, `format`, `indexed_at` | —   | Technical metadata |
 
 The `add_processed_documents()` method bridges `ProcessedDocument` objects from the modular pipeline directly into LanceDB storage.
 
-#### Annotations Storage (ChromaDB — migration planned)
+#### Annotations Storage (LanceDB)
 
-Annotations (highlights, notes from Calibre's E-book Viewer) are currently stored and searched via ChromaDB in `src/calibre_mcp/annotations_indexer.py`, using the `all-mpnet-base-v2` embedding model (384 dimensions). This is a legacy architecture from before the LanceDB migration.
+Annotations (highlights, notes from Calibre's E-book Viewer) are stored in a dedicated LanceDB database (`src/storage/annotation_store.py`) using BGE-M3 embeddings (1024 dimensions) — the same embedding model as book content chunks. This unifies the entire system on a single embedding model and vector database backend.
 
-**Planned migration**: Move annotation storage to a second LanceDB table (`archilles_meta`) using BGE-M3 embeddings, consistent with the book content pipeline. This eliminates the ChromaDB dependency, unifies the embedding model, and enables hybrid search over annotations. The two-database architecture described in DECISIONS.md (ADR-008) will then be fully realized.
+The `AnnotationStore` provides vector search, hybrid search (FTS + vector with RRF reranking), per-book upsert semantics, and SQL-like metadata filtering. The `AnnotationsIndexer` (`src/calibre_mcp/annotations_indexer.py`) handles the indexing pipeline: annotation extraction → text preparation → BGE-M3 embedding → LanceDB storage. It includes comprehensive hash-to-book matching (100+ path variants) and fuzzy fallback matching via difflib.
 
-**Current annotation infrastructure:**
+**Annotation infrastructure:**
+- `src/storage/annotation_store.py` — LanceDB-backed annotation store with vector/hybrid search
+- `src/calibre_mcp/annotations_indexer.py` — Indexing pipeline with BGE-M3 embeddings
 - `src/calibre_mcp/annotations.py` — File-based annotation extraction, hash-to-book mapping, text/keyword search
-- `src/calibre_mcp/annotations_indexer.py` — ChromaDB-based semantic search with embedding generation
 - `src/calibre_mcp/calibre_analyzer.py` — Calibre metadata analysis and statistics
 
-### 5. Retriever Layer (`src/retriever/`)
+
+### 5\. Retriever Layer (`src/retriever/`)
 
 #### Search Logic
 
@@ -227,7 +230,7 @@ Configuration via `.archilles/config.json`:
 }
 ```
 
-### 6. Service Layer (`src/service/archilles_service.py`)
+### 6\. Service Layer (`src/service/archilles_service.py`)
 
 Introduced in February 2026 to solve a growing consistency problem: the Web UI, MCP server, and CLI all imported the RAG class directly, meaning every change to search logic had to be replicated in three places.
 
@@ -241,7 +244,7 @@ Introduced in February 2026 to solve a growing consistency problem: the Web UI, 
 
 The service handles lazy initialization (RAG loading deferred to first use), stdout redirection (critical for MCP JSON-RPC safety), and cross-encoder reranking orchestration. When reranking is enabled, the service fetches more raw results from the RAG layer, applies the cross-encoder, then diversifies.
 
-### 7. Client Interfaces
+### 7\. Client Interfaces
 
 #### MCP Server (`src/calibre_mcp/server.py`, entry point: `mcp_server.py`)
 
@@ -250,7 +253,7 @@ The primary interface. Implements the Model Context Protocol for integration wit
 **Exposed tools** (12 tools via `create_mcp_tools()`):
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `search_books_with_citations` | Hybrid search over book content with citation-ready output |
 | `search_annotations` | Semantic + text search across highlights and notes |
 | `list_annotated_books` | Lists all books with indexed annotations |
@@ -276,7 +279,7 @@ Streamlit-based interface for users without Claude Desktop. Provides search with
 
 `batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), and checkpoint-based resume for long-running operations.
 
----
+* * *
 
 ## Data Flow
 
@@ -359,16 +362,15 @@ ArchillesService.search()
         → Web UI: interactive result display
 ```
 
----
+* * *
 
 ## Technology Stack
 
 | Component | Implementation | Notes |
-|-----------|---------------|-------|
+| --- | --- | --- |
 | Vector database | LanceDB | Native hybrid search, IVF-PQ, Arrow-based |
-| Annotations DB | ChromaDB | Migration to LanceDB planned |
-| Embeddings (books) | BGE-M3 (BAAI) | 1024 dimensions, multilingual, GPU |
-| Embeddings (annotations) | all-mpnet-base-v2 | 384 dim; will migrate to BGE-M3 |
+| Annotations DB | LanceDB | Separate DB, same engine as book chunks |
+| Embeddings (all) | BGE-M3 (BAAI) | 1024 dimensions, multilingual, GPU |
 | Reranker | bge-reranker-v2-m3 | Optional cross-encoder, CPU default |
 | PDF extraction | PyMuPDF (fitz) | Primary; pdfplumber as fallback |
 | EPUB extraction | ebooklib | With custom TOC parser |
@@ -379,7 +381,7 @@ ArchillesService.search()
 | Configuration | JSON | `.archilles/config.json` in library |
 | Runtime | Python 3.11+ | Cross-platform: macOS, Windows/WSL, Linux |
 
----
+* * *
 
 ## Directory Structure
 
@@ -426,7 +428,8 @@ archilles/
 │   │   └── exceptions.py          # ExtractionError hierarchy
 │   │
 │   ├── storage/
-│   │   └── lancedb_store.py       # LanceDBStore (vector DB backend)
+│   │   ├── lancedb_store.py        # LanceDBStore (book chunks)
+│   │   └── annotation_store.py     # AnnotationStore (annotation embeddings)
 │   │
 │   ├── retriever/
 │   │   └── reranker.py            # CrossEncoderReranker (optional)
@@ -437,7 +440,7 @@ archilles/
 │   ├── calibre_mcp/               # MCP server + annotation infrastructure
 │   │   ├── server.py              # CalibreMCPServer + create_mcp_tools()
 │   │   ├── annotations.py         # Annotation extraction, hash mapping, search
-│   │   ├── annotations_indexer.py # ChromaDB semantic search (migration planned)
+│   │   ├── annotations_indexer.py # LanceDB semantic search with BGE-M3
 │   │   └── calibre_analyzer.py    # Library statistics and analysis
 │   │
 │   └── calibre_db.py              # Read-only Calibre metadata.db access
@@ -450,7 +453,7 @@ archilles/
 ├── .archilles/                    # Per-library data (inside Calibre folder)
 │   ├── config.json                # User configuration
 │   ├── rag_db/                    # LanceDB database (book chunks)
-│   └── chroma_db/                 # ChromaDB database (annotations, legacy)
+│   └── annotations_db/            # LanceDB database (annotation embeddings)
 │
 └── docs/
     ├── DECISIONS.md               # Strategic + technical decision log
@@ -458,40 +461,40 @@ archilles/
     └── ...
 ```
 
----
+* * *
 
 ## Configuration Reference
 
 All configuration is stored in `.archilles/config.json` inside the user's Calibre library directory. This keeps configuration portable with the library.
 
 | Key | Default | Description |
-|-----|---------|-------------|
+| --- | --- | --- |
 | `enable_reranking` | `false` | Enable cross-encoder reranking (Stage 2) |
 | `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
-| `chroma_persist_dir` | `.archilles/chroma_db` | Path for ChromaDB annotations |
+| `annotations_db_path` | `.archilles/annotations_db` | Path for annotation LanceDB |
 | `calibre_library_path` | (env var) | Override for CALIBRE_LIBRARY_PATH |
-| `embedding_model` | `"all-mpnet-base-v2"` | Annotation embedding model (ChromaDB) |
+| `embedding_model` | `"BAAI/bge-m3"` | Annotation embedding model |
 
 Environment variables:
 
 | Variable | Default | Description |
-|----------|---------|-------------|
+| --- | --- | --- |
 | `CALIBRE_LIBRARY_PATH` | (required) | Path to Calibre library root |
 | `RAG_DB_PATH` | `$CALIBRE_LIBRARY_PATH/.archilles/rag_db` | Override LanceDB location |
-| `CUDA_VISIBLE_DEVICES` | — | GPU selection for embeddings/reranking |
+| `CUDA_VISIBLE_DEVICES` | —   | GPU selection for embeddings/reranking |
 
----
+* * *
 
 ## Security and Privacy
 
 ARCHILLES makes no network calls during normal operation. The only exceptions are the initial download of the BGE-M3 model (~2.2 GB) and optionally the cross-encoder model (~560 MB), both fetched from Hugging Face on first run.
 
-There is no telemetry, no analytics, no usage tracking. ChromaDB telemetry is explicitly disabled (`anonymized_telemetry=False`). The system reads Calibre's metadata.db but never writes to it. All ARCHILLES data lives in the `.archilles` directory within the user's Calibre library folder, making it easy to back up, move, or delete.
+There is no telemetry, no analytics, no usage tracking. The system reads Calibre's metadata.db but never writes to it. All ARCHILLES data lives in the `.archilles` directory within the user's Calibre library folder, making it easy to back up, move, or delete.
 
 When connected to an external LLM via MCP, the search results (text chunks with metadata) are sent to the LLM—this is the intended use case. But the user controls which LLM they connect to, and the connection is initiated by the user's MCP client (e.g., Claude Desktop), not by ARCHILLES.
 
----
+* * *
 
 ## Extension Points
 
@@ -509,7 +512,7 @@ The architecture is designed with explicit extension zones for future developmen
 
 **The `.archilles` folder** serves as the defined extension zone per library. Configuration, databases, cached models, and any future plugin data live here—cleanly separated from Calibre's own data.
 
----
+* * *
 
 ## Platform Compatibility
 
@@ -517,7 +520,7 @@ ARCHILLES targets cross-platform operation across macOS, Windows (native and WSL
 
 All file paths use `pathlib.Path`, never string concatenation. All file I/O defaults to UTF-8 encoding. Dependencies are chosen for platform-agnostic availability—no OS-specific libraries in the core stack.
 
----
+* * *
 
-*For the rationale behind these architectural decisions, see [DECISIONS.md](DECISIONS.md).*
-*For user-facing documentation, see the [README](../README.md).*
+*For the rationale behind these architectural decisions, see [DECISIONS.md](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/app.asar/DECISIONS.md "DECISIONS.md").*  
+*For user-facing documentation, see the [README](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/README.md "../README.md").*
