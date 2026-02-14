@@ -2,6 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
 **Erstfassung:** 13. Februar 2026  
+**Letzte Überarbeitung:** 14. Februar 2026 (Coding-Review: technische Korrekturen, fehlende ADRs, Präzisierungen)  
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -52,9 +53,15 @@ ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkei
 
 **Entscheidung:** Migration zu LanceDB.
 
-**Begründung:** LanceDB bringt native Hybrid-Search (dense + sparse Vectors) mit, die den separaten BM25-Code und die Reciprocal-Rank-Fusion-Logik überflüssig macht. Die IVF-PQ-Indexstruktur ist für Millionen von Chunks optimiert und optional GPU-beschleunigbar. Die Migration wurde bewusst früh durchgeführt, als die Datenbank noch klein und ein Re-Indexing unkompliziert war.
+**Begründung:** LanceDB bringt native Hybrid-Search (dense + sparse Vectors) mit. Die IVF-PQ-Indexstruktur ist für Millionen von Chunks optimiert und optional GPU-beschleunigbar. Die Migration wurde bewusst früh durchgeführt, als die Datenbank noch klein und ein Re-Indexing unkompliziert war.
 
-**Konsequenzen:** Der gesamte Storage-Layer, Indexer und Retriever mussten umgeschrieben werden. Die ca. 87 Bücher wurden neu indexiert. Der Code wurde schlanker, weil weniger selbst implementierte Suchlogik nötig ist. Das Architekturprinzip dabei: "Wir bauen ein Chassis, in das wir später bessere Motoren einbauen können – und verlegen jetzt schon Kabel zu Steckplätzen, an denen wir künftig erwartbare neue Geräte einstecken können." Die Parameter-Ebene im Code wurde von Beginn an auf Diversifizierung und Erweiterbarkeit ausgerichtet.
+**Konsequenzen:** Der gesamte Storage-Layer, Indexer und Retriever mussten umgeschrieben werden. Alle ca. 87 Bücher wurden aus den Quelldateien neu indexiert – nicht aus ChromaDB exportiert –, was zwei Vorteile brachte: Erstens erhielten auch die älteren Bücher die seit Januar 2026 verfügbare Section-Metadata (Front Matter / Hauptinhalt / Back Matter Klassifikation), zweitens entfiel die Abhängigkeit vom alten ChromaDB-Format. Der Indexstand stieg durch Re-Indexierung und neue Bücher auf über 78.000 Chunks.
+
+Im selben Zug wurde der bibliography/index-Rauschfilter architektonisch gelöst: Eine 118-Zeilen-Text-Heuristik (`_is_bibliography_or_index()`), die bei Tests 0 von 4 echten Rausch-Chunks erkannte und dafür Fußnoten als False Positives produzierte, wurde komplett entfernt. Stattdessen filtert das System nun auf DB-Ebene über `section_type`: Default `section_filter='main'` schließt Anhang, Register und Inhaltsverzeichnis automatisch aus. Das Ergebnis: minus 159 Zeilen netto bei besserem Ergebnis – ein Musterbeispiel für das Leitprinzip "weniger Code, mehr Architektur".
+
+Das Architekturprinzip dabei: "Wir bauen ein Chassis, in das wir später bessere Motoren einbauen können – und verlegen jetzt schon Kabel zu Steckplätzen, an denen wir künftig erwartbare neue Geräte einstecken können." Die Parameter-Ebene im Code wurde von Beginn an auf Diversifizierung und Erweiterbarkeit ausgerichtet.
+
+**Technisches Detail zur Hybrid-Search:** LanceDB implementiert intern eine eigene Variante der Fusion von Vektor- und Keyword-Ergebnissen. Die zuvor selbst implementierte BM25- und RRF-Logik konnte daher stark vereinfacht werden, ist aber nicht vollständig entfallen – der Retriever nutzt LanceDBs native Hybrid-Search-API statt eigener Fusionsalgorithmen.
 
 ### ADR-002: BGE-M3 als Embedding-Modell
 
@@ -72,17 +79,19 @@ ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkei
 
 **Entscheidung:** PyMuPDF (fitz) als primärer Extraktor, mit Multi-Tier-Fallback-System.
 
-**Begründung:** PyMuPDF bietet die beste Kombination aus Geschwindigkeit und Extraktionsqualität für die Mehrzahl der Dokumente. Es liefert zuverlässiges Seitenzahlen-Mapping, das für zitierfähige Quellenangaben unerlässlich ist. Die ursprünglich als primärer Extraktor vorgesehene Bibliothek pdfplumber wurde auf eine Fallback-Rolle zurückgestuft. Für problematische PDFs (historische Scans, komplexe Layouts) steht ein Fallback-System bereit, das bei Qualitätsproblemen alternative Extraktoren einschaltet.
+**Begründung:** PyMuPDF bietet die beste Kombination aus Geschwindigkeit und Extraktionsqualität für die Mehrzahl der Dokumente. Es liefert zuverlässiges Seitenzahlen-Mapping, das für zitierfähige Quellenangaben unerlässlich ist. Die Chunking-Intelligence-Analyse (Gemini-Beitrag) empfahl zusätzlich CropBox-Filtering beim Einlesen, um Header, Footer und Seitenzahlen vor dem Chunking zu eliminieren – das wurde implementiert und verbessert die Embedding-Qualität spürbar. Die ursprünglich als primärer Extraktor vorgesehene Bibliothek pdfplumber wurde auf eine Fallback-Rolle zurückgestuft. Für problematische PDFs (historische Scans, komplexe Layouts) steht ein Fallback-System bereit, das bei Qualitätsproblemen alternative Extraktoren einschaltet.
 
 **Verworfene Alternativen:** Marker (LLM-gestützter Korrekturmodus) wurde als bedarfsgesteuertes Feature für die Zukunft notiert, nicht als aktive Planung. Die Entscheidung fällt nach Beta-Feedback über die tatsächliche Extraktionsqualität.
 
-### ADR-004: Registry-Pattern für modulare Pipeline
+### ADR-004: Modulare Pipeline-Architektur
 
 **Kontext:** ARCHILLES soll verschiedene Parser, Chunker und Embedder unterstützen können – sowohl für verschiedene Dateiformate als auch für künftige Special Editions mit disziplinspezifischen Optimierungen.
 
-**Entscheidung:** Modulare Pipeline-Architektur mit Registry-Pattern. Parser, Chunker und Embedder sind als austauschbare Komponenten implementiert, die sich über ein Registry-System registrieren und auswählen lassen.
+**Entscheidung:** Modulare Pipeline-Architektur, auf ein Registry-Pattern hin angelegt. Parser, Chunker und Embedder sind als austauschbare Komponenten mit klar definierten Schnittstellen implementiert.
 
 **Begründung:** Das Pattern ermöglicht die spätere Erweiterung um neue Extraktoren (etwa für DJVU, OCR-intensive Dokumente oder proprietäre Formate), neue Chunking-Strategien (semantisch vs. fixed-size vs. hybrid) und neue Embedding-Modelle, ohne den Kern des Systems zu modifizieren. Es ist zudem die technische Voraussetzung für das Freemium-Modell: Die Basisversion nutzt Standard-Komponenten, Special Editions können optimierte Varianten einsetzen.
+
+**Implementierungsstand:** Das Registry-Pattern ist vollständig implementiert. In `src/archilles/` existieren drei formale Registries mit dynamischer Registrierung und Laufzeit-Discovery: `ParserRegistry` (für `PyMuPDFParser`, `EPUBParser`), `ChunkerRegistry` (für `FixedSizeChunker`, `SemanticChunker`) und `EmbedderRegistry` (für `BGEEmbedder` mit bge-small/base/m3-Varianten). Jedes Registry bietet `register()`, `get()`, `list_*()` und `get_default()`. Factory-Funktionen wie `create_chunker_for_profile()` verbinden Registries mit den Hardware-Profilen. Die `ModularPipeline` (`pipeline.py`) orchestriert den Dreischritt Parser → Chunker → Embedder. Parallel dazu existieren die Extractors (`src/extractors/`) als eigenständige Schicht für die Rohtextextraktion, koordiniert durch `UniversalExtractor` mit `FormatDetector`.
 
 ### ADR-005: Keine direkte Modifikation von Calibres metadata.db
 
@@ -96,9 +105,11 @@ ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkei
 
 **Kontext:** Rein semantische Suche findet konzeptionell verwandte Passagen, versagt aber bei exakten Begriffen – Eigennamen, Jahreszahlen, Fachterminologie. Reine Keyword-Suche findet exakte Treffer, versteht aber keine Bedeutung.
 
-**Entscheidung:** Hybride Suche, die BGE-M3-Vektorembeddings mit BM25-Keyword-Matching über Reciprocal Rank Fusion kombiniert. (Hinweis: LanceDB bringt Hybrid-Search nativ mit, was die Implementierung vereinfacht.)
+**Entscheidung:** Hybride Suche, die BGE-M3-Vektorembeddings mit BM25-Keyword-Matching über Reciprocal Rank Fusion kombiniert.
 
 **Begründung:** Geisteswissenschaftler suchen sowohl nach Konzepten ("Legitimation von Herrschaft im Mittelalter") als auch nach konkreten Referenzen ("Eusebius von Caesarea" oder "325 n. Chr."). Die hybride Suche bedient beide Suchmodi. RRF als Fusionsmethode wurde in der Wettbewerbsanalyse (Dezember 2025) als algorithmisch einfach, ohne neue Dependencies und mit messbarer Qualitätsverbesserung bewertet.
+
+**Evolutionspfad:** Die Implementierung hat sich mit der Datenbank-Migration weiterentwickelt. In der ChromaDB-Phase war RRF als eigener Algorithmus implementiert; seit der LanceDB-Migration nutzt `LanceDBStore.hybrid_search()` LanceDBs `RRFReranker` (aus `lancedb.rerankers`) für die native Fusion von Vektor- und Keyword-Ergebnissen. Die Suchlogik ist über zwei Ebenen verteilt: `LanceDBStore` (DB-Level: Hybrid-Suche, Filterung) und `archillesRAG` in `scripts/rag_demo.py` (App-Level: Modus-Auswahl, Tag-Filterung, Diversifizierung, Kontext-Expansion). Es existiert keine separate `hybrid.py`-Datei; die Vereinheitlichung läuft über den Service-Layer.
 
 ### ADR-007: OCR-Strategie – Tesseract als Basis, modularer Ausbau
 
@@ -107,6 +118,79 @@ ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkei
 **Entscheidung:** Tesseract als Basismodul, mit vorbereitetem Ausbau auf bessere Modelle.
 
 **Begründung:** Tesseract ist frei verfügbar, gut etabliert und ausreichend für moderne Druckschriften. Für die anspruchsvolleren Fälle – historische Frakturschrift, handschriftliche Marginalien, schlecht gescannte Vorlagen – wird der modulare Ausbau vorbereitet, ohne dass die Basisversion davon abhängt. Die strategische Analyse (Februar 2026) ergab, dass sich die OCR-Landschaft rasant entwickelt und eine zu frühe Festlegung auf ein spezifisches Premium-System riskant wäre. Besser: die Schnittstelle sauber definieren und das beste verfügbare Modell einsetzen, wenn es soweit ist.
+
+**Implementierungsstand:** `ocr_extractor.py` existiert in `src/extractors/` mit `OCRExtractor`- und `TesseractExtractor`-Klassen. Die Dataclass in `models.py` ist mit einem `output_format`-Feld vorbereitet, das verschiedene OCR-Backend-Ausgabeformate unterstützen kann. Der `ArchillesService` exponiert `ocr_backend`-Konfiguration (auto/tesseract/lighton/olmocr) zur Backend-Auswahl.
+
+### ADR-008: Zwei-Datenbanken-Architektur (November 2025)
+
+**Kontext:** ARCHILLES verarbeitet zwei fundamental verschiedene Texttypen: den Buchinhalt selbst und alles, was *über* ein Buch geschrieben wurde – Verlagstexte, Kritiken, NotebookLM-Analysen und persönliche Exzerpte im Calibre-Kommentarfeld.
+
+**Entscheidung:** Getrennte Datenbanken: `archilles_books` für Volltext-Chunks aus den Buchdateien, `archilles_meta` für Calibre-Kommentare und Annotationen.
+
+**Begründung:** Für Geisteswissenschaftler ist die Unterscheidung zwischen "was steht im Buch" und "was habe ich oder andere darüber geschrieben" fundamental. Eine monolithische Datenbank hätte diese Grenze verwischt. Die Trennung ermöglicht gezielte Suchmodi: nur in Quellentexten suchen, nur in eigenen Notizen suchen, oder beides mit Gewichtung. Zudem erlaubt sie unterschiedliche Update-Zyklen – Buchinhalte ändern sich nie, Kommentare und Annotationen wachsen laufend.
+
+**Konsequenzen:** Der MCP-Server exponiert beide Suchräume als separate Tools (`search_books_with_citations` für Buchinhalte, `search_annotations` für Nutzerdaten).
+
+**Implementierungsstand (Transparenzhinweis):** Die Trennung ist konzeptionell umgesetzt, aber technisch noch hybrid: Buch-Chunks liegen in LanceDB (`archilles_books`-Tabelle in `src/storage/lancedb_store.py`), während Annotationen (Highlights, Notes) über ChromaDB (`src/calibre_mcp/annotations_indexer.py`) mit einem eigenen Embedding-Modell (`all-mpnet-base-v2`, 384 Dim.) gespeichert werden. Die geplante Migration vereinheitlicht beides in LanceDB mit BGE-M3-Embeddings, eliminiert die ChromaDB-Dependency und realisiert die Zwei-Datenbanken-Architektur vollständig als zwei LanceDB-Tabellen.
+
+### ADR-009: Service-Layer-Architektur (Februar 2026)
+
+**Kontext:** Das Web-UI (`web_ui.py`), der MCP-Server (`server.py`) und das CLI (`rag_demo.py`) importierten alle die RAG-Klasse direkt. Jede Änderung an der Suchlogik musste an drei Stellen nachgezogen werden – ein wachsendes Konsistenzproblem.
+
+**Entscheidung:** Einführung eines Service-Layers (`archilles_service.py`) als zentrale Geschäftslogik-Schicht.
+
+**Begründung:** Das ist kein glamouröses Feature, sondern Architekturhygiene. Der Service-Layer kapselt alle Operationen – `search()`, `index_book()`, `get_index_status()`, `get_book_list()` – und wird von allen drei Clients einheitlich genutzt. Änderungen an der Suchlogik, etwa die Integration von Cross-Encoder-Reranking, müssen nur noch an einer Stelle erfolgen. Der Service-Layer ist zudem die Voraussetzung dafür, dass das in ADR-004 formulierte Prinzip der modularen Erweiterbarkeit tatsächlich funktioniert: Neue Backends, neue Suchstrategien oder neue Filter werden im Service implementiert und stehen sofort überall zur Verfügung.
+
+**Verzeichnisstruktur nach Refactoring:**
+
+```
+src/
+├── archilles/                     # Modulare Pipeline-Infrastruktur
+│   ├── pipeline.py                # ModularPipeline (Parser → Chunker → Embedder)
+│   ├── profiles.py                # Hardware-Profile (minimal/balanced/maximal)
+│   ├── hardware.py                # Hardware-Erkennung (GPU, VRAM)
+│   ├── parsers/                   # ParserRegistry + PyMuPDFParser, EPUBParser
+│   ├── chunkers/                  # ChunkerRegistry + FixedSize, Semantic
+│   ├── embedders/                 # EmbedderRegistry + BGEEmbedder
+│   └── indexer/checkpoint.py      # Checkpoint-Resume für Batch-Indexierung
+├── service/
+│   └── archilles_service.py       # Zentrale Geschäftslogik-Fassade
+├── extractors/
+│   ├── universal_extractor.py     # Delegiert an formatspezifische Extractors
+│   ├── pdf_extractor.py           # PyMuPDF + pdfplumber-Fallback
+│   ├── epub_extractor.py          # ebooklib mit TOC-Parser
+│   ├── ocr_extractor.py           # Tesseract-Integration
+│   ├── txt_extractor.py           # Plaintext-Extraktion
+│   ├── html_extractor.py          # HTML-Dokumente
+│   ├── calibre_converter.py       # Calibre ebook-convert Bridge
+│   ├── format_detector.py         # Formaterkennung
+│   ├── language_detector.py       # Lingua-basierte Spracherkennung
+│   ├── models.py                  # Gemeinsame Dataclasses
+│   └── exceptions.py              # Fehlertypen-Hierarchie
+├── storage/
+│   └── lancedb_store.py           # LanceDBStore (Vektor-DB-Backend)
+├── retriever/
+│   └── reranker.py                # Cross-Encoder Reranking (optional)
+├── calibre_mcp/
+│   ├── server.py                  # CalibreMCPServer (12 MCP-Tools)
+│   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping
+│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Migration geplant)
+│   └── calibre_analyzer.py        # Bibliotheks-Statistiken
+└── calibre_db.py                  # Read-only Calibre-Metadaten-Zugriff
+```
+
+Entry-Point: `mcp_server.py` im Projekt-Root (von Claude Desktop aufgerufen).
+CLI-Skripte: `scripts/rag_demo.py`, `scripts/batch_index.py`, `scripts/web_ui.py`.
+
+### ADR-010: Eine Datei pro Buchordner (Januar 2026)
+
+**Kontext:** Calibre-Buchordner können neben der Hauptdatei weitere Dateien enthalten: Konvertierungen in verschiedenen Formaten, Cover-Bilder, manchmal auch vom Nutzer abgelegte Exzerpte, Notizen oder ergänzende Materialien in Unterordnern.
+
+**Entscheidung:** Bei der Indexierung wird pro Buchordner genau eine Datei verarbeitet, mit strikter Priorität: PDF > EPUB > sonstige Formate. Unterordner werden in Version 1 bewusst ignoriert.
+
+**Begründung:** Die Beschränkung auf eine Datei verhindert doppelte Indexierung desselben Inhalts in verschiedenen Formaten. PDF hat Vorrang wegen des zuverlässigen Seitenzahlen-Mappings, das für zitierfähige Quellenangaben entscheidend ist. EPUBs liefern dafür bessere Strukturinformationen (TOC-Parsing, Section-Metadata) und werden schneller verarbeitet.
+
+Das Ignorieren von Unterordnern ist eine bewusste Produktentscheidung, keine technische Limitierung. Gut organisierte Nutzer lagern dort oft eigene Exzerpte und Texte, die sie durchaus indexiert haben möchten – und die sie aus guten Gründen nicht ins Calibre-Kommentarfeld schreiben. Statt sie zur Umorganisation zu nötigen, wird die Fein-Indexierung mit Wahl- und Einstelloptionen für eine spätere Version oder die Paid-Version reserviert. Das schafft einen natürlichen Upgrade-Pfad, ohne die Basis-Version zu verkomplizieren.
 
 ---
 
@@ -124,7 +208,17 @@ ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkei
 
 **Begründung:** Die Marktanalyse zeigt, dass DEVONthink (499 €) und Polar (299 $) als Einmalkauf-Modelle erfolgreich bei Wissenschaftlern sind. Abo-Müdigkeit ist in der Zielgruppe verbreitet. Das Free Tier bietet die komplette Basisfunktionalität ohne Bibliotheksbeschränkung, um eine Nutzerbasis aufzubauen. Die Premium-Erweiterungen sind inhaltlich differenziert:
 
-Die **Historical Edition** als erste geplante Special Edition bringt LightRAG für Graph-basiertes Retrieval, Zeitreferenz-Extraktion, chronologische Visualisierung und spezialisierte Embeddings für historische Texte. Weitere geplante Editions sind Literary, Legal und Musical, jeweils mit disziplinspezifischen Optimierungen. Das Plugin-System der modularen Architektur (Registry-Pattern) ist die technische Voraussetzung für diese Trennung.
+Die **Historical Edition** als erste geplante Special Edition bringt LightRAG für Graph-basiertes Retrieval, Zeitreferenz-Extraktion, chronologische Visualisierung und spezialisierte Embeddings für historische Texte. Weitere geplante Editions sind Literary, Legal und Musical, jeweils mit disziplinspezifischen Optimierungen. Die modulare Pipeline-Architektur (ADR-004) ist die technische Voraussetzung für diese Trennung.
+
+### ARCHILLATOR als Lead-Magnet
+
+**Kontext (Januar 2026):** Parallel zu ARCHILLES entstand ARCHILLATOR, ein akademisches Übersetzungstool, das Bücher absatzweise über verschiedene LLM-Provider (Gemini, OpenAI, Claude) übersetzt und dabei EPUB-Formatierung erhält.
+
+**Entscheidung:** ARCHILLATOR wird als eigenständiges, kostenloses Tool veröffentlicht, bevor ARCHILLES selbst bereit für den Community-Release ist.
+
+**Begründung:** Das Tool löst ein konkretes, weit verbreitetes Problem (Bücher in Fremdsprachen schnell lesbar machen) und demonstriert die technische Kompetenz hinter dem ARCHILLES-Projekt. Es dient als Lead-Magnet für die Community-Phase: Nutzer, die den ARCHILLATOR schätzen, werden auf ARCHILLES aufmerksam. Das Tool unterstützt Checkpoint-basiertes Resume (Übersetzung kann unterbrochen und fortgesetzt werden, auch mit Provider-Wechsel), was die Robustheit für lange Dokumente sicherstellt.
+
+**Abgrenzung:** ARCHILLATOR ist kein ARCHILLES-Feature, sondern ein separates Tool. Es nutzt keine RAG-Infrastruktur und teilt keinen Code mit ARCHILLES. Die Verbindung ist rein strategisch.
 
 ### Privacy als politisch neutrale Positionierung: Datensouveränität
 
@@ -139,6 +233,8 @@ Die **Historical Edition** als erste geplante Special Edition bringt LightRAG f�
 **Begründung:** MCP wurde im November 2025 als der wichtigste Differenzierungsvorteil für 2025/26 identifiziert. Das Protokoll löst elegant das Kerndilemma der Zielgruppe: Sie wollen die besten Cloud-Modelle (Claude, GPT-4o) nutzen, aber ihre sensiblen Daten nicht hochladen. Ein lokaler MCP-Server exponiert die Bibliothek dynamisch für kompatible KI-Agenten, ohne dass ein Byte den Rechner verlässt. Ressourcen werden mit URIs referenziert, die automatisch in akademische Zitationsformate (BibTeX, APA, Chicago) umgewandelt werden können.
 
 Das Risiko: MCP ist ein junger Standard, und seine Durchsetzung hängt von Anthropics und OpenAIs fortgesetzter Unterstützung ab. Die Wette ist, dass MCP zum Industriestandard für LLM-Tool-Integration wird – eine Wette, die durch die rasche Adoption (OpenAI im März 2025, wachsendes Ökosystem mit 80+ offiziellen Servern) gestützt wird.
+
+**Ergänzende Interfaces:** Neben dem MCP-Server existieren ein Web-UI (Streamlit, für Nutzer ohne Claude Desktop) und ein CLI (für Batch-Operationen und Debugging). Beide sind bewusst als Companion-Tools positioniert, nicht als primäre Interfaces. Seit der Service-Layer-Refaktorierung (ADR-009) nutzen alle drei Clients denselben Code-Pfad.
 
 ---
 
@@ -160,7 +256,7 @@ Das Risiko: MCP ist ein junger Standard, und seine Durchsetzung hängt von Anthr
 
 **Entscheidung:** LightRAG wird als Graph-RAG-Ansatz vorgesehen, aber erst nach systematischer Evaluation (geplant Q2 2026) implementiert.
 
-**Begründung:** LightRAG bietet Dual-Level Retrieval (Low-Level für Details, High-Level für Konzepte) und inkrementelle Updates ohne komplettes Graph-Rebuilding. Allerdings erfordert die Graph-Extraktion LLM-Aufrufe während der Indexierung, was API-Kosten verursacht. Vor der Implementation muss ein Testkorpus definiert und Metriken für den Vergleich mit reinem Vektor-RAG festgelegt werden.
+**Begründung:** LightRAG bietet Dual-Level Retrieval (Low-Level für Details, High-Level für Konzepte) und inkrementelle Updates ohne komplettes Graph-Rebuilding. Allerdings erfordert die Graph-Extraktion LLM-Aufrufe während der Indexierung, was API-Kosten verursacht. Vor der Implementation muss ein Testkorpus definiert und Metriken für den Vergleich mit reinem Vektor-RAG festgelegt werden. Bestehende Wissensgraphen (Wikidata, Wikipedia) könnten als Seed-Quellen dienen, statt vom Nutzer manuelle Entitätspflege zu verlangen.
 
 ### Uncertainty Quantification: Forschungsziel, keine aktive Planung
 
@@ -177,6 +273,14 @@ Das Risiko: MCP ist ein junger Standard, und seine Durchsetzung hängt von Anthr
 **Entscheidung:** Keine Echtzeit-Kollaborationsfeatures. Stattdessen minimale, aber nützliche Export- und Austauschfunktionen.
 
 **Begründung:** Geisteswissenschaftliche Teams teilen Referenzen, Annotationen und kuratierte Sammlungen – sie brauchen keine Google-Docs-artige Echtzeitbearbeitung. Exportierbare Annotationssets und thematische Sammlungen als geteilte Bibliographien decken den realen Bedarf ab, ohne die Architektur zu verkomplizieren.
+
+### Chunking-Intelligenz: Small-to-Big und Parent-Child
+
+**Kontext (November 2025 – Februar 2026):** Die parallel über Gemini, Grok und ChatGPT durchgeführte Chunking-Intelligence-Analyse identifizierte hierarchisches Chunking als den größten einzelnen Qualitätshebel für RAG-Systeme. Die aktuelle Konfiguration (RecursiveCharacterTextSplitter mit 1000 Token / 200 Overlap) liefert solide Ergebnisse, verschenkt aber Potenzial bei langen argumentativen Passagen.
+
+**Entscheidung:** Small-to-Big Retrieval und Parent-Child-Hierarchien werden implementiert, Semantic-Hybrid-Chunking mit dynamischen Thresholds wird evaluiert.
+
+**Begründung:** Die Grundidee: Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, aber liefere dem LLM den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Die Chunking-Intelligence-Analyse ergab, dass selbst einfaches Recursive Hierarchical Chunking bereits 80% des Qualitätsgewinns gegenüber flachem Chunking bringt, während Semantic-Hybrid-Varianten mit Agglomerative Clustering weitere 20-30% liefern, aber signifikant mehr Implementierungsaufwand erfordern. Die Reihenfolge ist daher: erst Parent-Child über bestehende Recursive-Struktur, dann optional Semantic-Hybrid als Upgrade-Pfad.
 
 ---
 
@@ -220,11 +324,13 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 
 **Privacy ist kein Feature, sondern die Architektur.** Daten bleiben lokal, Datensouveränität ist das Fundament, nicht ein Checkbox-Item.
 
-**Modulare Erweiterbarkeit vor Featurefülle.** Das Registry-Pattern, die Plugin-fähige Architektur und die definierten Erweiterungszonen (`.archilles`-Ordner) sind wichtiger als jedes einzelne Feature.
+**Modulare Erweiterbarkeit vor Featurefülle.** Die auf ein Registry-Pattern hin angelegte Architektur, die Plugin-fähigen Schnittstellen und die definierten Erweiterungszonen (`.archilles`-Ordner) sind wichtiger als jedes einzelne Feature.
 
 **Akademischer Anspruch als Differenzierung.** Exakte Zitationen, transparentes Retrieval und disziplinspezifische Optimierungen unterscheiden ARCHILLES von generischen RAG-Lösungen – nicht die Menge der Features.
 
 **Aufschub als bewusste Strategie.** MCPB, LightRAG, Uncertainty Quantification und institutionelle Features werden nicht vergessen, sondern zum richtigen Zeitpunkt implementiert. Ein funktionierendes MVP hat Vorrang vor einer vorzeitig aufgeblähten Architektur.
+
+**Weniger Code, mehr Architektur.** Wo eine architektonische Lösung (wie Section-Filtering auf DB-Ebene) bessere Ergebnisse liefert als eine code-intensive Heuristik, wird die Architektur gewählt – selbst wenn das einen größeren initialen Umbau bedeutet.
 
 ---
 
@@ -232,3 +338,5 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*
 - *Entscheidung über MCPB-Implementation (nach Beta-Feedback)*
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
+- *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
+- *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
