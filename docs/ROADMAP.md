@@ -22,7 +22,7 @@
 - Command-line interface
 - Export to Markdown
 
-## Next: v1.0 (Target: Q1 2025)
+## Next: v1.0 (Target: Q1 2026)
 
 **Focus**: Refinement & user experience
 
@@ -66,7 +66,7 @@
 - Windows installer
 - macOS .app bundle
 
-## Future: v1.1+ (Q2 2025 onwards)
+## Future: v1.1+ (Q2 2026 onwards)
 
 ### Graph RAG
 
