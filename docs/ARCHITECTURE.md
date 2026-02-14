@@ -1,173 +1,523 @@
-# Architecture Documentation
+# ARCHILLES – Architecture
 
-> **Status**: Documentation in progress
+**Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring)
 
-## System Overview
-
-Archilles is a local-first RAG (Retrieval-Augmented Generation) system designed specifically for Calibre libraries.
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ARCHILLES SYSTEM                      │
-├─────────────────────────────────────────────────────────┤
-│                                                          │
-│  ┌──────────┐      ┌──────────┐      ┌──────────┐     │
-│  │ Calibre  │──────│ Extractor│──────│ ChromaDB │     │
-│  │   DB     │      │  Chain   │      │  Vector  │     │
-│  └──────────┘      └──────────┘      │   Store  │     │
-│                                       └──────────┘     │
-│                                             │           │
-│                    ┌────────────────────────┤           │
-│                    │                        │           │
-│              ┌──────────┐            ┌──────────┐      │
-│              │   BM25   │            │   BGE-M3 │      │
-│              │ Keyword  │            │ Semantic │      │
-│              │  Index   │            │ Embeddings│     │
-│              └──────────┘            └──────────┘      │
-│                    │                        │           │
-│                    └────────┬───────────────┘           │
-│                             │                           │
-│                      ┌──────────────┐                   │
-│                      │ Hybrid Search│                   │
-│                      │     (RRF)    │                   │
-│                      └──────────────┘                   │
-│                             │                           │
-│                      ┌──────────────┐                   │
-│                      │ MCP Server   │                   │
-│                      └──────────────┘                   │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Core Components
-
-### 1. Metadata Extraction (`src/calibre_db.py`)
-
-**Purpose**: Read-only access to Calibre's metadata.db
-
-**Extracts**:
-- Book metadata (title, author, publisher, ISBN)
-- Tags and collections
-- Comments (with HTML cleaning)
-- Custom fields (automatic discovery)
-
-**Key Feature**: Generic custom field support – works with ANY user-defined fields without configuration.
-
-### 2. Text Extraction (`src/extractors/`)
-
-**Supported Formats**: 30+ formats including:
-- PDF (via PyMuPDF)
-- EPUB (via ebooklib)
-- MOBI, DJVU, DOCX, etc. (via Calibre converter fallback)
-
-**Features**:
-- Language detection (75+ languages via Lingua)
-- Page number extraction
-- Chapter detection
-- Chunking with overlap (configurable)
-
-### 3. Vector Database (ChromaDB)
-
-**Storage**: Local persistent storage
-
-**Contains**:
-- Document chunks (text)
-- BGE-M3 embeddings (1024 dimensions)
-- Metadata (book info, page numbers, tags, custom fields)
-
-### 4. Search Layer
-
-#### Semantic Search (BGE-M3)
-- Multilingual embeddings
-- Concept-based matching
-- Cosine similarity
-
-#### Keyword Search (BM25)
-- Exact term matching
-- Enriched with metadata (tags, titles, authors, custom fields)
-- Academic-friendly tokenization
-
-#### Hybrid Search (RRF)
-- Reciprocal Rank Fusion
-- Combines semantic + keyword scores
-- Smart boosting:
-  - Calibre comments: 1.2x
-  - Tag matches: 1.15x
-
-### 5. MCP Server
-
-> **Coming soon**: Detailed MCP architecture documentation
-
-## Data Flow
-
-### Indexing
-
-```
-Book File
-  ↓
-Format Detection
-  ↓
-Text Extraction (chunks)
-  ↓
-Language Detection
-  ↓
-Calibre Metadata Lookup
-  ↓
-BGE-M3 Embedding Generation
-  ↓
-ChromaDB Storage
-  ↓
-BM25 Index Update
-```
-
-### Searching
-
-```
-User Query
-  ↓
-┌─────────┴──────────┐
-│                    │
-Semantic Search   Keyword Search
-(ChromaDB)        (BM25)
-│                    │
-└─────────┬──────────┘
-          ↓
-  Reciprocal Rank Fusion
-          ↓
-     Boosting Applied
-          ↓
-  Filtered & Ranked Results
-```
-
-## Technology Stack
-
-- **Python 3.8+**
-- **ChromaDB**: Vector database
-- **sentence-transformers**: BGE-M3 embeddings
-- **rank-bm25**: Keyword search
-- **PyMuPDF**: PDF extraction
-- **ebooklib**: EPUB handling
-- **lingua-language-detector**: Language detection
-- **SQLite**: Calibre database interface
-
-## Performance Considerations
-
-> **Coming soon**: Benchmarks and optimization guidelines
-
-## Security & Privacy
-
-- **No network calls** (except initial model download)
-- **No telemetry**
-- **Local-only processing**
-- **Read-only Calibre access**
-
-## Future Architecture
-
-Planned enhancements:
-- Graph RAG layer (entity relationships)
-- Incremental indexing
-- Multi-library support
-- Plugin system for custom extractors
+This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
 ---
 
-For implementation details, see the source code in `/src`.
+## System Overview
+
+ARCHILLES is a local-first RAG (Retrieval-Augmented Generation) system that transforms Calibre e-book libraries into semantically searchable knowledge bases. It runs entirely on the user's machine—no cloud services, no telemetry, no data leaving the device unless the user explicitly connects to an external LLM.
+
+The system is built around three principles: privacy by architecture (not by policy), academic-grade citations with verifiable source references, and modular extensibility through formal registries that anticipate future components without over-engineering the present.
+
+```
+                        ┌──────────────────────────┐
+                        │      Calibre Library      │
+                        │  (metadata.db + books +   │
+                        │   annotations + comments) │
+                        └────────────┬─────────────┘
+                                     │
+                          ┌──────────▼──────────┐
+                          │    Calibre DB Layer  │
+                          │   (read-only access) │
+                          └──────────┬──────────┘
+                                     │
+                     ┌───────────────▼───────────────┐
+                     │         Extractors Layer       │
+                     │  ┌────────┐ ┌────────┐ ┌────┐ │
+                     │  │  PDF   │ │  EPUB  │ │OCR │ │
+                     │  │PyMuPDF │ │ebooklib│ │(T) │ │
+                     │  └───┬────┘ └───┬────┘ └─┬──┘ │
+                     └──────┼──────────┼────────┼────┘
+                            │          │        │
+                     ┌──────▼──────────▼────────▼────┐
+                     │       Modular Pipeline         │
+                     │  Parser → Chunker → Embedder   │
+                     │  (Registry-based component     │
+                     │   selection per profile)        │
+                     └───────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │         Storage Layer            │
+                    │  ┌──────────────────────────┐   │
+                    │  │  LanceDB (archilles_books) │  │
+                    │  │  (full-text book chunks)   │  │
+                    │  └──────────────────────────┘   │
+                    │  ┌──────────────────────────┐   │
+                    │  │  ChromaDB (annotations)    │  │
+                    │  │  (highlights, notes)       │  │
+                    │  │  → planned: LanceDB        │  │
+                    │  └──────────────────────────┘   │
+                    └────────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │         Retriever Layer          │
+                    │                                  │
+                    │  Stage 1: LanceDB Hybrid Search  │
+                    │    (dense vectors + BM25 FTS)    │
+                    │              │                    │
+                    │  Stage 2: Cross-Encoder Reranker │
+                    │    (optional, BAAI bge-reranker)  │
+                    └────────────────┬────────────────┘
+                                     │
+                    ┌────────────────▼────────────────┐
+                    │        ArchillesService          │
+                    │  (central business logic facade) │
+                    └──┬─────────────┬─────────────┬──┘
+                       │             │             │
+                  ┌────▼────┐  ┌────▼────┐  ┌────▼────┐
+                  │   MCP   │  │ Web UI  │  │   CLI   │
+                  │ Server  │  │Streamlit│  │rag_demo │
+                  └─────────┘  └─────────┘  └─────────┘
+```
+
+---
+
+## Core Components
+
+### 1. Calibre Database Layer (`src/calibre_db.py`)
+
+Read-only interface to Calibre's `metadata.db`. This component never modifies the database—a firm architectural boundary documented in DECISIONS.md (ADR-005).
+
+**What it extracts:**
+
+Per book: title, author(s), publisher, publication date, ISBN/identifiers, language, series information, file formats and paths, cover path, and reading progress. Tags and custom columns are extracted generically—the system discovers and indexes any user-defined custom fields without manual configuration.
+
+The comments field deserves special attention. In many researchers' Calibre libraries, comments contain far more than publisher blurbs: NotebookLM deep-dive analyses, personal reading notes, collected reviews, and structured research summaries. ARCHILLES treats this as a first-class data source, routing it to the separate annotations database (see Storage Architecture below).
+
+**Custom field discovery** works by querying Calibre's `custom_columns` table at startup and mapping each field to the appropriate search metadata. This means a user who has created fields like `research_project`, `source_reliability`, or `century` gets those fields indexed automatically without touching any configuration.
+
+### 2. Extractors Layer (`src/extractors/`)
+
+Each extractor is responsible for turning a book file into structured text with metadata. The extractors are modular and independently deployable, coordinated by a `UniversalExtractor` that delegates to the appropriate format-specific extractor. A `FormatDetector` identifies file types, and a `LanguageDetector` (Lingua, 75+ languages) assigns language codes to extracted text.
+
+**Available extractors:**
+
+| Extractor | File | Formats | Notes |
+|-----------|------|---------|-------|
+| `PDFExtractor` | `pdf_extractor.py` | PDF | Primary: PyMuPDF (fitz); fallback: pdfplumber; OCR path |
+| `EPUBExtractor` | `epub_extractor.py` | EPUB 2/3 | ebooklib with custom TOC parser |
+| `TXTExtractor` | `txt_extractor.py` | TXT | Plain text with encoding detection |
+| `HTMLExtractor` | `html_extractor.py` | HTML | HTML documents |
+| `OCRExtractor` | `ocr_extractor.py` | Scanned PDFs | Tesseract baseline; VLM upgrade path prepared |
+| `CalibreConverter` | `calibre_converter.py` | MOBI, DJVU, etc. | Delegates to Calibre's `ebook-convert` |
+
+Common infrastructure: `base.py` (base class), `models.py` (dataclasses), `exceptions.py` (error types).
+
+#### PDF Extractor (`pdf_extractor.py`)
+
+Primary extractor for PDF files, built on PyMuPDF (fitz). PDF is the preferred format because it provides reliable page number mapping—essential for citable references.
+
+Key capabilities: CropBox filtering eliminates headers, footers, and running page numbers before the text reaches the chunker, which significantly improves embedding quality. Page label extraction maps printed page numbers (which may differ from internal PDF page indices) to chunks, enabling citations like "p. 47" that match what a reader sees in the physical or digital book. Footer detection with footnote disambiguation ensures that footnotes are preserved while page-bottom noise is removed.
+
+The multi-tier fallback system activates pdfplumber when PyMuPDF's extraction quality falls below threshold (measured by character density and encoding coherence). For scanned PDFs without embedded text, the system falls through to the OCR path.
+
+#### EPUB Extractor (`epub_extractor.py`)
+
+Built on ebooklib with custom TOC parsing. EPUBs provide richer structural information than PDFs: the table of contents maps directly to chapter boundaries, and the internal HTML structure enables section-level metadata extraction.
+
+Section metadata classification (introduced January 2026) automatically labels content as Front Matter (foreword, introduction, table of contents), Main Content (the actual text), or Back Matter (bibliography, index, appendices). This classification powers the `section_filter` parameter in search—by default set to `'main'`, which excludes bibliography and index noise from results. This architectural approach replaced a 118-line text heuristic that produced both false negatives and false positives.
+
+#### OCR Extractor (`ocr_extractor.py`)
+
+Tesseract serves as the baseline for modern printed text. The interface is designed for drop-in replacement with VLM-based OCR systems (LightOnOCR-2, GOT-OCR 2.0) as they mature. The `ArchillesService` exposes `ocr_backend` configuration (auto/tesseract/lighton/olmocr) to select backends.
+
+### 3. Modular Pipeline (`src/archilles/`)
+
+The `src/archilles/` package implements the modular processing pipeline with formal Registry patterns. This is the core infrastructure for document processing, separate from the extractors which handle raw text extraction.
+
+#### Architecture: Parser → Chunker → Embedder
+
+The pipeline is orchestrated by `ModularPipeline` (`pipeline.py`), which chains three stages:
+
+1. **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry`.
+
+2. **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. `FixedSizeChunker` and `SemanticChunker` (sentence-boundary-aware) are registered in `ChunkerRegistry`. Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
+
+3. **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Registered in `EmbedderRegistry`.
+
+Each registry provides `register()`, `get()`, `list_*()`, and `get_default()`. Factory functions like `create_chunker_for_profile()` select and configure components based on hardware profiles.
+
+#### Hardware Profiles (`profiles.py`)
+
+Three pre-defined profiles adapt indexing to available hardware. All use BGE-M3 for consistent embedding quality—only batch size and speed differ:
+
+| Profile | GPU VRAM | Batch Size | Speed | Use Case |
+|---------|----------|------------|-------|----------|
+| `minimal` | 4–6 GB | 8 | ~2 min/book | Quadro T1000, GTX 1650 |
+| `balanced` | 8–12 GB | 32 | ~30s/book | RTX 3060, RTX 2070 |
+| `maximal` | 16+ GB | 64 | ~15s/book | RTX 3090, RTX 4080 |
+
+Hardware detection (`hardware.py`) auto-selects the appropriate profile when none is specified.
+
+#### Indexing Checkpoints (`indexer/checkpoint.py`)
+
+`IndexingCheckpoint` provides checkpoint-based resume for long-running batch operations, tracking per-book progress (chunks processed, errors, timing) with JSON persistence.
+
+### 4. Storage Layer (`src/storage/`)
+
+#### LanceDB Store (`lancedb_store.py`)
+
+The central storage backend for book content. `LanceDBStore` provides:
+
+- **Hybrid search**: Native vector + BM25 full-text search with RRF (Reciprocal Rank Fusion) reranking via `lancedb.rerankers.RRFReranker`
+- **Vector search**: Pure semantic similarity
+- **Full-text search**: BM25 keyword matching for exact terms
+- **SQL-like filtering**: By book_id, calibre_id, section_type, chunk_type, language
+- **Schema migration**: Automatic addition of new columns to existing tables (page_label, window_text, parent_id, etc.)
+- **IVF-PQ indexing**: For corpora exceeding 256 chunks, with configurable partitions
+
+**Database schema** (LanceDB table "chunks"):
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | str | Unique chunk identifier |
+| `text` | str | Chunk text content |
+| `vector` | float[1024] | BGE-M3 embedding |
+| `book_id`, `book_title`, `author`, `publisher`, `year` | — | Book metadata |
+| `calibre_id` | int | Calibre internal book ID |
+| `tags`, `language` | str | Calibre tags, detected language |
+| `chunk_index`, `chunk_type` | — | Position and type (content/parent/child/calibre_comment) |
+| `page_number`, `page_label` | — | Physical page + printed label ("xiv", "62") |
+| `chapter`, `section`, `section_title`, `section_type` | — | Structural metadata |
+| `char_start`, `char_end`, `window_text` | — | Context expansion (Small-to-Big) |
+| `parent_id` | str | Parent chunk reference (hierarchical chunking) |
+| `source_file`, `format`, `indexed_at` | — | Technical metadata |
+
+The `add_processed_documents()` method bridges `ProcessedDocument` objects from the modular pipeline directly into LanceDB storage.
+
+#### Annotations Storage (ChromaDB — migration planned)
+
+Annotations (highlights, notes from Calibre's E-book Viewer) are currently stored and searched via ChromaDB in `src/calibre_mcp/annotations_indexer.py`, using the `all-mpnet-base-v2` embedding model (384 dimensions). This is a legacy architecture from before the LanceDB migration.
+
+**Planned migration**: Move annotation storage to a second LanceDB table (`archilles_meta`) using BGE-M3 embeddings, consistent with the book content pipeline. This eliminates the ChromaDB dependency, unifies the embedding model, and enables hybrid search over annotations. The two-database architecture described in DECISIONS.md (ADR-008) will then be fully realized.
+
+**Current annotation infrastructure:**
+- `src/calibre_mcp/annotations.py` — File-based annotation extraction, hash-to-book mapping, text/keyword search
+- `src/calibre_mcp/annotations_indexer.py` — ChromaDB-based semantic search with embedding generation
+- `src/calibre_mcp/calibre_analyzer.py` — Calibre metadata analysis and statistics
+
+### 5. Retriever Layer (`src/retriever/`)
+
+#### Search Logic
+
+The hybrid search logic is implemented across two layers:
+
+- **`LanceDBStore.hybrid_search()`** handles the database-level search: vector similarity + BM25 full-text search with RRF fusion, section/chunk/language filtering
+- **`archillesRAG.query()`** in `scripts/rag_demo.py` orchestrates the high-level search: mode selection (semantic/keyword/hybrid), exact phrase matching, tag filtering, result diversification (max_per_book), minimum similarity thresholds, and context expansion
+
+There is no separate `hybrid.py` file—the retrieval logic is distributed between the storage layer and the RAG class, unified through the service layer.
+
+**Section filtering** applies at query time: `section_filter='main'` (the default) restricts results to main body content, excluding front matter, back matter, bibliography, and index sections. Users can override this for specific searches where those sections are relevant.
+
+**Smart boosting** applies configurable multipliers: Calibre comments matches receive a 1.2x boost, tag matches 1.15x. These weights are tunable in configuration.
+
+#### Cross-Encoder Reranking (`reranker.py`, optional)
+
+When enabled, the top candidates from Stage 1 are re-scored by a cross-encoder model (BAAI/bge-reranker-v2-m3, configurable) that evaluates each query-document pair jointly rather than independently. This produces significantly more accurate relevance ranking at the cost of additional inference time. The reranker runs on CPU by default (since GPU is typically occupied by BGE-M3 embeddings) and falls back gracefully if system memory is insufficient. First use downloads the model (~560 MB).
+
+Configuration via `.archilles/config.json`:
+
+```json
+{
+  "enable_reranking": true,
+  "reranker_device": "cpu"
+}
+```
+
+### 6. Service Layer (`src/service/archilles_service.py`)
+
+Introduced in February 2026 to solve a growing consistency problem: the Web UI, MCP server, and CLI all imported the RAG class directly, meaning every change to search logic had to be replicated in three places.
+
+`ArchillesService` is the central facade that all consumers use. It exposes:
+
+- `search()` — with mode, filters, reranking, diversification, similarity thresholds
+- `search_with_citations()` — generates XML-structured prompts with citation metadata
+- `get_index_status()` — database statistics (chunks, books, formats, languages)
+- `get_book_list()` — all indexed books with chunk counts
+- `get_chunk_by_id()` — single chunk retrieval (for parent-child lookup)
+
+The service handles lazy initialization (RAG loading deferred to first use), stdout redirection (critical for MCP JSON-RPC safety), and cross-encoder reranking orchestration. When reranking is enabled, the service fetches more raw results from the RAG layer, applies the cross-encoder, then diversifies.
+
+### 7. Client Interfaces
+
+#### MCP Server (`src/calibre_mcp/server.py`, entry point: `mcp_server.py`)
+
+The primary interface. Implements the Model Context Protocol for integration with Claude Desktop and other MCP-compatible AI assistants. Communication uses JSON-RPC 2.0 over stdio, with the entry point `mcp_server.py` in the project root.
+
+**Exposed tools** (12 tools via `create_mcp_tools()`):
+
+| Tool | Description |
+|------|-------------|
+| `search_books_with_citations` | Hybrid search over book content with citation-ready output |
+| `search_annotations` | Semantic + text search across highlights and notes |
+| `list_annotated_books` | Lists all books with indexed annotations |
+| `get_book_annotations` | Get annotations for a specific book by path |
+| `get_book_details` | Full metadata for a specific Calibre book ID |
+| `get_index_stats` | Indexing statistics (chunks, books, sizes) |
+| `export_bibliography` | Bibliography in BibTeX, RIS, EndNote, JSON, CSV |
+| `detect_duplicates` | Find duplicate books by title+author, ISBN, or exact title |
+| `list_tags` | All Calibre tags with book counts |
+| `index_annotations` | Trigger annotation indexing (with optional force reindex) |
+| `compute_annotation_hash` | Compute Calibre annotation hash for a book path |
+| `get_doublette_tag_instruction` | Helper for Calibre duplicate tagging workflow |
+
+Each search result includes sufficient metadata for academic citation: author, title, year, and either page number/page label (PDF) or chapter/section (EPUB).
+
+#### Web UI (`scripts/web_ui.py`)
+
+Streamlit-based interface for users without Claude Desktop. Provides search with tag filtering, language selection, mode selection (semantic/keyword/hybrid), context expansion, and Markdown export. Positioned as a companion tool, not the primary interface.
+
+#### CLI (`scripts/rag_demo.py`, `scripts/batch_index.py`)
+
+`rag_demo.py` provides the `archillesRAG` class (the core RAG implementation) and a CLI for single-book indexing, search queries, and result export.
+
+`batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), and checkpoint-based resume for long-running operations.
+
+---
+
+## Data Flow
+
+### Indexing Flow
+
+```
+Book file (PDF/EPUB/TXT/HTML/...)
+        │
+        ▼
+FormatDetector → select appropriate Extractor
+        │
+        ▼
+Text extraction with metadata enrichment
+  • PDF: CropBox filtering, page label extraction, footnote detection
+  • EPUB: TOC parsing, section classification (front/main/back matter)
+  • Other: CalibreConverter → intermediate format → extraction
+        │
+        ▼
+Calibre metadata lookup (read-only from metadata.db)
+  • title, author, year, publisher, tags, custom fields
+  • language auto-detection via Lingua on extracted text
+        │
+        ▼
+Chunking (SemanticChunker or FixedSizeChunker via Registry)
+  • Configurable size (default: 512 tokens in profiles, 1000 in legacy)
+  • window_text for context expansion
+  • section_type assigned per chunk
+  • page_label mapped per chunk (PDF)
+        │
+        ▼
+BGE-M3 embedding generation (1024 dimensions)
+  • GPU-accelerated when available (profile-based batch size)
+  • Automatic CPU fallback
+        │
+        ▼
+LanceDB storage
+  • archilles_books table: full-text chunks + embeddings + metadata
+  • IVF-PQ + FTS indexes created after bulk ingestion
+```
+
+### Search Flow
+
+```
+User query (natural language)
+        │
+        ▼
+ArchillesService.search()
+        │
+        ├──── LanceDBStore ──────────────────────┐
+        │                                         │
+        ▼                                         ▼
+   BGE-M3 encode query              BM25 keyword expansion
+        │                                         │
+        └──────────┬──────────────────────────────┘
+                   │
+                   ▼
+        LanceDB native hybrid search
+        (dense + sparse vector fusion via RRFReranker)
+                   │
+                   ▼
+        Section filtering (default: main only)
+        Tag filtering, language filtering
+                   │
+                   ▼
+        [Optional] Cross-encoder reranking
+        (BAAI/bge-reranker-v2-m3, top candidates)
+                   │
+                   ▼
+        Per-book diversification (max_per_book)
+        Minimum similarity threshold
+                   │
+                   ▼
+        Context expansion (Small-to-Big)
+        Retrieve window_text for surrounding passages
+                   │
+                   ▼
+        Formatted results with citations
+        → MCP: structured JSON with source metadata
+        → CLI: formatted text or Markdown export
+        → Web UI: interactive result display
+```
+
+---
+
+## Technology Stack
+
+| Component | Implementation | Notes |
+|-----------|---------------|-------|
+| Vector database | LanceDB | Native hybrid search, IVF-PQ, Arrow-based |
+| Annotations DB | ChromaDB | Migration to LanceDB planned |
+| Embeddings (books) | BGE-M3 (BAAI) | 1024 dimensions, multilingual, GPU |
+| Embeddings (annotations) | all-mpnet-base-v2 | 384 dim; will migrate to BGE-M3 |
+| Reranker | bge-reranker-v2-m3 | Optional cross-encoder, CPU default |
+| PDF extraction | PyMuPDF (fitz) | Primary; pdfplumber as fallback |
+| EPUB extraction | ebooklib | With custom TOC parser |
+| OCR | Tesseract | Baseline; VLM upgrade path prepared |
+| Language detection | Lingua | 75+ languages, ISO 639-1 codes |
+| MCP protocol | JSON-RPC 2.0 / stdio | Claude Desktop integration |
+| Web UI | Streamlit | Companion interface |
+| Configuration | JSON | `.archilles/config.json` in library |
+| Runtime | Python 3.11+ | Cross-platform: macOS, Windows/WSL, Linux |
+
+---
+
+## Directory Structure
+
+```
+archilles/
+├── mcp_server.py                  # MCP entry point (Claude Desktop calls this)
+├── requirements.txt
+├── README.md
+│
+├── src/
+│   ├── archilles/                 # Modular pipeline infrastructure
+│   │   ├── pipeline.py            # ModularPipeline orchestration
+│   │   ├── profiles.py            # Hardware profiles (minimal/balanced/maximal)
+│   │   ├── hardware.py            # Hardware detection (GPU, VRAM)
+│   │   ├── parsers/
+│   │   │   ├── base.py            # DocumentParser ABC, ParsedDocument
+│   │   │   ├── pymupdf_parser.py  # PDF parser
+│   │   │   ├── epub_parser.py     # EPUB parser
+│   │   │   └── registry.py        # ParserRegistry
+│   │   ├── chunkers/
+│   │   │   ├── base.py            # TextChunker ABC, TextChunk, ChunkerConfig
+│   │   │   ├── fixed.py           # FixedSizeChunker
+│   │   │   ├── semantic.py        # SemanticChunker (sentence-aware)
+│   │   │   └── registry.py        # ChunkerRegistry
+│   │   ├── embedders/
+│   │   │   ├── base.py            # TextEmbedder ABC, EmbeddingResult
+│   │   │   ├── bge.py             # BGEEmbedder (bge-small/base/m3)
+│   │   │   └── registry.py        # EmbedderRegistry
+│   │   └── indexer/
+│   │       └── checkpoint.py      # IndexingCheckpoint (resume support)
+│   │
+│   ├── extractors/                # Text extraction from book files
+│   │   ├── base.py                # BaseExtractor interface
+│   │   ├── universal_extractor.py # Delegates to format-specific extractors
+│   │   ├── pdf_extractor.py       # PyMuPDF with CropBox, page labels
+│   │   ├── epub_extractor.py      # ebooklib with TOC + section metadata
+│   │   ├── txt_extractor.py       # Plain text extraction
+│   │   ├── html_extractor.py      # HTML document extraction
+│   │   ├── ocr_extractor.py       # Tesseract OCR integration
+│   │   ├── calibre_converter.py   # Calibre ebook-convert bridge
+│   │   ├── format_detector.py     # File format identification
+│   │   ├── language_detector.py   # Lingua-based language detection
+│   │   ├── models.py              # ChunkMetadata, ExtractionMetadata, ExtractedText
+│   │   └── exceptions.py          # ExtractionError hierarchy
+│   │
+│   ├── storage/
+│   │   └── lancedb_store.py       # LanceDBStore (vector DB backend)
+│   │
+│   ├── retriever/
+│   │   └── reranker.py            # CrossEncoderReranker (optional)
+│   │
+│   ├── service/
+│   │   └── archilles_service.py   # ArchillesService (central facade)
+│   │
+│   ├── calibre_mcp/               # MCP server + annotation infrastructure
+│   │   ├── server.py              # CalibreMCPServer + create_mcp_tools()
+│   │   ├── annotations.py         # Annotation extraction, hash mapping, search
+│   │   ├── annotations_indexer.py # ChromaDB semantic search (migration planned)
+│   │   └── calibre_analyzer.py    # Library statistics and analysis
+│   │
+│   └── calibre_db.py              # Read-only Calibre metadata.db access
+│
+├── scripts/
+│   ├── rag_demo.py                # archillesRAG class + CLI (search, index, export)
+│   ├── web_ui.py                  # Streamlit Web UI
+│   └── batch_index.py             # Batch indexing with tag/author filters
+│
+├── .archilles/                    # Per-library data (inside Calibre folder)
+│   ├── config.json                # User configuration
+│   ├── rag_db/                    # LanceDB database (book chunks)
+│   └── chroma_db/                 # ChromaDB database (annotations, legacy)
+│
+└── docs/
+    ├── DECISIONS.md               # Strategic + technical decision log
+    ├── ARCHITECTURE.md            # This document
+    └── ...
+```
+
+---
+
+## Configuration Reference
+
+All configuration is stored in `.archilles/config.json` inside the user's Calibre library directory. This keeps configuration portable with the library.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `enable_reranking` | `false` | Enable cross-encoder reranking (Stage 2) |
+| `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
+| `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
+| `chroma_persist_dir` | `.archilles/chroma_db` | Path for ChromaDB annotations |
+| `calibre_library_path` | (env var) | Override for CALIBRE_LIBRARY_PATH |
+| `embedding_model` | `"all-mpnet-base-v2"` | Annotation embedding model (ChromaDB) |
+
+Environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CALIBRE_LIBRARY_PATH` | (required) | Path to Calibre library root |
+| `RAG_DB_PATH` | `$CALIBRE_LIBRARY_PATH/.archilles/rag_db` | Override LanceDB location |
+| `CUDA_VISIBLE_DEVICES` | — | GPU selection for embeddings/reranking |
+
+---
+
+## Security and Privacy
+
+ARCHILLES makes no network calls during normal operation. The only exceptions are the initial download of the BGE-M3 model (~2.2 GB) and optionally the cross-encoder model (~560 MB), both fetched from Hugging Face on first run.
+
+There is no telemetry, no analytics, no usage tracking. ChromaDB telemetry is explicitly disabled (`anonymized_telemetry=False`). The system reads Calibre's metadata.db but never writes to it. All ARCHILLES data lives in the `.archilles` directory within the user's Calibre library folder, making it easy to back up, move, or delete.
+
+When connected to an external LLM via MCP, the search results (text chunks with metadata) are sent to the LLM—this is the intended use case. But the user controls which LLM they connect to, and the connection is initiated by the user's MCP client (e.g., Claude Desktop), not by ARCHILLES.
+
+---
+
+## Extension Points
+
+The architecture is designed with explicit extension zones for future development:
+
+**Extractors:** New format support (specialized XML schemas, proprietary formats) can be added by implementing the `BaseExtractor` interface and registering with `UniversalExtractor`. `CalibreConverter` already bridges to 30+ formats via Calibre's ebook-convert.
+
+**Pipeline components:** The Registry pattern in `src/archilles/` allows runtime registration of new parsers, chunkers, and embedders. New components implement the ABC (`DocumentParser`, `TextChunker`, `TextEmbedder`) and register via the corresponding registry.
+
+**Embedding models:** BGE-M3 is the current default. The `BGEEmbedder` already supports multiple BGE variants; evaluation of multilingual-e5 and jina-embeddings-v3 is planned for Q2 2026.
+
+**Chunking strategies:** `SemanticChunker` (sentence-boundary-aware) and `FixedSizeChunker` are available. Parent-child hierarchies (index small chunks for precision, deliver large context for comprehension) are supported via `parent_id` and `chunk_type` fields.
+
+**Search backends:** The LanceDB abstraction supports plugging in alternative search strategies. Graph RAG via LightRAG is planned for evaluation in Q2 2026.
+
+**The `.archilles` folder** serves as the defined extension zone per library. Configuration, databases, cached models, and any future plugin data live here—cleanly separated from Calibre's own data.
+
+---
+
+## Platform Compatibility
+
+ARCHILLES targets cross-platform operation across macOS, Windows (native and WSL), and Linux. Key implementation rules:
+
+All file paths use `pathlib.Path`, never string concatenation. All file I/O defaults to UTF-8 encoding. Dependencies are chosen for platform-agnostic availability—no OS-specific libraries in the core stack.
+
+---
+
+*For the rationale behind these architectural decisions, see [DECISIONS.md](DECISIONS.md).*
+*For user-facing documentation, see the [README](../README.md).*
