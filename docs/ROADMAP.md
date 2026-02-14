@@ -1,169 +1,157 @@
-# Product Roadmap
+# ARCHILLES — Product Roadmap
 
-> Last updated: December 2024
+> **Your Intelligent Research Archive**
+> *Mein Korpus, meine Wahl.*
 
-## Current Release: v0.9 Gamma
-
-**Status**: Feature-complete for core functionality
-
-✅ **Completed**:
-- Full-text indexing (30+ formats via Calibre converter)
-- Semantic search (BGE-M3 embeddings)
-- Keyword search (BM25)
-- Hybrid search with Reciprocal Rank Fusion
-- Calibre metadata integration
-  - Tags
-  - Comments (with HTML cleaning)
-  - Custom fields (automatic discovery)
-- Multi-language support (75+ languages)
-- Language filtering
-- Tag filtering
-- MCP server foundation
-- Command-line interface
-- Export to Markdown
-
-## Next: v1.0 (Target: Q1 2026)
-
-**Focus**: Refinement & user experience
-
-### Planned Features
-
-🚧 **Annotations Support**
-- Extract PDF highlights and notes
-- Index EPUB bookmarks and annotations
-- Searchable user annotations
-
-🚧 **Incremental Indexing**
-- Update only changed books
-- Background indexing
-- Index queue management
-
-🚧 **Improved Embeddings**
-- Model selection (BGE-M3, alternatives)
-- Domain-specific embedding options
-- Fine-tuning support
-
-🚧 **Web UI**
-- Browser-based interface for non-technical users
-- Visual search results
-- Library browser
-
-🚧 **Collection Search**
-- Search across multiple books simultaneously
-- Book-level vs chunk-level results
-- Cross-book citations
-
-🚧 **Enhanced MCP Integration**
-- More MCP tools (list_books, get_metadata, etc.)
-- Better Claude Desktop integration
-- Configuration wizard
-
-### Quality Improvements
-
-- Comprehensive documentation
-- Unit test suite
-- Performance benchmarks
-- Windows installer
-- macOS .app bundle
-
-## Future: v1.1+ (Q2 2026 onwards)
-
-### Graph RAG
-
-**Goal**: Understand relationships between entities, ideas, and texts
-
-**Features**:
-- Entity extraction (people, places, concepts)
-- Relationship mapping
-- Timeline visualization
-- Network graphs
-- Prosopography support
-
-**Research**: Evaluate knowledge graph backends (Neo4j, others)
-
-### Special Editions
-
-Discipline-specific extensions (commercial add-ons):
-
-**📜 Historical Edition**
-- Timeline views
-- Prosopography (person networks)
-- Chronology-aware search
-- Primary source handling
-- Medieval dating systems
-
-**📖 Literary Edition**
-- Motif tracking
-- Intertextual connections
-- Narrative structure analysis
-- Character networks
-- Stylometric tools
-
-**⚖️ Legal Edition**
-- Citation networks
-- Precedent tracking
-- Jurisdiction-aware search
-- Case law handling
-- Legal terminology
-
-**🎵 Musical Edition**
-- Score analysis integration
-- Theoretical terminology
-- Composer networks
-- Period-aware search
-- Manuscript handling
-
-See [EDITIONS.md](EDITIONS.md) for detailed edition plans.
-
-### Multi-Library Support
-
-- Manage multiple Calibre libraries
-- Cross-library search
-- Library-specific configurations
-- Library import/export
-
-### Advanced Features
-
-🔮 **On the horizon**:
-- Wikidata integration (entity disambiguation)
-- Zotero backend (parallel to Calibre)
-- Citation export (BibTeX, Zotero)
-- Annotation sync with external tools
-- Plugin system for custom extractors
-- Mobile companion app (search only)
-- Collaborative features (shared annotations)
-
-### Platform Expansion
-
-- Desktop applications (Electron-based)
-- Better Windows integration
-- macOS native features
-- Linux package repositories (apt, yum, AUR)
-
-## Long-Term Vision
-
-**Archilles as Research Infrastructure**:
-- The semantic layer for personal research libraries
-- Integration with citation managers (Zotero, Mendeley)
-- Part of academic workflow (discover → annotate → cite → write)
-- Community-driven entity databases
-- Academic institution deployments
-
-## Community Input
-
-The roadmap is shaped by user needs. **Your feedback matters!**
-
-- **Feature requests**: [GitHub Issues](https://github.com/archilles/archilles/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/archilles/archilles/discussions)
-- **Beta testing**: Join our testing program
-
-## Release Philosophy
-
-- **Core remains free and open source** (MIT License)
-- **Special Editions** fund ongoing development
-- **No breaking changes** without migration path
-- **Privacy-first** always
+**Last updated:** February 2026
 
 ---
 
-**Want to influence the roadmap?** Share your research needs in [Discussions](https://github.com/archilles/archilles/discussions).
+## Vision
+
+ARCHILLES verwandelt persönliche Calibre-Bibliotheken in semantisch durchsuchbare Wissensbasen. Das übergeordnete Ziel: Tausende Titel — mitsamt den Verlagstexten, Kritiken, KI-Analysen (z.B. aus NotebookLM) sowie eigenen Exzerpten und Gedanken — per KI erschließen, durchsuchen und in Beziehung setzen.
+
+Dabei gibt es zwei komplementäre Zugangswege. Der eine führt über Calibres eigene KI-Schnittstellen (seit v8.16: GitHubAI, GoogleAI, OllamaAI, OpenRouter), die ein Gesprächsinterface für einzelne Bücher bieten. Der andere — und das ist ARCHILLES' Domäne — ermöglicht die semantische Suche über die gesamte Bibliothek mit verifizierbaren Quellenangaben, verbunden mit der analytischen Kraft eines Frontier-Modells wie Claude über das Model Context Protocol (MCP).
+
+Die beiden Ansätze sind komplementär, nicht konkurrierend: Calibres AI-Features nutzen externes Wissen, um über einzelne Bücher zu sprechen. ARCHILLES durchsucht die tatsächlichen Inhalte der gesamten Bibliothek und liefert zitierfähige Quellenangaben.
+
+---
+
+## Positionierung: ARCHILLES und Calibre AI
+
+Calibre 8.16 führte im Dezember 2025 eigene AI-Features ein. Systematische Tests zeigten die unterschiedlichen Stärken und Grenzen: Lokale Modelle (z.B. Gemma3 über Ollama) halluzinierten bei unvollständigen Dokumenten, während Cloud-Modelle (z.B. Gemini) sich auf Web-Grounding stützten und bei unveröffentlichten Manuskripten versagten. ARCHILLES löst ein fundamental anderes Problem — nicht einzelne Bücher besprechen, sondern die gesamte Bibliothek semantisch erschließen.
+
+Für Nutzer empfiehlt sich die Kombination: Calibres Ollama-Integration für schnelle Einzelbuch-Gespräche, ARCHILLES über MCP für bibliotheksweite Recherche mit Frontier-Modellen.
+
+---
+
+## Aktueller Stand: v0.9 (Gamma)
+
+**Status:** Kernfunktionalität produktionsreif, MCP-Server operativ.
+
+Die Basis steht. ARCHILLES indiziert über 78.000 Chunks aus ca. 87 Büchern in einer Testbibliothek und skaliert über LanceDB-Architektur auf Millionen von Chunks. Die Zwei-Datenbanken-Architektur trennt sauber zwischen Buchinhalten (`archilles_books`) und Nutzerdaten (`archilles_meta` — Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte).
+
+**Abgeschlossen:**
+
+Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche mit BGE-M3-Embeddings (multilingual, 75+ Sprachen). Keyword-Suche über BM25. Hybride Suche mit Reciprocal Rank Fusion. Calibre-Metadaten-Integration einschließlich Tags, Comments (mit HTML-Cleaning) und automatischer Custom-Field-Erkennung. Annotationsextraktion aus dem Calibre E-book Viewer (Highlights, Notes, Bookmarks). LanceDB als Vektordatenbank mit nativer Hybrid-Search und IVF-PQ-Indexing. Service-Layer-Architektur (`ArchillesService`) als zentrale Geschäftslogik-Fassade für MCP-Server, Web UI und CLI. Cross-Encoder Reranking (optional, BAAI/bge-reranker-v2-m3). MCP-Server mit 12 Tools für Claude Desktop und andere MCP-kompatible Clients. Bibliographie-Export in BibTeX, RIS, EndNote, JSON und CSV. Duplikaterkennung nach Titel+Autor, ISBN oder exaktem Titel. Streamlit-basiertes Web UI als Companion-Interface. Batch-Indexierung mit Tag-/Autoren-Filtern, Checkpoint-Resume und Hardware-Profilen. Vereinheitlichung der Annotationsdatenbank — mit der Migration von ChromaDB zu LanceDB mit BGE-M3-Embeddings ist die Zwei-Datenbanken-Architektur als zwei LanceDB-Tabellen vollständig realisiert.
+
+---
+
+## v1.0 — Stabilisierung und Dokumentation (Ziel: Q1 2026)
+
+**Fokus:** Das Fundament für den Community-Release legen.
+
+Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
+
+Konkret geplant: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Re-Indexierung bestehender Bücher mit vollständigen Section-Metadaten und Page-Labels, wo diese fehlen — läuft, mit zurzeit 171 Titeln. Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks. Windows-Installer und macOS-Bundle als mittelfristiges Ziel.
+
+---
+
+## v1.1 — Chunking-Intelligenz und Retrieval-Qualität (Q2 2026)
+
+**Fokus:** Die Qualität der Suchergebnisse substantiell verbessern.
+
+Die Chunking-Intelligence-Analyse (durchgeführt über Gemini, Grok und ChatGPT, November 2025) identifizierte hierarchisches Chunking als den größten einzelnen Qualitätshebel. Die aktuelle Konfiguration (RecursiveCharacterTextSplitter mit 1000 Token / 200 Overlap) liefert solide Ergebnisse, verschenkt aber Potenzial bei langen argumentativen Passagen — genau dem Texttyp, der für geisteswissenschaftliche Arbeit zentral ist.
+
+**Small-to-Big Retrieval und Parent-Child-Hierarchien:** Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, liefere dem LLM aber den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Bereits einfaches Recursive Hierarchical Chunking bringt ca. 80% des Qualitätsgewinns gegenüber flachem Chunking.
+
+**Semantic-Hybrid-Chunking (Upgrade-Pfad):** Kombiniert semantisches Splitting via Embedding-Ähnlichkeit mit Agglomerative Clustering und dynamischen Thresholds, die sich automatisch pro Buch anpassen. Weitere 20–30% Qualitätsgewinn, aber signifikant mehr Implementierungsaufwand — daher als optionaler Upgrade-Pfad nach der Parent-Child-Grundlage.
+
+**Embedding-Evaluation:** Vergleich von BGE-M3 mit multilingual-e5 und jina-embeddings-v3. Domain-spezifische Optimierungsmöglichkeiten evaluieren.
+
+---
+
+## v1.2 — OCR und erweiterte Formate (Q3 2026)
+
+**Fokus:** Gescannte PDFs und historische Dokumente erschließen.
+
+Viele geisteswissenschaftliche Bibliotheken enthalten gescannte PDFs — ältere Fachbücher, Dissertationen, historische Quelleneditionen. Ohne OCR bleiben diese unsichtbar.
+
+**Vision-Language-OCR (primär):** Moderne Modelle wie LightOnOCR-2 oder olmOCR-2 verstehen Layout, Lesereihenfolge und Dokumentstruktur — nicht nur einzelne Zeichen. Ideal für akademische Dokumente mit Fußnoten, Tabellen und mehrspaltigem Layout. Vollständig lokal betreibbar.
+
+**Tesseract (Fallback):** Für einfache Dokumente als schneller und ressourcenschonender Fallback. Die OCR-Schnittstelle ist als austauschbares Modul im Extractors Layer angelegt; der `ArchillesService` exponiert bereits die `ocr_backend`-Konfiguration (auto/tesseract/lighton/olmocr).
+
+Die strategische Entscheidung: Die OCR-Landschaft entwickelt sich rasant. Die Schnittstelle wird sauber definiert, das beste verfügbare Modell zum Implementierungszeitpunkt eingesetzt.
+
+---
+
+## v1.5 — Community-Release und Open Source (Q3–Q4 2026)
+
+**Fokus:** ARCHILLES in die Hände der Zielgruppe bringen.
+
+Open-Source-Veröffentlichung unter MIT-Lizenz. Domains sind gesichert (archilles.org, archilles.net, archilles.de). Die Zielgruppe sind technisch versierte Einzelforscher aus den Geisteswissenschaften — Geschichte, Literatur, Philosophie —, die große, kuratierte Calibre-Bibliotheken pflegen und Wert auf Privacy und lokale Datenkontrolle legen.
+
+Community-Aufbau über akademische Kanäle: r/DigitalHumanities, r/AskHistorians, GitHub Discussions, DH-Discord-Server und spezialisierte Foren. Der ARCHILLATOR (Browser-basierter akademischer Textübersetzer) dient als Lead Magnet.
+
+Freemium-Modell: Kostenlose Basisversion ohne Bibliotheksbeschränkung. Premium-Features und disziplinspezifische Erweiterungen (Special Editions) finanzieren die Weiterentwicklung.
+
+---
+
+## v2.0 — Graph RAG und Wissensvernetzung (2027)
+
+**Fokus:** Vom Suchen zum Verstehen — Beziehungen zwischen Entitäten, Ideen und Texten sichtbar machen.
+
+Hier wird ARCHILLES mehr als ein Suchwerkzeug. Graph RAG ermöglicht die Extraktion von Entitäten (Personen, Orte, Konzepte, Ereignisse), das Mapping ihrer Beziehungen und die Visualisierung als Netzwerkgraphen und Zeitleisten. Für Historiker bedeutet das: Prosopographie über die gesamte Bibliothek — wer kannte wen, wer zitierte wen, welche Ideen wanderten wohin.
+
+**Evaluierung:** LightRAG als potenzielles Backend, Wikidata und Wikipedia als Seed-Quellen für Entity-Disambiguierung. Evaluation geplant für Q2 2026, Implementation frühestens 2027.
+
+---
+
+## Special Editions (ab v2.0)
+
+Disziplinspezifische Erweiterungen als kostenpflichtige Add-ons, die die Weiterentwicklung finanzieren:
+
+**Historical Edition:** Zeitleisten-Visualisierung, Prosopographie (Personennetzwerke), chronologiebewusste Suche, Primärquellenverarbeitung, mittelalterliche Datierungssysteme.
+
+**Literary Edition:** Motivverfolgung, intertextuelle Verbindungen, Erzählstrukturanalyse, Figurennetzwerke, stilometrische Werkzeuge.
+
+**Legal Edition:** Zitationsnetzwerke, Präzedenzfall-Tracking, jurisdiktionsbewusste Suche, Fallrecht-Verarbeitung.
+
+**Musical Edition:** Partituranalyse-Integration, musiktheoretische Terminologie, Komponistennetzwerke, epochenbewusste Suche.
+
+Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
+
+---
+
+## Langfristiger Horizont
+
+**Multi-Library-Support:** Verwaltung mehrerer Calibre-Bibliotheken, bibliotheksübergreifende Suche, bibliotheksspezifische Konfigurationen.
+
+**Zotero-Backend:** Parallele Unterstützung neben Calibre für Nutzer, die ihre Referenzverwaltung dort pflegen.
+
+**Wikidata-Integration:** Entity-Disambiguierung für präzisere Wissensgraphen.
+
+**Erweiterte Plattformunterstützung:** Desktop-Anwendungen, Linux-Paketmanager (apt, yum, AUR), Mobile Companion App (Suche).
+
+**Institutionelle Features (optional):** Scoped Knowledge Bases, institutionelle Lizenzen — nur wenn die Nachfrage es rechtfertigt. Der Fokus bleibt auf dem individuellen Forscher.
+
+---
+
+## Leitprinzipien
+
+**Privacy ist die Architektur, nicht ein Feature.** Keine Netzwerk-Calls im normalen Betrieb, keine Telemetrie, alle Daten lokal. Wenn der Nutzer sich mit einem Cloud-LLM verbindet, ist das seine bewusste Entscheidung — „Mein Korpus, meine Wahl."
+
+**Weniger Code, mehr Architektur.** Wo eine architektonische Lösung bessere Ergebnisse liefert als eine code-intensive Heuristik, wird die Architektur gewählt.
+
+**Modulare Erweiterbarkeit vor Featurefülle.** Registry-Pattern, Plugin-fähige Schnittstellen und definierte Erweiterungszonen sind wichtiger als jedes einzelne Feature.
+
+**Akademischer Anspruch als Differenzierung.** Exakte Zitationen mit Seitenangaben, transparentes Retrieval, disziplinspezifische Optimierungen — das unterscheidet ARCHILLES von generischen RAG-Lösungen.
+
+**Aufschub als bewusste Strategie.** Graph RAG, OCR, institutionelle Features werden zum richtigen Zeitpunkt implementiert. Ein funktionierendes Produkt hat Vorrang vor einer vorzeitig aufgeblähten Architektur.
+
+**Core bleibt frei und Open Source** (MIT-Lizenz). Special Editions finanzieren die Weiterentwicklung. Keine Breaking Changes ohne Migrationspfad.
+
+---
+
+## Community
+
+Die Roadmap wird durch Nutzerbedürfnisse geformt.
+
+Feature Requests und Bug Reports: [GitHub Issues](https://github.com/archilles/archilles/issues)
+Diskussionen: [GitHub Discussions](https://github.com/archilles/archilles/discussions)
+Beta-Testing: Programm in Vorbereitung für v1.0.
+
+---
+
+*Für die technischen Architekturentscheidungen hinter dieser Roadmap siehe [DECISIONS.md](DECISIONS.md).*
+*Für die Systemarchitektur siehe [ARCHITECTURE.md](ARCHITECTURE.md).*
