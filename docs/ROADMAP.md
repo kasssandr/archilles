@@ -29,11 +29,11 @@ Für Nutzer empfiehlt sich die Kombination: Calibres Ollama-Integration für sch
 
 **Status:** Kernfunktionalität produktionsreif, MCP-Server operativ.
 
-Die Basis steht. ARCHILLES indiziert über 78.000 Chunks aus ca. 87 Büchern in einer Testbibliothek und skaliert über LanceDB-Architektur auf Millionen von Chunks. Die Zwei-Datenbanken-Architektur trennt sauber zwischen Buchinhalten (`archilles_books`) und Nutzerdaten (`archilles_meta` — Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte).
+Die Basis steht. Der Core-Bestand (Leit-Literatur) mit 267 Titeln ist nahezu vollständig indexiert, und das System skaliert über die LanceDB-Architektur auf Millionen von Chunks. Die Zwei-Datenbanken-Architektur trennt sauber zwischen Buchinhalten (`archilles_books`) und Nutzerdaten (`archilles_meta` — Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte).
 
 **Abgeschlossen:**
 
-Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche mit BGE-M3-Embeddings (multilingual, 75+ Sprachen). Keyword-Suche über BM25. Hybride Suche mit Reciprocal Rank Fusion. Calibre-Metadaten-Integration einschließlich Tags, Comments (mit HTML-Cleaning) und automatischer Custom-Field-Erkennung. Annotationsextraktion aus dem Calibre E-book Viewer (Highlights, Notes, Bookmarks). LanceDB als Vektordatenbank mit nativer Hybrid-Search und IVF-PQ-Indexing. Service-Layer-Architektur (`ArchillesService`) als zentrale Geschäftslogik-Fassade für MCP-Server, Web UI und CLI. Cross-Encoder Reranking (optional, BAAI/bge-reranker-v2-m3). MCP-Server mit 12 Tools für Claude Desktop und andere MCP-kompatible Clients. Bibliographie-Export in BibTeX, RIS, EndNote, JSON und CSV. Duplikaterkennung nach Titel+Autor, ISBN oder exaktem Titel. Streamlit-basiertes Web UI als Companion-Interface. Batch-Indexierung mit Tag-/Autoren-Filtern, Checkpoint-Resume und Hardware-Profilen. Vereinheitlichung der Annotationsdatenbank — mit der Migration von ChromaDB zu LanceDB mit BGE-M3-Embeddings ist die Zwei-Datenbanken-Architektur als zwei LanceDB-Tabellen vollständig realisiert.
+Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche mit BGE-M3-Embeddings (multilingual, 75+ Sprachen). Keyword-Suche über BM25. Hybride Suche mit Reciprocal Rank Fusion. Calibre-Metadaten-Integration einschließlich Tags, Comments (mit HTML-Cleaning) und automatischer Custom-Field-Erkennung. Annotationsextraktion aus dem Calibre E-book Viewer (Highlights, Notes, Bookmarks). LanceDB als Vektordatenbank mit nativer Hybrid-Search und IVF-PQ-Indexing. Zwei-Datenbanken-Architektur vollständig realisiert: Mit der Migration von ChromaDB zu LanceDB (Februar 2026) nutzen sowohl Buchinhalte als auch Annotationen einheitlich BGE-M3-Embeddings in zwei getrennten LanceDB-Tabellen — eine einzige Vektor-DB-Engine, keine externe Dependency mehr. Service-Layer-Architektur (`ArchillesService`) als zentrale Geschäftslogik-Fassade für MCP-Server, Web UI und CLI. Cross-Encoder Reranking (optional, BAAI/bge-reranker-v2-m3). MCP-Server mit 12 Tools für Claude Desktop und andere MCP-kompatible Clients. Bibliographie-Export in BibTeX, RIS, EndNote, JSON und CSV. Duplikaterkennung nach Titel+Autor, ISBN oder exaktem Titel. Streamlit-basiertes Web UI als Companion-Interface. Batch-Indexierung mit Tag-/Autoren-Filtern, Checkpoint-Resume und Hardware-Profilen.
 
 ---
 
@@ -43,7 +43,9 @@ Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche m
 
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
 
-Konkret geplant: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Re-Indexierung bestehender Bücher mit vollständigen Section-Metadaten und Page-Labels, wo diese fehlen — läuft, mit zurzeit 171 Titeln. Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks. Windows-Installer und macOS-Bundle als mittelfristiges Ziel.
+Konkret geplant: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks. Windows-Installer und macOS-Bundle als mittelfristiges Ziel.
+
+**In Arbeit:** Die Re-Indexierung des Core-Bestands (Leit-Literatur) mit vollständigen Section-Metadaten und Page-Labels steht bei 259 von 267 Titeln kurz vor dem Abschluss. Danach folgt eine umfassende Testrunde — sowohl für die Suchqualität über den erweiterten Index als auch für die MCP-Integration mit Claude Desktop.
 
 ---
 
