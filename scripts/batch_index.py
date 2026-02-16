@@ -371,34 +371,39 @@ def get_indexed_book_ids(
         # Get all metadata from LanceDB store
         all_chunks = rag.store.get_all(limit=100000)  # Get all chunks
 
-        # Extract unique book_ids
+        # Extract unique book_ids — only count books with actual CONTENT chunks
+        # (not just phase1_metadata or calibre_comment)
+        content_types = {'content', 'child', 'parent'}
         book_ids = set()
         for chunk in all_chunks:
-            if chunk and 'book_id' in chunk:
-                book_id = chunk['book_id']
+            if not chunk or 'book_id' not in chunk:
+                continue
 
-                # Check if this book should be re-indexed due to missing labels
-                if reindex_missing_labels and book_id in books_missing_labels:
-                    continue  # Don't add to set (will be re-indexed)
+            # Only count content chunks as "fully indexed"
+            chunk_type = chunk.get('chunk_type', 'content')
+            if chunk_type not in content_types:
+                continue
 
-                # Check if this book should be re-indexed based on date
-                if reindex_before:
-                    indexed_at_str = chunk.get('indexed_at')
-                    if indexed_at_str:
-                        try:
-                            indexed_at = datetime.fromisoformat(indexed_at_str)
-                            # If book was indexed before the cutoff date, don't add to set
-                            # (so it will be re-indexed)
-                            if indexed_at < reindex_before:
-                                continue
-                        except (ValueError, AttributeError):
-                            # If we can't parse the date, treat as old (re-index)
+            book_id = chunk['book_id']
+
+            # Check if this book should be re-indexed due to missing labels
+            if reindex_missing_labels and book_id in books_missing_labels:
+                continue  # Don't add to set (will be re-indexed)
+
+            # Check if this book should be re-indexed based on date
+            if reindex_before:
+                indexed_at_str = chunk.get('indexed_at')
+                if indexed_at_str:
+                    try:
+                        indexed_at = datetime.fromisoformat(indexed_at_str)
+                        if indexed_at < reindex_before:
                             continue
-                    else:
-                        # No timestamp = old book (re-index)
+                    except (ValueError, AttributeError):
                         continue
+                else:
+                    continue
 
-                book_ids.add(book_id)
+            book_ids.add(book_id)
 
         return book_ids
     except Exception as e:

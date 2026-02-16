@@ -675,23 +675,28 @@ class archillesRAG:
         print(f"INDEXING BOOK: {book_path.name}")
         print(f"  Book ID: {book_id}\n")
 
-        # Check for existing chunks and handle force reindex
-        existing = self.store.get_by_book_id(book_id, limit=1)
-        if existing:
+        # Check for existing CONTENT chunks (not just metadata)
+        # Books with only phase1_metadata chunks still need full content indexing
+        existing = self.store.get_by_book_id(book_id, limit=100)
+        content_chunks = [c for c in existing
+                          if c.get('chunk_type', 'content') in ('content', 'child', 'parent')]
+        if content_chunks:
             if force:
                 print(f"  Deleting existing chunks for {book_id}...", flush=True)
                 deleted = self.store.delete_by_book_id(book_id)
                 print(f"    Deleted {deleted} chunks")
             else:
-                # Count existing chunks
-                all_existing = self.store.get_by_book_id(book_id, limit=10000)
-                print(f"  Book already indexed ({len(all_existing)} chunks). Use --force to reindex.")
+                print(f"  Book already indexed ({len(content_chunks)} content chunks). Use --force to reindex.")
                 return {
                     'book_id': book_id,
                     'status': 'already_indexed',
-                    'chunks_indexed': len(all_existing),
-                    'existing_chunks': len(all_existing)
+                    'chunks_indexed': len(content_chunks),
+                    'existing_chunks': len(existing)
                 }
+        elif existing and not force:
+            # Has metadata-only chunks — delete them before full indexing
+            print(f"  Replacing {len(existing)} metadata-only chunks with full content...")
+            self.store.delete_by_book_id(book_id)
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
         # Works for PDF, EPUB, and other formats
