@@ -492,27 +492,31 @@ def batch_index(
         print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
         print(f"         Format: {format_type} | ID: {book_id}")
 
-        # Check if already indexed (skip or progress tracker)
-        # BUT: Don't skip if force, reindex_before, or reindex_missing_labels is set
+        # Skip logic:
+        # --force: never skip, always re-index everything
+        # --skip-existing: skip if book has chunks in LanceDB OR was tracked by session
+        # default (neither): let index_book() decide (it skips if chunks exist)
         force_reindex = force or reindex_before or reindex_missing_labels
-        if safe_indexer and safe_indexer.is_book_indexed(book_id, phase) and not force_reindex:
-            print(f"         ⏭️  SKIPPED (already indexed in {phase})")
-            stats['skipped'] += 1
-            if safe_indexer:
+        if not force_reindex and skip_existing:
+            # Fast skip via session tracker
+            if safe_indexer and safe_indexer.is_book_indexed(book_id, phase):
+                print(f"         ⏭️  SKIPPED (already indexed in {phase})")
+                stats['skipped'] += 1
                 safe_indexer.record_book(book_id, phase, 'skipped')
-            continue
-        elif skip_existing and book_id in existing_ids and not reindex_before:
-            print(f"         ⏭️  SKIPPED (already indexed)")
-            stats['skipped'] += 1
-            stats['books_processed'].append({
-                'id': book_id,
-                'title': book['title'],
-                'status': 'skipped',
-                'reason': 'already indexed'
-            })
-            if safe_indexer:
-                safe_indexer.record_book(book_id, phase, 'skipped')
-            continue
+                continue
+            # Fast skip via LanceDB check
+            if book_id in existing_ids:
+                print(f"         ⏭️  SKIPPED (already indexed)")
+                stats['skipped'] += 1
+                stats['books_processed'].append({
+                    'id': book_id,
+                    'title': book['title'],
+                    'status': 'skipped',
+                    'reason': 'already indexed'
+                })
+                if safe_indexer:
+                    safe_indexer.record_book(book_id, phase, 'skipped')
+                continue
 
         if dry_run:
             print(f"         🔍 Would index: {file_path}")
