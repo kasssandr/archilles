@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
 from src.storage import LanceDBStore
+from src.calibre_mcp.annotations import get_combined_annotations
 from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 import os
@@ -303,6 +304,21 @@ class archillesRAG:
             'publisher': book_metadata.get('publisher', ''),
         }
         return hashlib.md5(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _compute_annotation_hash(annotations: List[Dict[str, Any]]) -> str:
+        """
+        Compute a hash over all annotations for a book.
+        Used to detect annotation changes without re-indexing the full book text.
+        """
+        if not annotations:
+            return ''
+        # Sort by text content for deterministic hash
+        texts = sorted(
+            f"{a.get('highlighted_text', '')}|{a.get('notes', '')}|{a.get('type', '')}"
+            for a in annotations
+        )
+        return hashlib.md5('\n'.join(texts).encode('utf-8')).hexdigest()
 
     def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
         """Extract metadata from PDF files."""
@@ -710,14 +726,35 @@ class archillesRAG:
                 deleted = self.store.delete_by_book_id(book_id)
                 print(f"    Deleted {deleted} chunks")
             else:
-                # Check if metadata has changed (smart update without full re-index)
+                # Check if metadata or annotations have changed (smart update without full re-index)
                 book_metadata = self._extract_metadata(book_path)
-                current_hash = self._compute_metadata_hash(book_metadata)
-                stored_hash = content_chunks[0].get('metadata_hash', '')
+                current_meta_hash = self._compute_metadata_hash(book_metadata)
+                stored_meta_hash = content_chunks[0].get('metadata_hash', '')
 
-                if current_hash != stored_hash:
-                    # Metadata changed — update only metadata fields + comment chunk
-                    return self._update_metadata_only(book_id, book_metadata, current_hash, existing)
+                # Check annotation changes
+                try:
+                    annot_result = get_combined_annotations(
+                        book_path=str(book_path), include_pdf=True,
+                        exclude_toc_markers=True, min_length=20
+                    )
+                    current_annotations = annot_result.get('annotations', [])
+                    current_annot_hash = self._compute_annotation_hash(current_annotations)
+                except Exception:
+                    current_annotations = []
+                    current_annot_hash = ''
+                existing_annot_chunks = [c for c in existing if c.get('chunk_type') == 'annotation']
+                stored_annot_hash = existing_annot_chunks[0].get('annotation_hash', '') if existing_annot_chunks else ''
+
+                meta_changed = current_meta_hash != stored_meta_hash
+                annot_changed = current_annot_hash != stored_annot_hash
+
+                if meta_changed or annot_changed:
+                    return self._update_metadata_only(
+                        book_id, book_metadata, current_meta_hash, existing,
+                        annotations=current_annotations if annot_changed else None,
+                        annotation_hash=current_annot_hash if annot_changed else None,
+                        book_path=book_path,
+                    )
 
                 print(f"  Book already indexed ({len(content_chunks)} content chunks). Use --force to reindex.")
                 return {
@@ -928,6 +965,70 @@ class archillesRAG:
             chunks.append(comment_chunk)
             embeddings.append(comment_embedding.tolist())
 
+        # Add user annotations (highlights, notes from Calibre Viewer + PDF)
+        try:
+            annot_result = get_combined_annotations(
+                book_path=str(book_path),
+                include_pdf=True,
+                exclude_toc_markers=True,
+                min_length=20
+            )
+            annotations = annot_result.get('annotations', [])
+            if annotations:
+                annot_hash = self._compute_annotation_hash(annotations)
+                print(f"    Adding {len(annotations)} annotations as searchable chunks...")
+
+                for idx, annot in enumerate(annotations):
+                    highlighted = annot.get('highlighted_text', '').strip()
+                    notes = annot.get('notes', '').strip()
+
+                    # Build annotation text
+                    if highlighted and notes:
+                        annot_text = f"[ANNOTATION] {highlighted} | Note: {notes}"
+                    elif highlighted:
+                        annot_text = f"[ANNOTATION] {highlighted}"
+                    elif notes:
+                        annot_text = f"[ANNOTATION_NOTE] {notes}"
+                    else:
+                        continue
+
+                    # Generate embedding
+                    annot_embedding = self.embedding_model.encode(
+                        annot_text, show_progress_bar=False, convert_to_numpy=True
+                    )
+
+                    annot_chunk = {
+                        'id': f"{book_id}_annot_{idx}",
+                        'text': annot_text,
+                        'book_id': book_id,
+                        'book_title': book_metadata.get('title', book_path.stem) if book_metadata else book_path.stem,
+                        'chunk_index': -(idx + 10),  # Negative to distinguish from content
+                        'chunk_type': 'annotation',
+                        'annotation_type': annot.get('type', ''),
+                        'annotation_source': annot.get('source', ''),
+                        'annotation_hash': annot_hash,
+                        'page_number': annot.get('page', 0) or 0,
+                        'format': extracted.metadata.detected_format,
+                        'indexed_at': datetime.now().isoformat(),
+                        'metadata_hash': self._compute_metadata_hash(book_metadata) if book_metadata else '',
+                    }
+
+                    if book_metadata:
+                        if book_metadata.get('author'):
+                            annot_chunk['author'] = book_metadata['author']
+                        if book_metadata.get('calibre_id'):
+                            annot_chunk['calibre_id'] = book_metadata['calibre_id']
+                        if book_metadata.get('tags'):
+                            tags = book_metadata['tags']
+                            annot_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+
+                    chunks.append(annot_chunk)
+                    embeddings.append(annot_embedding.tolist())
+
+                print(f"    ✓ {len(annotations)} annotation chunks added")
+        except Exception as e:
+            print(f"    ⚠️  Annotation extraction failed (non-fatal): {e}")
+
         # Convert embeddings to numpy array
         embeddings_array = np.array(embeddings)
 
@@ -955,18 +1056,29 @@ class archillesRAG:
         }
 
     def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
-                               new_hash: str, existing_chunks: list) -> Dict[str, Any]:
+                               new_hash: str, existing_chunks: list,
+                               annotations: Optional[List[Dict[str, Any]]] = None,
+                               annotation_hash: Optional[str] = None,
+                               book_path: Optional[Path] = None) -> Dict[str, Any]:
         """
-        Smart metadata update: refresh only the calibre_comment chunk and metadata fields
-        in content chunks, WITHOUT re-extracting or re-embedding the book text.
+        Smart metadata/annotation update: refresh only changed parts
+        WITHOUT re-extracting or re-embedding the book text.
 
         This is ~50-100x faster than a full re-index (~1-2s vs ~90s).
         """
         start_time = time.time()
-        print(f"  📝 Metadata changed — updating without full re-index...")
+        meta_changed = new_hash != (existing_chunks[0].get('metadata_hash', '') if existing_chunks else '')
+        annot_changed = annotations is not None
 
+        if meta_changed and annot_changed:
+            print(f"  📝 Metadata + annotations changed — updating without full re-index...")
+        elif meta_changed:
+            print(f"  📝 Metadata changed — updating without full re-index...")
+        elif annot_changed:
+            print(f"  📝 Annotations changed — updating without full re-index...")
+
+        # 1. Update metadata fields in all content chunks (no embedding change)
         updated_fields = {}
-        # Build update dict for metadata fields that may have changed
         if book_metadata.get('author'):
             updated_fields['author'] = book_metadata['author']
         if book_metadata.get('title'):
@@ -978,60 +1090,125 @@ class archillesRAG:
             updated_fields['publisher'] = book_metadata['publisher']
         updated_fields['metadata_hash'] = new_hash
 
-        # 1. Update metadata fields in all content chunks (no embedding change)
         if updated_fields:
             num_updated = self.store.update_metadata_fields(book_id, updated_fields)
             print(f"    Updated metadata in {num_updated} chunks")
 
-        # 2. Replace the calibre_comment chunk (needs new embedding for changed comment text)
-        old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == 'calibre_comment']
-        if old_comment_chunks:
-            deleted = self.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
-            print(f"    Deleted {deleted} old comment chunk(s)")
-
+        # 2. Replace calibre_comment chunk if metadata changed
         comment_added = False
-        if book_metadata.get('comments'):
-            comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
-            comment_embedding = self.embedding_model.encode(
-                comment_text, show_progress_bar=False, convert_to_numpy=True
-            )
-            comment_chunk = {
-                'id': f"{book_id}_comment",
-                'text': comment_text,
-                'book_id': book_id,
-                'book_title': book_metadata.get('title', book_id),
-                'chunk_index': -1,
-                'chunk_type': 'calibre_comment',
-                'format': existing_chunks[0].get('format', ''),
-                'indexed_at': datetime.now().isoformat(),
-                'metadata_hash': new_hash,
-            }
-            if book_metadata.get('author'):
-                comment_chunk['author'] = book_metadata['author']
-            if book_metadata.get('publisher'):
-                comment_chunk['publisher'] = book_metadata['publisher']
-            if book_metadata.get('calibre_id'):
-                comment_chunk['calibre_id'] = book_metadata['calibre_id']
-            if book_metadata.get('tags'):
-                tags = book_metadata['tags']
-                comment_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+        if meta_changed:
+            old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == 'calibre_comment']
+            if old_comment_chunks:
+                deleted = self.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
+                print(f"    Deleted {deleted} old comment chunk(s)")
 
-            embeddings_array = np.array([comment_embedding.tolist()])
-            self.store.add_chunks([comment_chunk], embeddings_array)
-            comment_added = True
-            print(f"    Added new comment chunk")
+            if book_metadata.get('comments'):
+                comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
+                comment_embedding = self.embedding_model.encode(
+                    comment_text, show_progress_bar=False, convert_to_numpy=True
+                )
+                comment_chunk = {
+                    'id': f"{book_id}_comment",
+                    'text': comment_text,
+                    'book_id': book_id,
+                    'book_title': book_metadata.get('title', book_id),
+                    'chunk_index': -1,
+                    'chunk_type': 'calibre_comment',
+                    'format': existing_chunks[0].get('format', ''),
+                    'indexed_at': datetime.now().isoformat(),
+                    'metadata_hash': new_hash,
+                }
+                if book_metadata.get('author'):
+                    comment_chunk['author'] = book_metadata['author']
+                if book_metadata.get('publisher'):
+                    comment_chunk['publisher'] = book_metadata['publisher']
+                if book_metadata.get('calibre_id'):
+                    comment_chunk['calibre_id'] = book_metadata['calibre_id']
+                if book_metadata.get('tags'):
+                    tags = book_metadata['tags']
+                    comment_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+
+                embeddings_array = np.array([comment_embedding.tolist()])
+                self.store.add_chunks([comment_chunk], embeddings_array)
+                comment_added = True
+                print(f"    Added new comment chunk")
+
+        # 3. Replace annotation chunks if annotations changed
+        annot_updated = False
+        if annot_changed and annotations is not None:
+            # Delete old annotation chunks
+            old_annot_count = len([c for c in existing_chunks if c.get('chunk_type') == 'annotation'])
+            if old_annot_count:
+                deleted = self.store.delete_by_book_id_and_type(book_id, 'annotation')
+                print(f"    Deleted {deleted} old annotation chunk(s)")
+
+            # Add new annotation chunks
+            if annotations:
+                annot_chunks = []
+                annot_embeddings = []
+                for idx, annot in enumerate(annotations):
+                    highlighted = annot.get('highlighted_text', '').strip()
+                    notes = annot.get('notes', '').strip()
+
+                    if highlighted and notes:
+                        annot_text = f"[ANNOTATION] {highlighted} | Note: {notes}"
+                    elif highlighted:
+                        annot_text = f"[ANNOTATION] {highlighted}"
+                    elif notes:
+                        annot_text = f"[ANNOTATION_NOTE] {notes}"
+                    else:
+                        continue
+
+                    annot_embedding = self.embedding_model.encode(
+                        annot_text, show_progress_bar=False, convert_to_numpy=True
+                    )
+
+                    annot_chunk = {
+                        'id': f"{book_id}_annot_{idx}",
+                        'text': annot_text,
+                        'book_id': book_id,
+                        'book_title': book_metadata.get('title', book_id),
+                        'chunk_index': -(idx + 10),
+                        'chunk_type': 'annotation',
+                        'annotation_type': annot.get('type', ''),
+                        'annotation_source': annot.get('source', ''),
+                        'annotation_hash': annotation_hash or '',
+                        'page_number': annot.get('page', 0) or 0,
+                        'format': existing_chunks[0].get('format', ''),
+                        'indexed_at': datetime.now().isoformat(),
+                        'metadata_hash': new_hash,
+                    }
+                    if book_metadata.get('author'):
+                        annot_chunk['author'] = book_metadata['author']
+                    if book_metadata.get('calibre_id'):
+                        annot_chunk['calibre_id'] = book_metadata['calibre_id']
+                    if book_metadata.get('tags'):
+                        tags = book_metadata['tags']
+                        annot_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+
+                    annot_chunks.append(annot_chunk)
+                    annot_embeddings.append(annot_embedding.tolist())
+
+                if annot_chunks:
+                    embeddings_array = np.array(annot_embeddings)
+                    self.store.add_chunks(annot_chunks, embeddings_array)
+                    print(f"    Added {len(annot_chunks)} new annotation chunks")
+                    annot_updated = True
+            else:
+                print(f"    No annotations found (removed all)")
 
         elapsed = time.time() - start_time
         content_count = len([c for c in existing_chunks
                            if c.get('chunk_type', 'content') in ('content', 'child', 'parent')])
-        print(f"  ✅ Metadata updated in {elapsed:.1f}s (content chunks untouched: {content_count})\n")
+        print(f"  ✅ Updated in {elapsed:.1f}s (content chunks untouched: {content_count})\n")
 
         return {
             'book_id': book_id,
             'status': 'metadata_updated',
             'chunks_indexed': content_count,
-            'metadata_updated': True,
+            'metadata_updated': meta_changed,
             'comment_updated': comment_added,
+            'annotations_updated': annot_updated,
             'total_time': elapsed,
         }
 

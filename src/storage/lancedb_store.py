@@ -62,6 +62,11 @@ class LanceDBStore:
         # Parent-Child hierarchy
         "parent_id": str,     # Empty for parents, references parent chunk ID for children
 
+        # Annotation metadata
+        "annotation_type": str,    # "highlight", "note", "bookmark" (for chunk_type='annotation')
+        "annotation_source": str,  # "calibre_viewer" or "pdf"
+        "annotation_hash": str,    # Hash of all annotations for change detection
+
         # Technical metadata
         "source_file": str,
         "format": str,
@@ -232,6 +237,11 @@ class LanceDBStore:
                 # Printed page label (for citations)
                 "page_label": chunk.get("page_label") or "",
 
+                # Annotation metadata
+                "annotation_type": chunk.get("annotation_type") or "",
+                "annotation_source": chunk.get("annotation_source") or "",
+                "annotation_hash": chunk.get("annotation_hash") or "",
+
                 # Technical metadata
                 "source_file": chunk.get("source_file") or "",
                 "format": chunk.get("format") or "",
@@ -244,12 +254,20 @@ class LanceDBStore:
         if self.table is None:
             self._create_table_with_data(records)
         else:
-            # Schema migration: add metadata_hash column if not yet present
-            if 'metadata_hash' not in set(self.table.schema.names):
-                try:
-                    self.table.add_columns({'metadata_hash': "''"})
-                except Exception:
-                    pass  # Column may already exist from concurrent access
+            # Schema migration: add new columns if not yet present
+            existing_cols = set(self.table.schema.names)
+            new_columns = {
+                'metadata_hash': "''",
+                'annotation_type': "''",
+                'annotation_source': "''",
+                'annotation_hash': "''",
+            }
+            for col_name, default_val in new_columns.items():
+                if col_name not in existing_cols:
+                    try:
+                        self.table.add_columns({col_name: default_val})
+                    except Exception:
+                        pass  # Column may already exist from concurrent access
             self.table.add(records)
 
         return len(records)
