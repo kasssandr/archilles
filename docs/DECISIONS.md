@@ -1,8 +1,8 @@
 # ARCHILLES – Entscheidungsarchiv
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
-**Erstfassung:** 13. Februar 2026  
-**Letzte Überarbeitung:** 14. Februar 2026 (Coding-Review: technische Korrekturen, fehlende ADRs, Präzisierungen)  
+**Erstfassung:** 13. Februar 2026
+**Letzte Überarbeitung:** 18. Februar 2026 (Neue ADRs: Smart Metadata Update, Annotation-Integration, Backup-Strategie; ADR-008 aktualisiert)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -121,17 +121,29 @@ Das Architekturprinzip dabei: "Wir bauen ein Chassis, in das wir später bessere
 
 **Implementierungsstand:** `ocr_extractor.py` existiert in `src/extractors/` mit `OCRExtractor`- und `TesseractExtractor`-Klassen. Die Dataclass in `models.py` ist mit einem `output_format`-Feld vorbereitet, das verschiedene OCR-Backend-Ausgabeformate unterstützen kann. Der `ArchillesService` exponiert `ocr_backend`-Konfiguration (auto/tesseract/lighton/olmocr) zur Backend-Auswahl.
 
-### ADR-008: Zwei-Datenbanken-Architektur (November 2025)
+### ADR-008: Zwei-Datenbanken-Architektur → Konsolidierung in LanceDB (November 2025, aktualisiert Februar 2026)
 
-**Kontext:** ARCHILLES verarbeitet zwei fundamental verschiedene Texttypen: den Buchinhalt selbst und alles, was *über* ein Buch geschrieben wurde – Verlagstexte, Kritiken, NotebookLM-Analysen und persönliche Exzerpte im Calibre-Kommentarfeld.
+**Kontext:** ARCHILLES verarbeitet zwei fundamental verschiedene Texttypen: den Buchinhalt selbst und alles, was *über* ein Buch geschrieben wurde – Verlagstexte, Kritiken, NotebookLM-Analysen und persönliche Exzerpte im Calibre-Kommentarfeld. Hinzu kommen Annotationen: Highlights und Notizen, die der Nutzer direkt in seinen Büchern hinterlässt (Calibre-Viewer für EPUBs, Adobe Reader für PDFs).
 
-**Entscheidung:** Getrennte Datenbanken: `archilles_books` für Volltext-Chunks aus den Buchdateien, `archilles_meta` für Calibre-Kommentare und Annotationen.
+**Ursprüngliche Entscheidung (November 2025):** Getrennte Datenbanken: `archilles_books` für Volltext-Chunks aus den Buchdateien, `archilles_meta` für Calibre-Kommentare und Annotationen.
 
-**Begründung:** Für Geisteswissenschaftler ist die Unterscheidung zwischen "was steht im Buch" und "was habe ich oder andere darüber geschrieben" fundamental. Eine monolithische Datenbank hätte diese Grenze verwischt. Die Trennung ermöglicht gezielte Suchmodi: nur in Quellentexten suchen, nur in eigenen Notizen suchen, oder beides mit Gewichtung. Zudem erlaubt sie unterschiedliche Update-Zyklen – Buchinhalte ändern sich nie, Kommentare und Annotationen wachsen laufend.
+**Begründung:** Für Geisteswissenschaftler ist die Unterscheidung zwischen "was steht im Buch" und "was habe ich oder andere darüber geschrieben" fundamental. Eine monolithische Datenbank hätte diese Grenze verwischt. Die Trennung ermöglicht gezielte Suchmodi: nur in Quellentexten suchen, nur in eigenen Notizen suchen, oder beides mit Gewichtung.
 
 **Konsequenzen:** Der MCP-Server exponiert beide Suchräume als separate Tools (`search_books_with_citations` für Buchinhalte, `search_annotations` für Nutzerdaten).
 
-**Implementierungsstand (Transparenzhinweis):** Die Trennung ist konzeptionell umgesetzt, aber technisch noch hybrid: Buch-Chunks liegen in LanceDB (`archilles_books`-Tabelle in `src/storage/lancedb_store.py`), während Annotationen (Highlights, Notes) über ChromaDB (`src/calibre_mcp/annotations_indexer.py`) mit einem eigenen Embedding-Modell (`all-mpnet-base-v2`, 384 Dim.) gespeichert werden. Die geplante Migration vereinheitlicht beides in LanceDB mit BGE-M3-Embeddings, eliminiert die ChromaDB-Dependency und realisiert die Zwei-Datenbanken-Architektur vollständig als zwei LanceDB-Tabellen.
+**Aktualisierung (Februar 2026): Annotationen in LanceDB integriert.**
+
+Die ursprünglich als Zwischenlösung in ChromaDB (`annotations_indexer.py`, `all-mpnet-base-v2`, 384 Dim.) gespeicherten Annotationen wurden in die LanceDB-`chunks`-Tabelle migriert. Annotationen werden jetzt als `chunk_type='annotation'` gemeinsam mit Buchtext-Chunks gespeichert und mit denselben BGE-M3-Embeddings (1024 Dim.) indiziert.
+
+Die semantische Unterscheidung zwischen Buchinhalt und Nutzernotizen bleibt über das `chunk_type`-Feld erhalten: `'content'` für Buchtext, `'calibre_comment'` für Calibre-Metadaten, `'annotation'` für Highlights und Notizen. Die Suchfilterung auf DB-Ebene ist damit weiterhin möglich, und die gezielte Suche in nur einem Datentyp funktioniert über einfache WHERE-Clauses.
+
+Vorteile der Konsolidierung:
+- **Ein Embedding-Modell statt zwei:** BGE-M3 für alles eliminiert die semantische Inkompatibilität zwischen `all-mpnet-base-v2` (384 Dim.) und BGE-M3 (1024 Dim.), die Cross-Suchen zwischen Buchtext und Annotationen erschwerte.
+- **Annotationen profitieren von Hybrid-Search:** LanceDBs native Fusion aus Vektor- und Keyword-Matching (ADR-006) steht jetzt auch für Annotationen zur Verfügung.
+- **Eine Dependency weniger:** ChromaDB ist für die Annotation-Suche nicht mehr erforderlich. Der bestehende ChromaDB-Index (`annotations_indexer.py`) bleibt als Fallback erhalten, wird aber nicht mehr aktiv gefüllt.
+- **Einheitliche Änderungserkennung:** Annotationen werden über denselben Hash-Mechanismus wie Metadaten auf Änderungen geprüft (siehe ADR-011).
+
+Die konzeptionelle Zwei-Datenbanken-Architektur ist damit technisch als Filterung innerhalb einer einzigen LanceDB-Tabelle realisiert – einfacher, performanter und wartungsärmer als zwei physisch getrennte Datenbanken.
 
 ### ADR-009: Service-Layer-Architektur (Februar 2026)
 
@@ -174,7 +186,7 @@ src/
 ├── calibre_mcp/
 │   ├── server.py                  # CalibreMCPServer (12 MCP-Tools)
 │   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping
-│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Migration geplant)
+│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Legacy; LanceDB-Integration in ADR-012)
 │   └── calibre_analyzer.py        # Bibliotheks-Statistiken
 └── calibre_db.py                  # Read-only Calibre-Metadaten-Zugriff
 ```
@@ -191,6 +203,83 @@ CLI-Skripte: `scripts/rag_demo.py`, `scripts/batch_index.py`, `scripts/web_ui.py
 **Begründung:** Die Beschränkung auf eine Datei verhindert doppelte Indexierung desselben Inhalts in verschiedenen Formaten. PDF hat Vorrang wegen des zuverlässigen Seitenzahlen-Mappings, das für zitierfähige Quellenangaben entscheidend ist. EPUBs liefern dafür bessere Strukturinformationen (TOC-Parsing, Section-Metadata) und werden schneller verarbeitet.
 
 Das Ignorieren von Unterordnern ist eine bewusste Produktentscheidung, keine technische Limitierung. Gut organisierte Nutzer lagern dort oft eigene Exzerpte und Texte, die sie durchaus indexiert haben möchten – und die sie aus guten Gründen nicht ins Calibre-Kommentarfeld schreiben. Statt sie zur Umorganisation zu nötigen, wird die Fein-Indexierung mit Wahl- und Einstelloptionen für eine spätere Version oder die Paid-Version reserviert. Das schafft einen natürlichen Upgrade-Pfad, ohne die Basis-Version zu verkomplizieren.
+
+### ADR-011: Smart Metadata & Annotation Update mit Hash-basierter Änderungserkennung (Februar 2026)
+
+**Kontext:** Bei 670+ indexierten Büchern mit je durchschnittlich 360 Chunks dauert eine vollständige Neu-Indexierung ca. 90 Sekunden pro Buch (Textextraktion, Chunking, BGE-M3-Embedding, LanceDB-Insert). Das ist akzeptabel für die Erstindexierung, aber inakzeptabel für Routinesituationen: Der Nutzer ergänzt ein Schlagwort in Calibre, korrigiert einen Autorennamen oder fügt ein Highlight in einem PDF hinzu – und soll dafür nicht 90 Sekunden warten.
+
+**Entscheidung:** Hash-basierte Änderungserkennung mit differenziellem Update. Zwei unabhängige Hashes pro Buch:
+- `metadata_hash` (MD5 über Calibre-Felder: `comments`, `tags`, `title`, `author`, `publisher`)
+- `annotation_hash` (MD5 über alle Annotationstexte eines Buchs, sortiert für Determinismus)
+
+**Begründung:** Die vier Datentypen eines indexierten Buchs – Volltext-Chunks, Calibre-Kommentar-Chunk, Metadaten-Felder in allen Chunks, Annotation-Chunks – haben fundamental verschiedene Änderungszyklen:
+
+| Datentyp | Ändert sich... | Häufigkeit |
+|----------|---------------|------------|
+| Volltext | Nie (Datei ist immutabel) | — |
+| Calibre-Kommentar | Selten (Verlagstext, Klappentext) | ~1-2× pro Buch |
+| Metadaten (Tags, Titel, Autor) | Gelegentlich (Kuratierung) | ~10-50× über Bibliotheksleben |
+| Annotationen | Laufend (Lesefortschritt) | Kontinuierlich |
+
+Statt für jede Änderung alles neu zu indexieren, erkennt das System jetzt via Hash-Vergleich, *was* sich geändert hat, und aktualisiert nur den betroffenen Teil:
+
+```
+Entscheidungsbaum in index_book() (force=False, Content-Chunks vorhanden):
+1. metadata_hash UND annotation_hash geändert → beides updaten (~2-3s)
+2. metadata_hash geändert, annotation_hash gleich → nur Metadaten updaten (~1s)
+3. metadata_hash gleich, annotation_hash geändert → nur Annotationen updaten (~2s)
+4. beide gleich → komplett überspringen (~0.1s)
+```
+
+**Implementierung:** `metadata_hash` wird in jedem Chunk gespeichert (ermöglicht Batch-Updates via `LanceDBStore.update_metadata_fields()`). `annotation_hash` wird nur in Annotation-Chunks gespeichert. Bei Änderung werden alte Annotation-Chunks via `delete_by_book_id_and_type()` gelöscht und neue mit frischen BGE-M3-Embeddings eingefügt.
+
+**Konsequenz für Batch-Indexierung:** `batch_index.py --skip-existing` überspringt Bücher nicht mehr blind, sondern leitet alle Bücher an `index_book()` weiter, das die Hash-Prüfung durchführt. Ein Batch-Lauf über 670 Bücher, bei dem sich nichts geändert hat, dauert damit ~67 Sekunden statt ~16 Stunden.
+
+### ADR-012: Annotation-Indexierung in LanceDB (Februar 2026)
+
+**Kontext:** Annotationen – Highlights und Notizen, die der Nutzer in seinen Büchern hinterlässt – sind für Geisteswissenschaftler oft wertvoller als der Rohtext. Sie repräsentieren kuratiertes Wissen: die Passagen, die der Forscher als relevant markiert hat, und seine Gedanken dazu. ARCHILLES extrahierte Annotationen bereits über MCP-Tools (`get_book_annotations`, `search_annotations`), speicherte sie aber in einem separaten ChromaDB-Index mit einem anderen Embedding-Modell (siehe ADR-008).
+
+**Entscheidung:** Annotationen werden als `chunk_type='annotation'` in der LanceDB-`chunks`-Tabelle gespeichert, mit BGE-M3-Embeddings, als Teil des regulären Indexierungslaufs (Phase 2).
+
+**Annotation-Quellen:** Zwei Quellen werden automatisch zusammengeführt:
+- **Calibre-Viewer-Annotations:** JSON-Dateien in `%APPDATA%\calibre\viewer\annots\`, erzeugt beim Lesen von EPUBs im Calibre-Viewer.
+- **PDF-native Annotations:** Highlights und Kommentare aus Adobe Reader (oder anderen PDF-Readern), extrahiert via PyMuPDF (`fitz`).
+
+Die bestehende Funktion `get_combined_annotations()` aus `src/calibre_mcp/annotations.py` übernimmt die Zusammenführung mit intelligenter Filterung (TOC-Marker-Erkennung, Mindestlänge 20 Zeichen, erste 5% des Buchs ausgeschlossen).
+
+**Text-Format der Annotation-Chunks:**
+- Highlight: `[ANNOTATION] {hervorgehobener Text}`
+- Highlight mit Notiz: `[ANNOTATION] {hervorgehobener Text} | Note: {Notiz}`
+- Reine Notiz: `[ANNOTATION_NOTE] {Notiz}`
+
+Das `[ANNOTATION]`-Präfix sorgt dafür, dass BGE-M3 den semantischen Kontext "Nutzermarkierung" mit einbettet, was bei der Suche nach nutzerkuratierten Inhalten die Relevanz erhöht.
+
+**Neue LanceDB-Felder:**
+- `annotation_type` (str): `'highlight'`, `'note'`, `'bookmark'`
+- `annotation_source` (str): `'calibre_viewer'` oder `'pdf'`
+- `annotation_hash` (str): Hash für Änderungserkennung (siehe ADR-011)
+
+**Schema-Migration:** Die neuen Felder werden bei der ersten Nutzung automatisch via `table.add_columns()` zur bestehenden Tabelle hinzugefügt. Dieser Mechanismus wurde allgemein für alle zukünftigen Schema-Erweiterungen implementiert, sodass bestehende Indizes nie inkompatibel werden.
+
+**Nicht-fatale Fehlerbehandlung:** Annotation-Extraktion ist in einen try/except-Block eingebettet. Wenn die Extraktion für ein Buch fehlschlägt (z.B. kein Annotations-Verzeichnis, korrupte JSON-Datei), wird eine Warnung geloggt, aber die Buchindexierung läuft normal weiter.
+
+### ADR-013: Crash-sichere Backup-Strategie für LanceDB (Februar 2026)
+
+**Kontext:** Die LanceDB-Datenbank für 670+ Bücher umfasst ca. 243.000 Chunks und belegt ~13 GB auf der Festplatte. Batch-Indexierung läuft über Stunden bis Tage. Ein Abbruch durch Systemabsturz, Stromausfall oder CTRL+C darf nicht zum Datenverlust führen.
+
+**Entscheidung:** `SafeIndexer` (`scripts/safe_indexer.py`) erstellt periodische Kopien der LanceDB und begrenzt die Anzahl aufbewahrter Backups.
+
+**Ursprüngliche Konfiguration:** Backup alle 10 Bücher, maximal 5 Backups.
+
+**Problem:** Bei ~13 GB pro Backup und 5 aufbewahrten Kopien können bis zu 65 GB Backup-Daten anfallen. In der Praxis füllte dies die Festplatte während eines 3-tägigen Batch-Laufs über 445 Bücher.
+
+**Korrigierte Konfiguration:** Backup alle 50 Bücher, maximal 2 Backups (~26 GB Maximum).
+
+**Begründung der neuen Werte:**
+- **Intervall 50:** Ein Verlust von maximal 50 Büchern (~75 Minuten Arbeit) ist bei einem Non-Production-System akzeptabel. Die `progress.db` (SQLite) trackt den Fortschritt buchgenau, sodass ein Neustart exakt dort fortsetzt, wo der Abbruch war – die Backups schützen nur gegen Korruption der LanceDB selbst.
+- **Maximum 2:** Das vorletzte Backup dient als Fallback, falls das letzte Backup selbst korrupt sein sollte (z.B. bei Abbruch während des Backup-Vorgangs). Mehr als 2 Generationen bringen keinen zusätzlichen Schutz.
+
+**Konsequenz:** Der `SafeIndexer` bleibt als Sicherheitsnetz erhalten, ist aber kein Engpass mehr. Für die Zukunft wäre ein inkrementelles Backup-Konzept denkbar (nur geänderte Lance-Fragmente kopieren), aber bei der aktuellen Datenbankgröße ist die einfache Kopie-Strategie ausreichend.
 
 ---
 
@@ -340,3 +429,7 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
 - *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
 - *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
+- *CLI-Erfahrung verbessern: Die lokale Kommandozeilen-Abfrage (rag_demo.py) liefert unbefriedigende Ergebnisse im Vergleich zur MCP-Integration, wo Claude den Kontext intelligent interpretiert. Mögliche Ansätze: bessere Prompt-Templates, automatische Query-Expansion, oder ein lokales LLM als Interpretation-Layer.*
+- *ChromaDB-Dependency bereinigen: annotations_indexer.py wird nicht mehr aktiv befüllt; Entscheidung über vollständige Entfernung oder Beibehaltung als Legacy-Fallback.*
+- *Annotation-Suche im MCP-Server: search_annotations-Tool auf LanceDB umstellen (aktuell noch ChromaDB-Backend).*
+- *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
