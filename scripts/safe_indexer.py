@@ -38,8 +38,8 @@ class SafeIndexer:
         self,
         db_path: Path,
         progress_db_path: Optional[Path] = None,
-        backup_interval: int = 10,
-        max_backups: int = 5
+        backup_interval: int = 50,
+        max_backups: int = 2
     ):
         """
         Initialize safe indexer.
@@ -47,8 +47,8 @@ class SafeIndexer:
         Args:
             db_path: Path to ChromaDB directory
             progress_db_path: Path to progress database (default: db_path/../progress.db)
-            backup_interval: Create backup every N books (default: 10)
-            max_backups: Maximum number of backups to keep (default: 5)
+            backup_interval: Create backup every N books (default: 50)
+            max_backups: Maximum number of backups to keep (default: 2)
         """
         self.db_path = Path(db_path)
         self.backup_interval = backup_interval
