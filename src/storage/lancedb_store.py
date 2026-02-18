@@ -236,6 +236,7 @@ class LanceDBStore:
                 "source_file": chunk.get("source_file") or "",
                 "format": chunk.get("format") or "",
                 "indexed_at": chunk.get("indexed_at") or datetime.now().isoformat(),
+                "metadata_hash": chunk.get("metadata_hash") or "",
             }
 
             records.append(record)
@@ -243,6 +244,12 @@ class LanceDBStore:
         if self.table is None:
             self._create_table_with_data(records)
         else:
+            # Schema migration: add metadata_hash column if not yet present
+            if 'metadata_hash' not in set(self.table.schema.names):
+                try:
+                    self.table.add_columns({'metadata_hash': "''"})
+                except Exception:
+                    pass  # Column may already exist from concurrent access
             self.table.add(records)
 
         return len(records)
@@ -625,6 +632,10 @@ class LanceDBStore:
         Update metadata fields in all chunks of a book WITHOUT re-computing embeddings.
         Useful for updating tags, author, title, etc. after Calibre edits.
 
+        Only updates columns that already exist in the table schema.
+        New columns (like metadata_hash) will be added when new chunks are inserted
+        via add_chunks(), but cannot be added via update() alone.
+
         Args:
             book_id: The book_id to update
             updates: Dict of field names to new values (e.g. {'tags': 'new,tags', 'metadata_hash': 'abc123'})
@@ -635,9 +646,18 @@ class LanceDBStore:
         if self.table is None:
             return 0
 
-        count_before = self.count()
+        # Filter updates to only include columns that exist in the current table schema
+        existing_columns = set(self.table.schema.names)
+        safe_updates = {k: v for k, v in updates.items() if k in existing_columns}
+        skipped = set(updates.keys()) - set(safe_updates.keys())
+        if skipped:
+            print(f"    ⚠️  Skipping columns not yet in schema: {skipped}")
+
+        if not safe_updates:
+            return 0
+
         # LanceDB update: set columns where condition matches
-        self.table.update(where=f"book_id = '{book_id}'", values=updates)
+        self.table.update(where=f"book_id = '{book_id}'", values=safe_updates)
         # We can't easily count updates, so return total chunks for this book
         try:
             results = self.table.search().where(f"book_id = '{book_id}'").limit(10000).to_list()
