@@ -31,9 +31,11 @@ Usage:
 import sys
 import argparse
 from pathlib import Path
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 import time
 import re
+import hashlib
+import json
 from datetime import datetime
 import numpy as np
 
@@ -279,6 +281,28 @@ class archillesRAG:
                 merged['isbn_source'] = 'file'
 
         return merged
+
+    @staticmethod
+    def _compute_metadata_hash(book_metadata: Dict[str, Any]) -> str:
+        """
+        Compute a hash of Calibre metadata fields that matter for indexing.
+        Used to detect metadata changes without re-indexing the full book text.
+
+        Fields included: comments, tags, title, author, publisher.
+        """
+        if not book_metadata:
+            return ''
+        tags = book_metadata.get('tags', [])
+        if isinstance(tags, list):
+            tags = sorted(tags)
+        relevant = {
+            'comments': book_metadata.get('comments', ''),
+            'tags': tags,
+            'title': book_metadata.get('title', ''),
+            'author': book_metadata.get('author', ''),
+            'publisher': book_metadata.get('publisher', ''),
+        }
+        return hashlib.md5(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
 
     def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
         """Extract metadata from PDF files."""
@@ -686,6 +710,15 @@ class archillesRAG:
                 deleted = self.store.delete_by_book_id(book_id)
                 print(f"    Deleted {deleted} chunks")
             else:
+                # Check if metadata has changed (smart update without full re-index)
+                book_metadata = self._extract_metadata(book_path)
+                current_hash = self._compute_metadata_hash(book_metadata)
+                stored_hash = content_chunks[0].get('metadata_hash', '')
+
+                if current_hash != stored_hash:
+                    # Metadata changed — update only metadata fields + comment chunk
+                    return self._update_metadata_only(book_id, book_metadata, current_hash, existing)
+
                 print(f"  Book already indexed ({len(content_chunks)} content chunks). Use --force to reindex.")
                 return {
                     'book_id': book_id,
@@ -827,6 +860,10 @@ class archillesRAG:
                 if book_metadata.get('tags'):
                     chunk_data['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
 
+            # Add metadata hash for change detection
+            if book_metadata:
+                chunk_data['metadata_hash'] = self._compute_metadata_hash(book_metadata)
+
             # Add source file path
             chunk_data['source_file'] = str(extracted.metadata.file_path)
 
@@ -876,6 +913,7 @@ class archillesRAG:
                 'chunk_type': 'calibre_comment',
                 'format': extracted.metadata.detected_format,
                 'indexed_at': datetime.now().isoformat(),
+                'metadata_hash': self._compute_metadata_hash(book_metadata),
             }
 
             if book_metadata.get('author'):
@@ -914,6 +952,87 @@ class archillesRAG:
             'embedding_time': embed_time,
             'indexing_time': index_time,
             'total_time': total_time,
+        }
+
+    def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
+                               new_hash: str, existing_chunks: list) -> Dict[str, Any]:
+        """
+        Smart metadata update: refresh only the calibre_comment chunk and metadata fields
+        in content chunks, WITHOUT re-extracting or re-embedding the book text.
+
+        This is ~50-100x faster than a full re-index (~1-2s vs ~90s).
+        """
+        start_time = time.time()
+        print(f"  📝 Metadata changed — updating without full re-index...")
+
+        updated_fields = {}
+        # Build update dict for metadata fields that may have changed
+        if book_metadata.get('author'):
+            updated_fields['author'] = book_metadata['author']
+        if book_metadata.get('title'):
+            updated_fields['book_title'] = book_metadata['title']
+        if book_metadata.get('tags'):
+            tags = book_metadata['tags']
+            updated_fields['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+        if book_metadata.get('publisher'):
+            updated_fields['publisher'] = book_metadata['publisher']
+        updated_fields['metadata_hash'] = new_hash
+
+        # 1. Update metadata fields in all content chunks (no embedding change)
+        if updated_fields:
+            num_updated = self.store.update_metadata_fields(book_id, updated_fields)
+            print(f"    Updated metadata in {num_updated} chunks")
+
+        # 2. Replace the calibre_comment chunk (needs new embedding for changed comment text)
+        old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == 'calibre_comment']
+        if old_comment_chunks:
+            deleted = self.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
+            print(f"    Deleted {deleted} old comment chunk(s)")
+
+        comment_added = False
+        if book_metadata.get('comments'):
+            comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
+            comment_embedding = self.embedding_model.encode(
+                comment_text, show_progress_bar=False, convert_to_numpy=True
+            )
+            comment_chunk = {
+                'id': f"{book_id}_comment",
+                'text': comment_text,
+                'book_id': book_id,
+                'book_title': book_metadata.get('title', book_id),
+                'chunk_index': -1,
+                'chunk_type': 'calibre_comment',
+                'format': existing_chunks[0].get('format', ''),
+                'indexed_at': datetime.now().isoformat(),
+                'metadata_hash': new_hash,
+            }
+            if book_metadata.get('author'):
+                comment_chunk['author'] = book_metadata['author']
+            if book_metadata.get('publisher'):
+                comment_chunk['publisher'] = book_metadata['publisher']
+            if book_metadata.get('calibre_id'):
+                comment_chunk['calibre_id'] = book_metadata['calibre_id']
+            if book_metadata.get('tags'):
+                tags = book_metadata['tags']
+                comment_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+
+            embeddings_array = np.array([comment_embedding.tolist()])
+            self.store.add_chunks([comment_chunk], embeddings_array)
+            comment_added = True
+            print(f"    Added new comment chunk")
+
+        elapsed = time.time() - start_time
+        content_count = len([c for c in existing_chunks
+                           if c.get('chunk_type', 'content') in ('content', 'child', 'parent')])
+        print(f"  ✅ Metadata updated in {elapsed:.1f}s (content chunks untouched: {content_count})\n")
+
+        return {
+            'book_id': book_id,
+            'status': 'metadata_updated',
+            'chunks_indexed': content_count,
+            'metadata_updated': True,
+            'comment_updated': comment_added,
+            'total_time': elapsed,
         }
 
     def _remove_stop_words(self, query_text: str) -> tuple:

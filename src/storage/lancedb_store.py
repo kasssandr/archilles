@@ -66,6 +66,7 @@ class LanceDBStore:
         "source_file": str,
         "format": str,
         "indexed_at": str,
+        "metadata_hash": str,  # Hash of Calibre metadata for change detection
     }
 
     def __init__(self, db_path: str, table_name: str = "chunks"):
@@ -598,6 +599,51 @@ class LanceDBStore:
         count_after = self.count()
 
         return count_before - count_after
+
+    def delete_by_book_id_and_type(self, book_id: str, chunk_type: str) -> int:
+        """
+        Delete chunks for a specific book filtered by chunk_type.
+
+        Args:
+            book_id: The book_id to filter by
+            chunk_type: The chunk_type to delete (e.g. 'calibre_comment', 'content')
+
+        Returns:
+            Number of chunks deleted (approximate)
+        """
+        if self.table is None:
+            return 0
+
+        count_before = self.count()
+        self.table.delete(f"book_id = '{book_id}' AND chunk_type = '{chunk_type}'")
+        count_after = self.count()
+
+        return count_before - count_after
+
+    def update_metadata_fields(self, book_id: str, updates: dict) -> int:
+        """
+        Update metadata fields in all chunks of a book WITHOUT re-computing embeddings.
+        Useful for updating tags, author, title, etc. after Calibre edits.
+
+        Args:
+            book_id: The book_id to update
+            updates: Dict of field names to new values (e.g. {'tags': 'new,tags', 'metadata_hash': 'abc123'})
+
+        Returns:
+            Number of chunks updated (approximate)
+        """
+        if self.table is None:
+            return 0
+
+        count_before = self.count()
+        # LanceDB update: set columns where condition matches
+        self.table.update(where=f"book_id = '{book_id}'", values=updates)
+        # We can't easily count updates, so return total chunks for this book
+        try:
+            results = self.table.search().where(f"book_id = '{book_id}'").limit(10000).to_list()
+            return len(results)
+        except Exception:
+            return 0
 
     def delete_by_calibre_id(self, calibre_id: int) -> int:
         """

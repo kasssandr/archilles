@@ -554,6 +554,22 @@ def batch_index(
                 })
                 continue
 
+            # Handle metadata-only updates (no full re-index needed)
+            if result.get('status') == 'metadata_updated':
+                print(f"         📝 Metadata updated in {result.get('total_time', 0):.1f}s (content unchanged)")
+                stats['indexed'] += 1
+                if safe_indexer:
+                    safe_indexer.record_book(book_id, phase, 'success',
+                                           chunks=result.get('chunks_indexed', 0),
+                                           duration=result.get('total_time', 0))
+                stats['books_processed'].append({
+                    'id': book_id,
+                    'title': book['title'],
+                    'status': 'metadata_updated',
+                    'time': result.get('total_time', 0)
+                })
+                continue
+
             # Regular indexing completed
             if force_reindex:
                 print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
@@ -838,8 +854,8 @@ Profiles:
     if not args.dry_run:
         safe_indexer = SafeIndexer(
             db_path=Path(args.db_path),
-            backup_interval=10,  # Backup every 10 books
-            max_backups=5        # Keep 5 most recent backups
+            backup_interval=50,  # Backup every 50 books
+            max_backups=2         # Keep 2 most recent backups
         )
 
         # Determine phase
