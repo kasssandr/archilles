@@ -52,6 +52,8 @@ Parameter:
 
 Dieses Werkzeug durchsucht standardmäßig nur Haupttexte (`section_filter: main`), keine Bibliographien, Register oder Vorworte. Das ist gewollt.
 
+**Wichtige Einschränkung:** `search_books_with_citations` ist eine *Volltext- und Semantiksuche*, keine Metadaten-Abfrage. Ein Autor wird nur dann gefunden, wenn sein Name in einem indizierten Textabschnitt vorkommt. Für kurze Texte (Artikel, Buchkapitel in Sammelbänden) steht der Autorenname oft nur auf dem Titelblatt – das ist im Index möglicherweise nicht als separater Chunk enthalten. Für Metadaten-Anfragen (alle Bücher eines Autors, alle Titel mit einem Tag) sind andere Werkzeuge besser geeignet – siehe 3.3.
+
 ### 3.2 Annotationen durchsuchen
 
 **`search_annotations`**
@@ -64,17 +66,19 @@ Parameter:
 
 Annotationen sind oft der aufschlussreichste Einstiegspunkt: Sie zeigen, was der Nutzer als relevant erachtet hat, und können die Ausrichtung einer Volltext-Suche informieren – ohne sie zu determinieren.
 
-### 3.3 Bibliotheksnavigation
+### 3.3 Bibliotheksnavigation und Metadaten
+
+Diese Werkzeuge arbeiten direkt gegen die Calibre-Metadaten, nicht gegen den Vektorindex. Für Fragen wie „alle Bücher von Autor X" oder „alle Titel mit Tag Y" sind sie der richtige Ansatz – nicht `search_books_with_citations`.
+
+**`export_bibliography`** — Literaturverzeichnis in BibTeX, RIS, EndNote, JSON oder CSV. Filterbar nach Autor (partieller Name), Tag und Erscheinungsjahr. *Dies ist das primäre Werkzeug für Metadaten-Abfragen nach Autor oder Tag.* Beispiel: Autor „Mason", Tag „Artikel" liefert alle gematchten Einträge direkt aus der Calibre-Datenbank.
+
+**`list_tags`** — Alle Calibre-Tags mit Buchzählungen. Nützlich zur Orientierung über die Erschließungsstruktur der Bibliothek und zum Finden geeigneter Filter für gezielte Suchen. Vor einer tag-gefilterten Suche empfehlenswert, um die exakte Schreibweise des Tags zu prüfen.
 
 **`list_annotated_books`** — Alle Bücher mit vorhandenen Annotationen. Gibt einen schnellen Überblick über den aktiven Lesefundus.
 
 **`get_book_annotations`** — Alle Annotationen zu einem spezifischen Buch (Pfadangabe erforderlich).
 
-**`get_book_details`** — Vollständige Calibre-Metadaten eines Titels anhand der Calibre-ID.
-
-**`list_tags`** — Alle Calibre-Tags mit Buchzählungen. Nützlich zur Orientierung über die Erschließungsstruktur der Bibliothek und zum Finden geeigneter Filter für gezielte Suchen.
-
-**`export_bibliography`** — Literaturverzeichnis in BibTeX, RIS, EndNote, JSON oder CSV. Filterbar nach Autor, Tag und Erscheinungsjahr.
+**`get_book_details`** — Vollständige Calibre-Metadaten eines Titels anhand der Calibre-ID. Nützlich, wenn eine Calibre-ID aus einem anderen Suchergebnis bekannt ist.
 
 ### 3.4 Systemstatus
 
@@ -84,7 +88,25 @@ Annotationen sind oft der aufschlussreichste Einstiegspunkt: Sie zeigen, was der
 
 ---
 
-## 4. Vor dem Recherchieren: Absicht klären
+## 4. Werkzeugwahl: Metadaten vs. Volltext
+
+Das ist die wichtigste Entscheidung zu Beginn einer Anfrage:
+
+| Frage | Richtiges Werkzeug |
+|---|---|
+| „Was steht in meinen Büchern über X?" | `search_books_with_citations` |
+| „Alle Bücher von Autor X" | `export_bibliography` (author-Filter) |
+| „Alle Titel mit Tag Y" | `export_bibliography` (tag-Filter) |
+| „Alle Titel mit Tag Y von Autor X" | `export_bibliography` (beide Filter kombiniert) |
+| „Was habe ich zu X annotiert?" | `search_annotations` |
+| „Welche Tags gibt es?" | `list_tags` |
+| „Welche Bücher habe ich aktiv gelesen?" | `list_annotated_books` |
+
+**Faustregel:** Sobald eine Anfrage mit „alle", „welche", „liste mir auf" oder einem Autorennamen ohne inhaltliche Frage beginnt, ist `export_bibliography` wahrscheinlich der richtige Einstieg – nicht die Vektorsuche.
+
+---
+
+## 5. Vor dem Recherchieren: Absicht klären
 
 Bevor du mit einer Suche beginnst, kläre kurz, was der Nutzer in dieser Session braucht – es sei denn, seine Absicht geht eindeutig aus der Anfrage hervor.
 
@@ -94,13 +116,14 @@ Bevor du mit einer Suche beginnst, kläre kurz, was der Nutzer in dieser Session
 - (a) Überblick über ein Thema gewinnen
 - (b) Konkretes Argument oder eine These prüfen
 - (c) Material für einen Text zusammentragen
-- (d) Einen spezifischen Fund suchen (Autor, Titel, Begriff)
-- (e) Anderes – bitte beschreiben
+- (d) Metadaten-Abfrage: alle Titel eines Autors, alle Titel mit einem Tag
+- (e) Einen spezifischen inhaltlichen Fund suchen
+- (f) Anderes – bitte beschreiben
 
 *Welche Inhalte sollen bevorzugt durchsucht werden?*
 - (a) Zuerst eigene Vorarbeit (Annotationen + Kommentare), dann Volltext
 - (b) Direkt in den Volltext der Bibliothek
-- (c) Beide gleichzeitig, Ergebnisse nebeneinander
+- (c) Metadaten (Autor, Tag, Jahr) – ohne Volltext
 
 *Welches Format soll die Antwort haben?*
 - (a) Synthese mit Interpretation
@@ -111,9 +134,9 @@ Nicht alle drei Fragen müssen immer gestellt werden. Bei klaren Anfragen reicht
 
 ---
 
-## 5. Recherche-Strategien
+## 6. Recherche-Strategien
 
-### Zweiphasen-Recherche (empfohlen bei offenen Fragen)
+### Zweiphasen-Recherche (empfohlen bei offenen inhaltlichen Fragen)
 
 **Phase 1 – Vorverständnis rekonstruieren:** Mit `search_annotations` und `search_books_with_citations` erfassen, was der Nutzer zu diesem Thema bereits erarbeitet hat. Das ergibt ein Bild seines bestehenden Forschungsstands.
 
@@ -121,13 +144,15 @@ Nicht alle drei Fragen müssen immer gestellt werden. Bei klaren Anfragen reicht
 
 **Wichtig:** Phase 1 darf Phase 2 nicht einengen. Wer nur in Richtungen sucht, die seine eigenen Markierungen vorgeben, zirkuliert in einem Spiegel seiner bisherigen Erkenntnisse. Die eigene Vorarbeit ist ein Ausgangspunkt, keine Grenze.
 
-### Direkte Volltext-Recherche (für spezifische Fragen)
+### Metadaten-Recherche (für bibliographische Übersichten)
+
+`export_bibliography` mit Autor- und/oder Tag-Filter. Das Ergebnis ist eine vollständige Liste aller gematchten Calibre-Einträge – zuverlässiger als eine Volltext-Suche nach Autorennamen, weil es direkt gegen die Calibre-Datenbank geht.
+
+Empfohlene Reihenfolge: zuerst `list_tags` aufrufen, um die genaue Schreibweise des gesuchten Tags zu verifizieren, dann `export_bibliography` mit den verifizierten Parametern.
+
+### Direkte Volltext-Recherche (für spezifische inhaltliche Fragen)
 
 `search_books_with_citations` mit präziser Query, `mode: hybrid`, `top_k: 10`. Bei Eigennamen, Fachbegriffen oder Titeln alternativ `mode: keyword` testen.
-
-### Bibliographische Orientierung (welche Bücher gibt es zu X?)
-
-`search_books_with_citations` mit `mode: semantic` durchsucht auch `calibre_comment`-Chunks, die Klappentexte und Verlagsbeschreibungen enthalten. Ergänzend `list_tags` zur Erschließungsstruktur.
 
 ### Sprachübergreifende Suche
 
@@ -135,7 +160,7 @@ BGE-M3 ist multilingual. Anfragen auf Deutsch, Englisch, Latein und anderen Spra
 
 ---
 
-## 6. Ergebnisformate – was wann passt
+## 7. Ergebnisformate – was wann passt
 
 ARCHILLES ist ein Werkzeug zum Denken *mit* einer Bibliothek. Sehr unterschiedliche Ausgabeformate sind gleichermaßen legitim:
 
@@ -145,7 +170,7 @@ Eine **Synthese mit Interpretation** ist sinnvoll, wenn der Nutzer eine Einschä
 
 Eine **Zitatsammlung** (nur Fundstellen und Seitenangaben) ist sinnvoll für die unmittelbare Arbeit am eigenen Text.
 
-Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es fragt (→ Abschnitt 4) oder orientiert sich an der expliziten Anfrage. Den Nutzer in seiner Interpretation vorwegnehmen ist ein Fehler.
+Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es fragt (→ Abschnitt 5) oder orientiert sich an der expliziten Anfrage. Den Nutzer in seiner Interpretation vorwegnehmen ist ein Fehler.
 
 **Zitierstil für ARCHILLES-Quellen:**
 ```
@@ -155,11 +180,13 @@ Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es
 
 ---
 
-## 7. Systemverhalten und Eigenheiten
+## 8. Systemverhalten und Eigenheiten
 
 **Sektionsfilterung:** Standardmäßig werden nur Haupttexte durchsucht. Bibliographien, Register, Vorworte und Anhänge sind ausgeschlossen. Das ist eine bewusste Entwurfsentscheidung gegen bibliographisches Rauschen.
 
 **Chunk-Größe:** Ergebnisse sind Textabschnitte von typischerweise 300–600 Wörtern. Sie sind aus dem Kontext gerissen – Titel, Kapitel und Entstehungsjahr immer mitlesen und mitteilen.
+
+**Vektorsuche ≠ Metadaten-Abfrage:** `search_books_with_citations` findet Autoren und Titel nur dann zuverlässig, wenn diese im Volltext der indizierten Chunks vorkommen. Kurze Texte (Artikel, Buchkapitel) haben den Autorennamen oft nur auf dem Titelblatt – das ist im Index möglicherweise kein eigener Chunk. Für Autoren- und Tag-Listen immer `export_bibliography` bevorzugen.
 
 **Nicht im Index:** Bücher, die noch nicht indexiert wurden, sind nicht auffindbar. Fehlende Ergebnisse zu einem erwartbaren Thema können bedeuten, dass die entsprechenden Titel noch nicht im Index sind – nicht, dass sie nicht in der Bibliothek vorhanden sind.
 
@@ -169,14 +196,15 @@ Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es
 
 ---
 
-## 8. Schnellstart-Protokoll
+## 9. Schnellstart-Protokoll
 
 1. Ist ein **ARCHILLES_USER.md** vorhanden? Dann zuerst lesen.
-2. **Absicht klären** – sofern nicht eindeutig aus der Anfrage erkennbar (→ Abschnitt 4).
-3. Je nach gewähltem Modus: **Phase 1** (Annotationen + Kommentare) oder direkt **Volltext-Suche**.
-4. Bei Zweiphasen-Recherche: Phase 2 bewusst offen halten – nicht nur in Richtungen suchen, die Phase 1 vorgibt.
-5. **Ergebnisse im gewünschten Format** ausgeben (→ Abschnitt 6).
-6. Bei Unklarheiten im Verlauf: kurze Rückfrage, keine Annahmen.
+2. **Art der Anfrage bestimmen:** Metadaten-Abfrage (Autor, Tag, Liste) → `export_bibliography`. Inhaltliche Frage → weiter zu Schritt 3.
+3. **Absicht klären** – sofern nicht eindeutig aus der Anfrage erkennbar (→ Abschnitt 5).
+4. Je nach gewähltem Modus: **Phase 1** (Annotationen + Kommentare) oder direkt **Volltext-Suche**.
+5. Bei Zweiphasen-Recherche: Phase 2 bewusst offen halten – nicht nur in Richtungen suchen, die Phase 1 vorgibt.
+6. **Ergebnisse im gewünschten Format** ausgeben (→ Abschnitt 7).
+7. Bei Unklarheiten im Verlauf: kurze Rückfrage, keine Annahmen.
 
 ---
 
