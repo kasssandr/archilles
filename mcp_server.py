@@ -5,16 +5,37 @@ ARCHILLES MCP Server Entry Point
 Starts the Calibre MCP Server with stdio transport for Claude Desktop integration.
 """
 
-# CRITICAL: Redirect stdout to stderr BEFORE any imports
-# This prevents print() statements from RAG/libraries from corrupting JSON-RPC
+# CRITICAL: Configure logging FIRST - before ANY other imports.
+# Libraries (e.g. calibre_mcp.server) call logging.basicConfig() at module level.
+# If we let them run first, our own basicConfig() becomes a NO-OP and logs never
+# reach the file handler. By configuring logging here with explicit handlers we
+# also guarantee that ALL log output goes to sys.stderr, never to stdout, which
+# keeps the stdout channel clean for JSON-RPC (MCP protocol).
 import sys
+import logging
+from pathlib import Path
+
+_log_file = Path.home() / ".archilles" / "mcp_server.log"
+_log_file.parent.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(str(_log_file), mode='a'),
+        logging.StreamHandler(sys.stderr),  # explicit stderr - never stdout
+    ],
+)
+logger = logging.getLogger(__name__)
+
+# Redirect stdout to stderr AFTER logging is configured but BEFORE further imports.
+# This catches any stray print() calls in third-party libraries loaded at import time
+# so they cannot corrupt the JSON-RPC stream on stdout.
 _original_stdout = sys.stdout
 sys.stdout = sys.stderr
 
 import asyncio
 import json
-import logging
-from pathlib import Path
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -23,18 +44,6 @@ from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 
 # Restore stdout for JSON-RPC communication
 sys.stdout = _original_stdout
-
-# Configure logging to file (not stdout, as that's used for MCP communication)
-log_file = Path.home() / ".archilles" / "mcp_server.log"
-log_file.parent.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    filename=str(log_file),
-    filemode='a'
-)
-logger = logging.getLogger(__name__)
 
 
 async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
