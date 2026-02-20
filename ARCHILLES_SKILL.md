@@ -70,7 +70,15 @@ Annotationen sind oft der aufschlussreichste Einstiegspunkt: Sie zeigen, was der
 
 Diese Werkzeuge arbeiten direkt gegen die Calibre-Metadaten, nicht gegen den Vektorindex. Für Fragen wie „alle Bücher von Autor X" oder „alle Titel mit Tag Y" sind sie der richtige Ansatz – nicht `search_books_with_citations`.
 
-**`export_bibliography`** — Literaturverzeichnis in BibTeX, RIS, EndNote, JSON oder CSV. Filterbar nach Autor (partieller Name), Tag und Erscheinungsjahr. *Dies ist das primäre Werkzeug für Metadaten-Abfragen nach Autor oder Tag.* Beispiel: Autor „Mason", Tag „Artikel" liefert alle gematchten Einträge direkt aus der Calibre-Datenbank.
+**`list_books_by_author`** — Alle Titel eines Autors direkt aus der Calibre-Datenbank. Partieller Namens-Match (case-insensitive), optionaler Tag- und Jahresfilter. *Dies ist das schnellste und zuverlässigste Werkzeug für die Frage „Welche Bücher von Autor X habe ich?"* – besonders wichtig für kurze Texte (Artikel, Buchkapitel), die in der Vektorsuche leicht übersehen werden, weil der Autorenname nicht in indizierten Chunks vorkommt.
+
+Parameter:
+- `author` (Pflicht): Autorenname, partieller Match (z.B. „Mason" findet „Steve Mason")
+- `tags` (optional): Liste von Tags als AND-Filter (z.B. `["Artikel"]`)
+- `year_from` / `year_to` (optional): Erscheinungsjahr-Bereich
+- `sort_by`: `title` (Standard, alphabetisch) oder `year` (absteigend)
+
+**`export_bibliography`** — Literaturverzeichnis in BibTeX, RIS, EndNote, JSON oder CSV. Filterbar nach Autor (partieller Name), Tag und Erscheinungsjahr. Exportiert strukturierte bibliographische Daten für die Weiterverarbeitung in Literaturverwaltungsprogrammen. Für eine einfache Autorenliste ist `list_books_by_author` schneller; `export_bibliography` ist die richtige Wahl, wenn ein formatiertes Literaturverzeichnis benötigt wird.
 
 **`list_tags`** — Alle Calibre-Tags mit Buchzählungen. Nützlich zur Orientierung über die Erschließungsstruktur der Bibliothek und zum Finden geeigneter Filter für gezielte Suchen. Vor einer tag-gefilterten Suche empfehlenswert, um die exakte Schreibweise des Tags zu prüfen.
 
@@ -95,14 +103,16 @@ Das ist die wichtigste Entscheidung zu Beginn einer Anfrage:
 | Frage | Richtiges Werkzeug |
 |---|---|
 | „Was steht in meinen Büchern über X?" | `search_books_with_citations` |
-| „Alle Bücher von Autor X" | `export_bibliography` (author-Filter) |
+| „Alle Bücher von Autor X" | `list_books_by_author` |
+| „Alle Artikel von Autor X" | `list_books_by_author` (tags: `["Artikel"]`) |
 | „Alle Titel mit Tag Y" | `export_bibliography` (tag-Filter) |
-| „Alle Titel mit Tag Y von Autor X" | `export_bibliography` (beide Filter kombiniert) |
+| „Alle Titel mit Tag Y von Autor X" | `list_books_by_author` (author + tags) |
+| „Literaturverzeichnis als BibTeX exportieren" | `export_bibliography` |
 | „Was habe ich zu X annotiert?" | `search_annotations` |
 | „Welche Tags gibt es?" | `list_tags` |
 | „Welche Bücher habe ich aktiv gelesen?" | `list_annotated_books` |
 
-**Faustregel:** Sobald eine Anfrage mit „alle", „welche", „liste mir auf" oder einem Autorennamen ohne inhaltliche Frage beginnt, ist `export_bibliography` wahrscheinlich der richtige Einstieg – nicht die Vektorsuche.
+**Faustregel:** Sobald eine Anfrage mit „alle", „welche", „liste mir auf" oder einem Autorennamen ohne inhaltliche Frage beginnt, ist `list_books_by_author` oder `export_bibliography` der richtige Einstieg – nicht die Vektorsuche. `list_books_by_author` ist bevorzugt, wenn ein Autorenname bekannt ist; `export_bibliography` wenn ein formatiertes Literaturverzeichnis oder ein reiner Tag-Filter ohne Autor benötigt wird.
 
 ---
 
@@ -146,9 +156,9 @@ Nicht alle drei Fragen müssen immer gestellt werden. Bei klaren Anfragen reicht
 
 ### Metadaten-Recherche (für bibliographische Übersichten)
 
-`export_bibliography` mit Autor- und/oder Tag-Filter. Das Ergebnis ist eine vollständige Liste aller gematchten Calibre-Einträge – zuverlässiger als eine Volltext-Suche nach Autorennamen, weil es direkt gegen die Calibre-Datenbank geht.
+`list_books_by_author` für Autoren-Abfragen (mit optionalem Tag-Filter). `export_bibliography` für reine Tag-Abfragen oder wenn ein formatiertes Literaturverzeichnis (BibTeX, RIS, etc.) benötigt wird. Beide Werkzeuge arbeiten direkt gegen die Calibre-Datenbank – zuverlässiger als die Volltext-Suche nach Autorennamen.
 
-Empfohlene Reihenfolge: zuerst `list_tags` aufrufen, um die genaue Schreibweise des gesuchten Tags zu verifizieren, dann `export_bibliography` mit den verifizierten Parametern.
+Empfohlene Reihenfolge: zuerst `list_tags` aufrufen, um die genaue Schreibweise des gesuchten Tags zu verifizieren, dann `list_books_by_author` oder `export_bibliography` mit den verifizierten Parametern.
 
 ### Direkte Volltext-Recherche (für spezifische inhaltliche Fragen)
 
@@ -199,7 +209,7 @@ Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es
 ## 9. Schnellstart-Protokoll
 
 1. Ist ein **ARCHILLES_USER.md** vorhanden? Dann zuerst lesen.
-2. **Art der Anfrage bestimmen:** Metadaten-Abfrage (Autor, Tag, Liste) → `export_bibliography`. Inhaltliche Frage → weiter zu Schritt 3.
+2. **Art der Anfrage bestimmen:** Metadaten-Abfrage mit Autor → `list_books_by_author`. Metadaten-Abfrage nur mit Tag → `export_bibliography`. Formatiertes Literaturverzeichnis → `export_bibliography`. Inhaltliche Frage → weiter zu Schritt 3.
 3. **Absicht klären** – sofern nicht eindeutig aus der Anfrage erkennbar (→ Abschnitt 5).
 4. Je nach gewähltem Modus: **Phase 1** (Annotationen + Kommentare) oder direkt **Volltext-Suche**.
 5. Bei Zweiphasen-Recherche: Phase 2 bewusst offen halten – nicht nur in Richtungen suchen, die Phase 1 vorgibt.

@@ -71,6 +71,7 @@ async def handle_request(server: CalibreMCPServer, method: str, params: dict) ->
             'get_book_details': server.get_book_details_tool,
             'get_doublette_tag_instruction': server.get_doublette_tag_instruction_tool,
             'export_bibliography': server.export_bibliography_tool,
+            'list_books_by_author': server.list_books_by_author_tool,
             'list_tags': server.list_tags_tool,
             'search_books_with_citations': server.search_books_with_citations_tool,
         }

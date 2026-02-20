@@ -450,6 +450,52 @@ class CalibreMCPServer:
                 'error': f'Failed to export bibliography: {str(e)}'
             }
 
+    def list_books_by_author_tool(
+        self,
+        author: str,
+        tags: Optional[list[str]] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        sort_by: str = 'title'
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: List all books by an author from the Calibre metadata database.
+
+        Direct metadata query (not vector search). Reliable for finding all works
+        by an author, including short texts (articles, book chapters) where
+        vector search may miss results.
+
+        Args:
+            author: Author name (case-insensitive partial match, required)
+            tags: Optional list of tag names to filter by (AND logic)
+            year_from: Optional minimum publication year
+            year_to: Optional maximum publication year
+            sort_by: Sort order - 'title' (default) or 'year'
+
+        Returns:
+            Dictionary with matched books and metadata
+        """
+        if not self.db_path:
+            return {
+                'error': 'Library database not available',
+                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            }
+
+        try:
+            with CalibreAnalyzer(self.db_path) as analyzer:
+                result = analyzer.list_books_by_author(
+                    author=author,
+                    tags=tags,
+                    year_from=year_from,
+                    year_to=year_to,
+                    sort_by=sort_by
+                )
+                return result
+        except Exception as e:
+            return {
+                'error': f'Failed to list books by author: {str(e)}'
+            }
+
     def list_tags_tool(
         self,
         min_books: int = 1,
@@ -805,6 +851,39 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                         'description': 'Maximum number of books to export'
                     }
                 }
+            }
+        },
+        {
+            'name': 'list_books_by_author',
+            'description': 'List all books by an author from the Calibre metadata database. Direct metadata query (not vector search), reliable for short texts like articles or book chapters. Supports tag and year filtering.',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'author': {
+                        'type': 'string',
+                        'description': 'Author name to search for (case-insensitive partial match, e.g., "Mason" matches "Steve Mason")'
+                    },
+                    'tags': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': 'Optional list of tag names to filter by (AND logic, case-insensitive partial match, e.g., ["Artikel"])'
+                    },
+                    'year_from': {
+                        'type': 'integer',
+                        'description': 'Filter books published from this year (e.g., 2000)'
+                    },
+                    'year_to': {
+                        'type': 'integer',
+                        'description': 'Filter books published up to this year (e.g., 2023)'
+                    },
+                    'sort_by': {
+                        'type': 'string',
+                        'enum': ['title', 'year'],
+                        'description': 'Sort order: by title (default, alphabetical) or by year (descending)',
+                        'default': 'title'
+                    }
+                },
+                'required': ['author']
             }
         },
         {
