@@ -441,6 +441,16 @@ def batch_index(
 
     Returns:
         Dictionary with indexing statistics
+
+    Note on very large files:
+        For extremely large PDFs (>100 MB of dense text, e.g. 1500+ pages),
+        indexing can take several hours depending on hardware. There is no
+        timeout by design — the indexer will work through large files given
+        enough time. If a book appears to hang indefinitely, move the
+        problematic file temporarily into a subfolder (e.g. ``data/``) within
+        the Calibre book directory so that a smaller format (EPUB) is picked
+        up instead. After the batch run completes, move the file back and
+        re-index that single book with ``--force``.
     """
     stats = {
         'total': len(books),
