@@ -261,44 +261,57 @@ class AnnotationsIndexer:
 
             for row in rows:
                 relative_path = row['path']  # e.g., "Author\Title (123)"
-                filename = f"{row['filename']}.{row['format']}"
+                fmt = row['format']  # e.g., "EPUB" (always uppercase in DB)
+
+                # Calibre stores format uppercase in DB but files use lowercase
+                # extension on disk. Test both variants to maximize match rate.
+                filename_variants = [
+                    f"{row['filename']}.{fmt.lower()}",   # book.epub (actual disk format)
+                    f"{row['filename']}.{fmt}",           # book.EPUB (DB format)
+                ]
 
                 book_metadata = {
                     'book_id': row['id'],
                     'title': row['title'],
                     'author': row['author'] or 'Unknown',
-                    'format': row['format']
+                    'format': fmt
                 }
 
-                current_path = Path(self.library_path) / relative_path / filename
+                current_path = Path(self.library_path) / relative_path / filename_variants[0]
                 book_matched = False
 
                 # Test all path variants for this book
                 for base_path in path_bases:
-                    try:
-                        # Construct full path with this base
-                        test_path_str = f"{base_path}\\{relative_path}\\{filename}"
+                    for filename in filename_variants:
+                        try:
+                            # Construct full path with this base
+                            test_path_str = f"{base_path}\\{relative_path}\\{filename}"
 
-                        # Test multiple slash variants (Windows path normalization)
-                        path_variants = [
-                            test_path_str,  # Original with backslashes
-                            test_path_str.replace('\\', '/'),  # Forward slashes
-                            str(Path(test_path_str)),  # Platform normalized
-                        ]
+                            # Normalize separators in relative_path too
+                            # (metadata.db may store with / or \ depending on OS)
+                            test_path_backslash = test_path_str.replace('/', '\\')
+                            test_path_forward = test_path_str.replace('\\', '/')
 
-                        for path_variant in set(path_variants):  # Remove duplicates
-                            test_hash = compute_book_hash(path_variant)
+                            # Test multiple slash variants (Windows path normalization)
+                            path_variants = [
+                                test_path_backslash,  # All backslashes
+                                test_path_forward,    # All forward slashes
+                                str(Path(test_path_str)),  # Platform normalized
+                            ]
 
-                            if test_hash not in hash_mapping:
-                                hash_mapping[test_hash] = {
-                                    **book_metadata,
-                                    'path': str(current_path),  # Store current path
-                                    'original_path_base': base_path  # Track which base worked
-                                }
-                                book_matched = True
-                    except Exception:
-                        # Skip invalid path combinations
-                        continue
+                            for path_variant in set(path_variants):  # Remove duplicates
+                                test_hash = compute_book_hash(path_variant)
+
+                                if test_hash not in hash_mapping:
+                                    hash_mapping[test_hash] = {
+                                        **book_metadata,
+                                        'path': str(current_path),  # Store current path
+                                        'original_path_base': base_path  # Track which base worked
+                                    }
+                                    book_matched = True
+                        except Exception:
+                            # Skip invalid path combinations
+                            continue
 
                 if book_matched:
                     books_matched += 1
@@ -397,7 +410,7 @@ class AnnotationsIndexer:
                         'book_id': book['id'],
                         'title': book['title'],
                         'author': book.get('author', 'Unknown'),
-                        'path': str(Path(self.library_path) / book['path'] / f"{book['filename']}.{book['format']}"),
+                        'path': str(Path(self.library_path) / book['path'] / f"{book['filename']}.{book['format'].lower()}"),
                         'format': book['format'],
                         'match_score': score
                     }
@@ -595,6 +608,7 @@ class AnnotationsIndexer:
             'total_annotations': 0,
             'skipped_books': 0,
             'errors': 0,
+            'hash_matched': 0,
             'books_without_metadata': 0,
             'fuzzy_matched': 0
         }
@@ -680,6 +694,8 @@ class AnnotationsIndexer:
 
                 # Get book metadata from hash mapping
                 book_meta = hash_mapping.get(book_hash, {})
+                if book_meta:
+                    stats['hash_matched'] += 1
 
                 # If hash didn't match, try fuzzy matching
                 if not book_meta and calibre_books:
@@ -756,6 +772,15 @@ class AnnotationsIndexer:
             except Exception as e:
                 logger.error(f"Error indexing book {book_hash}: {e}")
                 stats['errors'] += 1
+
+        # Summary logging
+        logger.info(
+            f"Indexing complete: {stats['total_books']} books, "
+            f"{stats['hash_matched']} hash-matched, "
+            f"{stats['fuzzy_matched']} fuzzy-matched, "
+            f"{stats['books_without_metadata']} unknown, "
+            f"{stats['total_annotations']} annotations indexed"
+        )
 
         return stats
 
@@ -966,6 +991,9 @@ def main():
 
     print("\n=== Indexing Complete ===")
     print(f"Books processed: {stats['total_books']}")
+    print(f"  Hash-matched: {stats.get('hash_matched', 'N/A')}")
+    print(f"  Fuzzy-matched: {stats.get('fuzzy_matched', 0)}")
+    print(f"  Unknown: {stats.get('books_without_metadata', 0)}")
     print(f"Annotations indexed: {stats['total_annotations']}")
     print(f"Books skipped: {stats['skipped_books']}")
     print(f"Errors: {stats['errors']}")
