@@ -36,8 +36,6 @@ from .annotations import (
     get_pdf_annotations
 )
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

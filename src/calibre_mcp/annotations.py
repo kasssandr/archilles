@@ -9,11 +9,14 @@ CRITICAL: Calibre uses SHA256 of the FILE PATH, not file content, for annotation
 
 import hashlib
 import json
+import logging
 import os
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def compute_book_hash(book_path: str) -> str:
@@ -89,7 +92,7 @@ def get_book_annotations(
             return []
 
     except (json.JSONDecodeError, IOError) as e:
-        print(f"Error reading annotations: {e}")
+        logger.error(f"Error reading annotations: {e}")
         return None
 
 
