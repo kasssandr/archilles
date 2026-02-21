@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 18. Februar 2026 (Neue ADRs: Smart Metadata Update, Annotation-Integration, Backup-Strategie; ADR-008 aktualisiert)
+**Letzte Überarbeitung:** 21. Februar 2026 (Neue ADRs: Citation Style Module, EPUB-Originalzitat-Regel; CSL-Forschungsergebnisse dokumentiert)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -265,6 +265,61 @@ Das `[ANNOTATION]`-Präfix sorgt dafür, dass BGE-M3 den semantischen Kontext "N
 
 ### ADR-013: Crash-sichere Backup-Strategie für LanceDB (Februar 2026)
 
+### ADR-014: Citation Style Module – Prompt-basiert, CSL-ready (Februar 2026)
+
+**Kontext:** ARCHILLES liefert Suchergebnisse mit Zitationsangaben (Autor, Titel, Jahr, Seite/Kapitel). Die Formatierung dieser Angaben – Chicago, APA, Harvard, MLA, IEEE – lag bisher implizit in der Formulierung der MCP-Tool-Ergebnisse. Es fehlte eine zentrale Stelle, die den gewünschten Zitierstil konfigurierbar macht und die Formatierungsanweisung für das LLM generiert.
+
+**Entscheidung:** Neues Modul `src/citation/` mit drei Komponenten:
+- `CITATION_STYLES`: Registry mit 6 Stilen (Chicago Author-Date, Chicago Notes, APA 7, Harvard, MLA 9, IEEE). Jeder Eintrag enthält Label, kanonische CSL-Style-ID, Locale-Hint, deutsch/englische Prompt-Fragmente und ein Formatbeispiel.
+- `CitationConfig`: Dataclass für Nutzerpräferenzen (`style`, `locale`, optionaler `csl_path`). Serialisierbar für `config.json`.
+- `format_bibliography_instruction()`: Generiert den Instruktionsblock, der in den RAG-System-Prompt injiziert wird, damit Claude die Bibliografie im gewünschten Stil formatiert.
+
+**Begründung – Warum Prompt-basiert statt CSL-Prozessor:**
+
+Die parallele CSL-Forschung (citeproc-py Evaluation, Februar 2026) ergab:
+
+| Aspekt | citeproc-py | Prompt-basiert (aktueller Ansatz) |
+|---|---|---|
+| CSL-Spec-Compliance | ~60% der Test-Suite | Claude kennt APA/Chicago/Harvard nativ |
+| Maintenance | Inaktiv (letzte Release v0.9.0, volunteer-maintained) | Keine externe Dependency |
+| Dependencies | lxml (~4 MB), optional citeproc-py-styles (~40 MB) | Keine |
+| Flexibilität | Exakt nach CSL-Spec | Claude kann Randfall-Formatierung intelligent lösen |
+| Geeignet für | Offline-Rendering, Zotero-Roundtrip, Verlagseinreichung | Interaktive Recherche mit LLM |
+
+Für den aktuellen Use Case – Claude formatiert die Bibliografie im Rahmen einer MCP-Session – ist der Prompt-basierte Ansatz überlegen: null Dependencies, sofort funktionsfähig, und Claude beherrscht die gängigen Stile aus seinem Training.
+
+**CSL-Readiness als Architekturprinzip:** Die kanonischen CSL-Style-IDs (identisch mit Zoteros Style Repository) sind bereits im Code hinterlegt. Wenn citeproc-py als optionale Dependency hinzugefügt wird, braucht es nur noch ein ~40-Zeilen-`formatter.py`, das `CitationConfig.csl_style_id` nimmt und eine formatierte Bibliografie zurückgibt. Kein Schema-Umbau nötig. Für ARCHILLES wären nur 6 .csl-Dateien (~50 KB) statt des vollen Styles-Pakets (~40 MB) nötig.
+
+**citeproc-py lohnt sich erst für:**
+- Offline-Rendering ohne Claude
+- Exakte Konformitätsprüfung (Dissertation, Verlagseinreichung)
+- Zotero-Roundtrip mit garantierter Stil-Treue
+
+**Implementierungsstand:** Modul vollständig implementiert (`src/citation/__init__.py`, `src/citation/config.py`). Noch nicht in den MCP-Server oder Service-Layer integriert – das erfolgt mit dem nächsten config.json-System.
+
+### ADR-015: EPUB-Ergebnisse mit Originalsprachen-Zitat (Februar 2026)
+
+**Kontext:** EPUB-Dateien haben keine physischen Seitenzahlen. ARCHILLES zitiert EPUB-Quellen mit Kapitelnamen statt Seitenzahlen: `(Autor, Titel [Jahr], Kap. Kapitelname)`. Der Nutzer muss die zitierte Passage im Originaldokument wiederfinden können – etwa um den Kontext zu prüfen, weiterzulesen oder korrekt zu zitieren.
+
+**Entscheidung:** Bei EPUB-Quellen (und allen anderen Quellen ohne physische Seitenzahl) wird stets ein kurzes wörtliches Zitat in der Originalsprache des Textes mitgeliefert. Das Zitat muss hinreichend distinktiv sein, um mit der Suchfunktion des E-Book-Readers die Passage eindeutig zu lokalisieren.
+
+**Begründung:** Die Kapitelangabe allein ist für die Auffindbarkeit unzureichend – Kapitel können Dutzende Seiten umfassen. Ein Originalsprachen-Zitat von 5–15 Wörtern löst das Problem elegant:
+- **Findability:** Der Nutzer kann das Zitat per Strg+F im Calibre-Viewer oder jedem anderen Reader suchen und landet exakt an der Stelle.
+- **Originalsprache:** Wenn der Text auf Latein, Englisch oder einer anderen Fremdsprache verfasst ist, muss das Zitat in dieser Sprache stehen – nicht in der Übersetzung. Nur so funktioniert die Textsuche im Originaldokument.
+- **Verifizierbarkeit:** Das wörtliche Zitat ermöglicht eine sofortige Plausibilitätsprüfung, ob die Passage tatsächlich das behauptete Argument enthält.
+
+**Geltungsbereich:** Diese Regel gilt für alle ARCHILLES-Ausgabeformate (Synthese, Materialliste, Zitatsammlung) und wird in ARCHILLES_SKILL.md als Handlungsanweisung für KI-Assistenten verankert.
+
+**Beispiel:**
+```
+(Eusebius, Kirchengeschichte, Kap. III.4 — „τὴν τῶν ἀποστόλων διαδοχὴν")
+(Blumenberg, Die Legitimität der Neuzeit [1966], Kap. 2.1 — „die Selbstbehauptung der Vernunft")
+```
+
+---
+
+### ADR-013: Crash-sichere Backup-Strategie für LanceDB (Februar 2026)
+
 **Kontext:** Die LanceDB-Datenbank für 670+ Bücher umfasst ca. 243.000 Chunks und belegt ~13 GB auf der Festplatte. Batch-Indexierung läuft über Stunden bis Tage. Ein Abbruch durch Systemabsturz, Stromausfall oder CTRL+C darf nicht zum Datenverlust führen.
 
 **Entscheidung:** `SafeIndexer` (`scripts/safe_indexer.py`) erstellt periodische Kopien der LanceDB und begrenzt die Anzahl aufbewahrter Backups.
@@ -433,3 +488,5 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 - *ChromaDB-Dependency bereinigen: annotations_indexer.py wird nicht mehr aktiv befüllt; Entscheidung über vollständige Entfernung oder Beibehaltung als Legacy-Fallback.*
 - *Annotation-Suche im MCP-Server: search_annotations-Tool auf LanceDB umstellen (aktuell noch ChromaDB-Backend).*
 - *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
+- *Citation-Modul in Service-Layer und MCP-Server integrieren: CitationConfig aus config.json laden und format_bibliography_instruction() in den System-Prompt einspeisen.*
+- *citeproc-py als optionale Dependency: formatter.py für Offline-Rendering und Zotero-Export, wenn citeproc-py installiert ist.*

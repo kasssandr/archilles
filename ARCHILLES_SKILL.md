@@ -188,6 +188,23 @@ Das Modell soll nicht selbst entscheiden, welches Format das richtige ist – es
 (Autor, Titel [Jahr], Kap. Kapitelname)    — für EPUB-Quellen ohne Seitenzahl
 ```
 
+**Pflicht bei EPUB-Quellen – Originalsprachen-Zitat für Auffindbarkeit:**
+
+EPUB-Dateien haben keine physischen Seitenzahlen. Eine Kapitelangabe allein reicht nicht, um die Passage im Dokument wiederzufinden. Deshalb gilt:
+
+Bei jeder Zitation aus einer EPUB-Quelle (und jeder anderen Quelle ohne physische Seitenzahl) **muss** ein kurzes wörtliches Zitat in der **Originalsprache des Textes** mitgeliefert werden. Das Zitat muss hinreichend distinktiv sein (5–15 Wörter), damit der Nutzer es mit der Suchfunktion (Strg+F) im E-Book-Reader findet und exakt an der Stelle landet.
+
+**Warum Originalsprache?** Wenn der Text auf Latein, Englisch, Altgriechisch oder einer anderen Sprache verfasst ist, muss das Zitat in dieser Sprache stehen – nicht in deutscher Übersetzung. Nur so funktioniert die Textsuche im Originaldokument.
+
+Beispiele:
+```
+(Eusebius, Kirchengeschichte, Kap. III.4 — „τὴν τῶν ἀποστόλων διαδοχὴν")
+(Blumenberg, Die Legitimität der Neuzeit [1966], Kap. 2.1 — „die Selbstbehauptung der Vernunft")
+(Gibbon, Decline and Fall [1776], Ch. XV — "the union and discipline of the Christian republic")
+```
+
+Diese Regel gilt für alle Ausgabeformate (Synthese, Materialliste, Zitatsammlung). Bei PDF-Quellen mit Seitenzahl ist das Originalzitat optional, aber empfohlen bei langen Passagen oder wenn die exakte Stelle innerhalb der Seite relevant ist.
+
 ---
 
 ## 8. Systemverhalten und Eigenheiten
