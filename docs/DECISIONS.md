@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 18. Februar 2026 (Neue ADRs: Smart Metadata Update, Annotation-Integration, Backup-Strategie; ADR-008 aktualisiert)
+**Letzte Überarbeitung:** 21. Februar 2026 (ADR3 ergänzt: Markdown als Extraktionsziel)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -79,9 +79,15 @@ Das Architekturprinzip dabei: "Wir bauen ein Chassis, in das wir später bessere
 
 **Entscheidung:** PyMuPDF (fitz) als primärer Extraktor, mit Multi-Tier-Fallback-System.
 
-**Begründung:** PyMuPDF bietet die beste Kombination aus Geschwindigkeit und Extraktionsqualität für die Mehrzahl der Dokumente. Es liefert zuverlässiges Seitenzahlen-Mapping, das für zitierfähige Quellenangaben unerlässlich ist. Die Chunking-Intelligence-Analyse (Gemini-Beitrag) empfahl zusätzlich CropBox-Filtering beim Einlesen, um Header, Footer und Seitenzahlen vor dem Chunking zu eliminieren – das wurde implementiert und verbessert die Embedding-Qualität spürbar. Die ursprünglich als primärer Extraktor vorgesehene Bibliothek pdfplumber wurde auf eine Fallback-Rolle zurückgestuft. Für problematische PDFs (historische Scans, komplexe Layouts) steht ein Fallback-System bereit, das bei Qualitätsproblemen alternative Extraktoren einschaltet.
+**Begründung:** PyMuPDF bietet die beste Kombination aus Geschwindigkeit und Extraktionsqualität für die Mehrzahl der Dokumente. Es liefert zuverlässiges Seitenzahlen-Mapping, das für zitierfähige Quellenangaben unerlässlich ist. Die ursprünglich als primärer Extraktor vorgesehene Bibliothek pdfplumber wurde auf eine Fallback-Rolle zurückgestuft. Für problematische PDFs (historische Scans, komplexe Layouts) steht ein Fallback-System bereit, das bei Qualitätsproblemen alternative Extraktoren einschaltet.
 
 **Verworfene Alternativen:** Marker (LLM-gestützter Korrekturmodus) wurde als bedarfsgesteuertes Feature für die Zukunft notiert, nicht als aktive Planung. Die Entscheidung fällt nach Beta-Feedback über die tatsächliche Extraktionsqualität.
+
+**Ergänzung (21. Februar 2026): Markdown als Extraktionsziel.** Die aktuelle Extraktion liefert Plaintext-Chunks, deren Zeichenkodierung für menschliche Inspektion schwer lesbar ist (Encoding-Artefakte, fehlende Struktur). Parallel dazu hat sich im Feld eine Best Practice etabliert: PDF → strukturiertes Markdown → Chunking entlang von Heading-Hierarchien, statt blindem Token-Splitting auf flachem Text. Markdown erhält Teil/Abschnitt/Unterabschnitt-Hierarchien und ermöglicht strukturorientiertes Chunking – für historische Fachtexte mit komplexer Gliederung ein qualitativer Gewinn.
+
+Als konkrete Implementierungsoption wird **Docling** (IBM, Open Source, lokal lauffähig) notiert: Es produziert strukturierten Markdown-Output mit erhaltenen Heading-Pfaden und ist CPU-fähig. Evaluierbar als Ergänzung oder Ersatz des PyMuPDF-Extraktors, sobald Beta-Feedback zur Extraktionsqualität vorliegt. Für die Historical Special Edition ist strukturorientiertes Chunking auf Markdown-Basis ohnehin Voraussetzung für eine sinnvolle LightRAG-Integration.
+
+**Offene Frage:** Ob Markdown-Output bereits für das MVP sinnvoll ist (Verbesserung der menschlich inspizierbaren Chunk-Qualität) oder erst für die Special Editions, hängt vom tatsächlichen Aufwand ab und wird nach erster Docling-Evaluation entschieden.
 
 ### ADR-004: Modulare Pipeline-Architektur
 
