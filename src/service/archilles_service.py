@@ -33,6 +33,7 @@ class ArchillesService:
         enable_reranking: bool = False,
         reranker_model: Optional[str] = None,
         reranker_device: Optional[str] = None,
+        citation_config: Optional[Any] = None,
     ):
         """
         Initialize service (RAG loading is deferred to first use).
@@ -49,6 +50,7 @@ class ArchillesService:
             enable_reranking: Enable cross-encoder reranking
             reranker_model: Cross-encoder model name (default: bge-reranker-v2-m3)
             reranker_device: Device for reranker (None = auto)
+            citation_config: CitationConfig instance for bibliography formatting
         """
         self._config = {
             "db_path": db_path,
@@ -66,6 +68,7 @@ class ArchillesService:
         self._reranker = None
         self._reranker_model = reranker_model
         self._reranker_device = reranker_device
+        self._citation_config = citation_config
 
     def _ensure_initialized(self) -> bool:
         """
@@ -254,6 +257,7 @@ class ArchillesService:
             results=results,
             query_text=query,
             expand_context=expand_context,
+            citation_config=self._citation_config,
         )
 
         return {
