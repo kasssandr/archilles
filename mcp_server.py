@@ -281,6 +281,11 @@ def main():
     if enable_reranking:
         logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
 
+    # Citation style config (optional, defaults to Chicago Author-Date / de-DE)
+    from citation.config import CitationConfig
+    citation_config = CitationConfig.from_dict(config.get('citation', {}))
+    logger.info(f"Citation style: {citation_config.label} (locale: {citation_config.locale})")
+
     # Initialize server
     server = CalibreMCPServer(
         library_path=library_path,
@@ -290,6 +295,7 @@ def main():
         rag_db_path=rag_db_path,
         enable_reranking=enable_reranking,
         reranker_device=reranker_device,
+        citation_config=citation_config,
     )
 
     logger.info(f"Server initialized with library: {library_path}")
