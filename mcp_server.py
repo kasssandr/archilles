@@ -60,6 +60,7 @@ TOOL_MAP = {
     'list_books_by_author': 'list_books_by_author_tool',
     'list_tags': 'list_tags_tool',
     'search_books_with_citations': 'search_books_with_citations_tool',
+    'set_research_interests': 'set_research_interests_tool',
 }
 
 

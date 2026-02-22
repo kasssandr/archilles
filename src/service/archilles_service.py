@@ -13,6 +13,7 @@ and optional cross-encoder reranking.
 import logging
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ class ArchillesService:
         reranker_model: Optional[str] = None,
         reranker_device: Optional[str] = None,
         citation_config: Optional[Any] = None,
+        archilles_dir: Optional[str] = None,
     ):
         """
         Initialize service (RAG loading is deferred to first use).
@@ -63,6 +65,7 @@ class ArchillesService:
             reranker_model: Cross-encoder model name (default: bge-reranker-v2-m3)
             reranker_device: Device for reranker (None = auto)
             citation_config: CitationConfig instance for bibliography formatting
+            archilles_dir: Path to .archilles/ directory (for research_interests.json)
         """
         self._config = {
             "db_path": db_path,
@@ -81,6 +84,7 @@ class ArchillesService:
         self._reranker_model = reranker_model
         self._reranker_device = reranker_device
         self._citation_config = citation_config
+        self._archilles_dir = Path(archilles_dir) if archilles_dir else None
 
     def _ensure_initialized(self) -> bool:
         """
@@ -213,9 +217,14 @@ class ArchillesService:
         language: Optional[str] = None,
         tags: Optional[List[str]] = None,
         expand_context: bool = False,
+        boost_research_interests: bool = True,
     ) -> Dict[str, Any]:
         """
         Search and generate XML-structured prompts with citation support.
+
+        If boost_research_interests is True and archilles_dir was provided at
+        init time, applies keyword boosting from research_interests.json before
+        ranking results.
 
         Returns:
             Dictionary with system_prompt, user_prompt, num_sources, results.
@@ -234,6 +243,16 @@ class ArchillesService:
                 language=language,
                 tag_filter=tags,
             )
+
+        if boost_research_interests and self._archilles_dir:
+            try:
+                from src.retriever.research_boost import apply_research_boost, load_research_interests
+                keywords, boost_factor = load_research_interests(self._archilles_dir)
+                if keywords:
+                    results = apply_research_boost(results, keywords, boost_factor)
+                    logger.debug("Applied research boost (%d keywords)", len(keywords))
+            except Exception as e:
+                logger.warning("Research boost failed (non-fatal): %s", e)
 
         if not results:
             return {

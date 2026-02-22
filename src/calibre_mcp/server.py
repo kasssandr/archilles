@@ -91,11 +91,14 @@ class CalibreMCPServer:
 
         self.citation_config = citation_config
 
+        self._archilles_dir = (Path(library_path) / ".archilles") if library_path else None
+
         self.service = ArchillesService(
             db_path=rag_db_path or "./archilles_rag_db",
             enable_reranking=enable_reranking,
             reranker_device=reranker_device,
             citation_config=citation_config,
+            archilles_dir=str(self._archilles_dir) if self._archilles_dir else None,
         ) if SERVICE_AVAILABLE else None
 
     @staticmethod
@@ -495,6 +498,60 @@ class CalibreMCPServer:
         except Exception as e:
             return {'error': f'Failed to list tags: {e}'}
 
+    def set_research_interests_tool(
+        self,
+        keywords: Optional[list[str]] = None,
+        boost_factor: float = 0.15,
+        action: str = 'set',
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: View or update research interest keywords for score boosting.
+
+        Args:
+            keywords: List of keywords to set (required for action='set')
+            boost_factor: Additive score boost per matching keyword (0.0–1.0, default: 0.15)
+            action: 'set' to update keywords, 'get' to view current keywords
+
+        Returns:
+            Dictionary with current keywords and boost_factor
+        """
+        if not self._archilles_dir:
+            return {'error': 'Library path not configured — cannot locate .archilles/ directory'}
+
+        try:
+            from src.retriever.research_boost import (
+                load_research_interests,
+                save_research_interests,
+            )
+
+            if action == 'get':
+                loaded_keywords, loaded_boost = load_research_interests(self._archilles_dir)
+                return {
+                    'action': 'get',
+                    'keywords': loaded_keywords,
+                    'boost_factor': loaded_boost,
+                    'keyword_count': len(loaded_keywords),
+                    'file': str(self._archilles_dir / "research_interests.json"),
+                }
+
+            if action == 'set':
+                if keywords is None:
+                    return {'error': 'keywords parameter required for action="set"'}
+                save_research_interests(self._archilles_dir, keywords, boost_factor)
+                return {
+                    'action': 'set',
+                    'keywords': keywords,
+                    'boost_factor': boost_factor,
+                    'keyword_count': len(keywords),
+                    'message': f'Saved {len(keywords)} keywords. Boost will apply to future searches.',
+                }
+
+            return {'error': f'Unknown action: {action!r}. Use "get" or "set".'}
+
+        except Exception as e:
+            logger.error("set_research_interests failed: %s", e, exc_info=True)
+            return {'error': str(e)}
+
     def search_books_with_citations_tool(
         self,
         query: str,
@@ -502,7 +559,8 @@ class CalibreMCPServer:
         mode: str = 'hybrid',
         language: Optional[str] = None,
         tags: Optional[list[str]] = None,
-        expand_context: bool = False
+        expand_context: bool = False,
+        boost_research_interests: bool = True,
     ) -> dict[str, Any]:
         """
         MCP Tool: Search books and generate XML-structured prompts with citation support.
@@ -538,6 +596,7 @@ class CalibreMCPServer:
                 language=language,
                 tags=tags,
                 expand_context=expand_context,
+                boost_research_interests=boost_research_interests,
             )
 
             if "error" in result:
@@ -890,9 +949,40 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                         'type': 'boolean',
                         'description': 'Enable context expansion (Small-to-Big retrieval) if char_offsets available',
                         'default': False
+                    },
+                    'boost_research_interests': {
+                        'type': 'boolean',
+                        'description': 'Apply research interest keyword boosting to re-rank results (default: true). Configure keywords with set_research_interests.',
+                        'default': True
                     }
                 },
                 'required': ['query']
+            }
+        },
+        {
+            'name': 'set_research_interests',
+            'description': 'View or update research interest keywords. When set, results containing these keywords receive a score boost and rise in ranking — without re-indexing.',
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'action': {
+                        'type': 'string',
+                        'enum': ['get', 'set'],
+                        'description': '"get" to view current keywords, "set" to update them',
+                        'default': 'get'
+                    },
+                    'keywords': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': 'List of keywords to boost (e.g., ["Josephus", "Mithras", "priestly elite"]). Required for action="set".'
+                    },
+                    'boost_factor': {
+                        'type': 'number',
+                        'description': 'Additive score boost per matching keyword, 0.0–1.0 (default: 0.15)',
+                        'default': 0.15
+                    }
+                },
+                'required': ['action']
             }
         }
     ]
