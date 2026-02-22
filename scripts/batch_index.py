@@ -43,6 +43,11 @@ Usage:
 
     # Run in non-interactive mode (auto-resume sessions, no prompts)
     python scripts/batch_index.py --tag "Leit-Literatur" --non-interactive
+
+    # Filter by author(s) — works alongside --tag, --all, or --author (OR logic)
+    python scripts/batch_index.py --tag "Leit-Literatur" --filter-author "Arendt"
+    python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
+    python scripts/batch_index.py --all --filter-author "Tucholsky"
 """
 
 import sys
@@ -88,7 +93,7 @@ def get_calibre_library_path() -> Path:
     return Path(library_path)
 
 
-def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exclude_tags: List[str] = None, rating: Optional[int] = None) -> List[Dict[str, Any]]:
+def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exclude_tags: List[str] = None, rating: Optional[int] = None, author_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Get all books with a specific tag from Calibre database.
 
@@ -99,6 +104,9 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
         exclude_tags: List of tags to exclude (e.g., ['DeepL', 'Machine-translated'])
         rating: Exact star rating to filter by (0 = no rating / NULL, 1-5 = exact star count).
                 Mutually exclusive with min_rating.
+        author_filter: Optional list of author name fragments; only books where at least one
+                       author matches ANY of the fragments (partial, case-insensitive) are
+                       returned.  Can be combined with --tag, --all, or --author.
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -161,6 +169,21 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
         """
         params.extend(exclude_tags)
 
+    # Optional author filter: keep only books where at least one author matches
+    # any of the given fragments (partial, case-insensitive).
+    # Uses an EXISTS subquery so GROUP_CONCAT still shows all co-authors.
+    if author_filter:
+        or_clauses = ' OR '.join(['LOWER(af.name) LIKE LOWER(?)' for _ in author_filter])
+        query += f"""
+        AND EXISTS (
+            SELECT 1 FROM books_authors_link bal_f
+            INNER JOIN authors af ON bal_f.author = af.id
+            WHERE bal_f.book = books.id
+            AND ({or_clauses})
+        )
+        """
+        params.extend([f'%{a}%' for a in author_filter])
+
     # Group by book to avoid duplicates when books have multiple authors
     query += " GROUP BY books.id"
     query += " ORDER BY ratings.rating DESC, author, books.title"
@@ -201,7 +224,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
     return books
 
 
-def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
+def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Get ALL books from Calibre database (no filtering).
 
@@ -209,6 +232,9 @@ def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
 
     Args:
         library_path: Path to Calibre library
+        author_filter: Optional list of author name fragments; only books where at least one
+                       author matches ANY of the fragments (partial, case-insensitive) are
+                       returned.
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -230,11 +256,25 @@ def get_all_books(library_path: Path) -> List[Dict[str, Any]]:
     FROM books
     LEFT JOIN books_authors_link ON books.id = books_authors_link.book
     LEFT JOIN authors ON books_authors_link.author = authors.id
-    GROUP BY books.id
-    ORDER BY books.id
     """
 
-    cursor = conn.execute(query)
+    params: List[Any] = []
+
+    if author_filter:
+        or_clauses = ' OR '.join(['LOWER(af.name) LIKE LOWER(?)' for _ in author_filter])
+        query += f"""
+    WHERE EXISTS (
+        SELECT 1 FROM books_authors_link bal_f
+        INNER JOIN authors af ON bal_f.author = af.id
+        WHERE bal_f.book = books.id
+        AND ({or_clauses})
+    )
+        """
+        params.extend([f'%{a}%' for a in author_filter])
+
+    query += " GROUP BY books.id ORDER BY books.id"
+
+    cursor = conn.execute(query, params)
     rows = cursor.fetchall()
 
     books = []
@@ -719,6 +759,11 @@ Examples:
   python scripts/batch_index.py --tag "Leit-Literatur" --rating 0   # only unrated
   python scripts/batch_index.py --tag "Leit-Literatur" --rating 5   # only 5-star books
 
+  # Filter by author(s) — combinable with --tag, --all, or --author (OR logic)
+  python scripts/batch_index.py --tag "Leit-Literatur" --filter-author "Arendt"
+  python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
+  python scripts/batch_index.py --all --filter-author "Tucholsky"
+
 Profiles:
   minimal  - CPU-only, resource-efficient (laptops, <6GB VRAM)
   balanced - GPU-accelerated, good quality (6-12GB VRAM)
@@ -745,6 +790,13 @@ Profiles:
     # Exclude filter (can be used multiple times)
     parser.add_argument('--exclude-tag', action='append', dest='exclude_tags', metavar='TAG',
                         help='Exclude books with this tag (can be used multiple times, e.g., --exclude-tag "DeepL" --exclude-tag "Übersetzung")')
+
+    # Author filter — additional, not mutually exclusive with --tag / --all / --author
+    parser.add_argument('--filter-author', action='append', dest='filter_authors', metavar='AUTHOR',
+                        help='Only include books where at least one author matches this fragment '
+                             '(partial, case-insensitive). Can be repeated for multiple authors '
+                             '(OR logic). Works alongside --tag, --all, and --author. '
+                             'Example: --filter-author "Arendt" --filter-author "Benjamin"')
 
     # Options
     parser.add_argument('--dry-run', action='store_true',
@@ -830,9 +882,12 @@ Profiles:
     # Get books based on criteria
     min_rating = getattr(args, 'min_rating', None) or 0
     rating = getattr(args, 'rating', None)
+    filter_authors = getattr(args, 'filter_authors', None)
     if getattr(args, 'all', False):
         print(f"📚 Indexing ALL books in the library")
-        books = get_all_books(library_path)
+        if filter_authors:
+            print(f"  Author filter: {', '.join(filter_authors)}")
+        books = get_all_books(library_path, author_filter=filter_authors)
     elif args.tag:
         print(f"  Filtering by tag: {args.tag}")
         if min_rating > 0:
@@ -845,7 +900,9 @@ Profiles:
         exclude_tags = getattr(args, 'exclude_tags', None)
         if exclude_tags:
             print(f"  Excluding tags: {', '.join(exclude_tags)}")
-        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=exclude_tags, rating=rating)
+        if filter_authors:
+            print(f"  Author filter: {', '.join(filter_authors)}")
+        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=exclude_tags, rating=rating, author_filter=filter_authors)
     elif args.author:
         print(f"  Filtering by author: {args.author}")
         if min_rating > 0:
@@ -855,6 +912,8 @@ Profiles:
                 print(f"  Exact rating: no rating (NULL)")
             else:
                 print(f"  Exact rating: {'*' * rating} ({rating} stars)")
+        if filter_authors:
+            print(f"  Additional author filter: {', '.join(filter_authors)}")
         books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating)
 
     if not books:
