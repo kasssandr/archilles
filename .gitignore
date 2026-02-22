@@ -75,3 +75,18 @@ test.md
 test_search.py
 *.txt
 .env
+
+# Internal development notes (not for public)
+docs/internal/
+
+# Individualized user profile (template stays public, filled-out version is private)
+ARCHILLES_USER_*.md
+*_USER_PROFILE.md
+
+# Accidental Windows copies
+*Kopie*
+* Kopie *
+
+# Runtime logs (belt-and-suspenders)
+server_stderr.log
+server_stdout.log
