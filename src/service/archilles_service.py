@@ -12,9 +12,21 @@ and optional cross-encoder reranking.
 
 import logging
 import sys
+from contextlib import contextmanager
 from typing import Any, Dict, List, Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _redirect_stdout_to_stderr():
+    """Temporarily redirect stdout to stderr (prevents MCP JSON-RPC corruption)."""
+    old_stdout = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        yield
+    finally:
+        sys.stdout = old_stdout
 
 
 class ArchillesService:
@@ -92,16 +104,10 @@ class ArchillesService:
 
         try:
             logger.info("Initializing RAG system (lazy loading)...")
-            old_stdout = sys.stdout
-            sys.stdout = sys.stderr
-
-            try:
+            with _redirect_stdout_to_stderr():
                 self._rag = archillesRAG(**self._config)
-                logger.info(f"RAG system initialized: {self._config['db_path']}")
-                return True
-            finally:
-                sys.stdout = old_stdout
-
+            logger.info(f"RAG system initialized: {self._config['db_path']}")
+            return True
         except Exception as e:
             logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
             self._rag = None
@@ -160,56 +166,44 @@ class ArchillesService:
             return []
 
         reranker = self._get_reranker()
-        use_reranking = reranker is not None
 
-        # Redirect stdout during search (MCP safety)
-        old_stdout = sys.stdout
-        sys.stdout = sys.stderr
+        query_kwargs = dict(
+            query_text=query,
+            mode=mode,
+            language=language,
+            book_id=book_id,
+            exact_phrase=exact_phrase,
+            tag_filter=tag_filter,
+            section_filter=section_filter,
+            chunk_type_filter=chunk_type_filter,
+        )
 
-        try:
-            if use_reranking:
-                # Fetch more undiversified results for reranking
-                raw_results = self._rag.query(
-                    query_text=query,
-                    top_k=30,
-                    mode=mode,
-                    language=language,
-                    book_id=book_id,
-                    exact_phrase=exact_phrase,
-                    tag_filter=tag_filter,
-                    section_filter=section_filter,
-                    chunk_type_filter=chunk_type_filter,
-                    max_per_book=999,  # Disable diversification at RAG level
-                    min_similarity=0.0,  # Disable filtering at RAG level
-                )
-                # Rerank
-                reranked = reranker.rerank(query, raw_results, top_k=top_k * 3)
-                # Apply diversification in the service
-                results = self._diversify(reranked, max_per_book, top_k)
-                # Apply min_similarity on rerank_score
-                if min_similarity > 0:
-                    results = [
-                        r for r in results
-                        if r.get("rerank_score", r.get("score", 0)) >= min_similarity
-                    ]
-                return results
-            else:
-                # Standard flow - let archillesRAG handle everything
+        with _redirect_stdout_to_stderr():
+            if reranker is None:
                 return self._rag.query(
-                    query_text=query,
+                    **query_kwargs,
                     top_k=top_k,
-                    mode=mode,
-                    language=language,
-                    book_id=book_id,
-                    exact_phrase=exact_phrase,
-                    tag_filter=tag_filter,
-                    section_filter=section_filter,
-                    chunk_type_filter=chunk_type_filter,
                     max_per_book=max_per_book,
                     min_similarity=min_similarity,
                 )
-        finally:
-            sys.stdout = old_stdout
+
+            # Fetch more undiversified results for reranking
+            raw_results = self._rag.query(
+                **query_kwargs,
+                top_k=30,
+                max_per_book=999,
+                min_similarity=0.0,
+            )
+
+        reranked = reranker.rerank(query, raw_results, top_k=top_k * 3)
+        results = self._diversify(reranked, max_per_book, top_k)
+
+        if min_similarity > 0:
+            results = [
+                r for r in results
+                if r.get("rerank_score", r.get("score", 0)) >= min_similarity
+            ]
+        return results
 
     def search_with_citations(
         self,
@@ -232,10 +226,7 @@ class ArchillesService:
                 "help": "Check ~/.archilles/mcp_server.log for details",
             }
 
-        old_stdout = sys.stdout
-        sys.stdout = sys.stderr
-
-        try:
+        with _redirect_stdout_to_stderr():
             results = self._rag.query(
                 query_text=query,
                 top_k=top_k,
@@ -243,8 +234,6 @@ class ArchillesService:
                 language=language,
                 tag_filter=tags,
             )
-        finally:
-            sys.stdout = old_stdout
 
         if not results:
             return {

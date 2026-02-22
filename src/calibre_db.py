@@ -4,118 +4,17 @@ Calibre database integration for ARCHILLES RAG.
 Read-only access to Calibre's metadata.db for enriched metadata.
 """
 
-import sqlite3
-from pathlib import Path
-from typing import Optional, Dict, Any
 import logging
 import re
+import sqlite3
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class CalibreDB:
     """Read-only interface to Calibre's metadata database."""
-
-    @staticmethod
-    def clean_html(html_text: str) -> str:
-        """
-        Remove HTML tags from Calibre comments field.
-
-        Calibre stores comments as HTML, we need clean text for indexing.
-
-        Args:
-            html_text: HTML string from Calibre comments
-
-        Returns:
-            Clean text without HTML tags
-        """
-        if not html_text:
-            return ""
-
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', '', html_text)
-
-        # Decode common HTML entities
-        text = text.replace('&nbsp;', ' ')
-        text = text.replace('&amp;', '&')
-        text = text.replace('&lt;', '<')
-        text = text.replace('&gt;', '>')
-        text = text.replace('&quot;', '"')
-        text = text.replace('&#39;', "'")
-
-        # Clean up whitespace
-        text = re.sub(r'\s+', ' ', text)
-        text = text.strip()
-
-        return text
-
-    def get_custom_columns(self) -> Dict[int, Dict[str, Any]]:
-        """
-        Get all custom column definitions from Calibre database.
-
-        Returns:
-            Dictionary mapping column_id to column metadata
-            {1: {'label': 'mytags', 'name': 'My Tags', 'datatype': 'text'}, ...}
-        """
-        query = """
-        SELECT id, label, name, datatype, display
-        FROM custom_columns
-        """
-        cursor = self.conn.execute(query)
-        rows = cursor.fetchall()
-
-        columns = {}
-        for row in rows:
-            columns[row['id']] = {
-                'label': row['label'],  # e.g., 'mytags' (used in column name: custom_column_1)
-                'name': row['name'],    # e.g., 'My Tags' (display name)
-                'datatype': row['datatype'],  # text, comments, datetime, float, int, bool, rating, series, enumeration
-                'display': row['display']
-            }
-        return columns
-
-    def get_custom_field_value(self, book_id: int, column_id: int, datatype: str) -> Any:
-        """
-        Get value of a custom field for a specific book.
-
-        Args:
-            book_id: Calibre book ID
-            column_id: Custom column ID
-            datatype: Data type of the field (text, datetime, float, etc.)
-
-        Returns:
-            Field value (type depends on datatype)
-        """
-        table_name = f"custom_column_{column_id}"
-
-        try:
-            # Different query depending on datatype
-            if datatype in ['text', 'comments', 'series', 'enumeration']:
-                # Text-based fields: value column
-                query = f"SELECT value FROM {table_name} WHERE book = ?"
-            elif datatype in ['datetime', 'float', 'int', 'rating', 'bool']:
-                # Numeric/date fields: value column
-                query = f"SELECT value FROM {table_name} WHERE book = ?"
-            else:
-                # Fallback
-                query = f"SELECT value FROM {table_name} WHERE book = ?"
-
-            cursor = self.conn.execute(query, (book_id,))
-            row = cursor.fetchone()
-
-            if not row or row['value'] is None:
-                return None
-
-            # Clean HTML from 'comments' type fields
-            if datatype == 'comments' and row['value']:
-                return self.clean_html(row['value'])
-
-            return row['value']
-
-        except Exception as e:
-            # Table might not exist or other error
-            logger.debug(f"Could not read custom column {column_id}: {e}")
-            return None
 
     def __init__(self, library_path: Path):
         """
@@ -144,6 +43,37 @@ class CalibreDB:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
 
+    # ── Static helpers ─────────────────────────────────────────
+
+    @staticmethod
+    def clean_html(html_text: str) -> str:
+        """
+        Remove HTML tags from Calibre comments field.
+
+        Calibre stores comments as HTML, we need clean text for indexing.
+
+        Args:
+            html_text: HTML string from Calibre comments
+
+        Returns:
+            Clean text without HTML tags
+        """
+        if not html_text:
+            return ""
+
+        text = re.sub(r'<[^>]+>', '', html_text)
+
+        # Decode common HTML entities
+        text = text.replace('&nbsp;', ' ')
+        text = text.replace('&amp;', '&')
+        text = text.replace('&lt;', '<')
+        text = text.replace('&gt;', '>')
+        text = text.replace('&quot;', '"')
+        text = text.replace('&#39;', "'")
+
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text
+
     @staticmethod
     def find_library_path(file_path: Path) -> Optional[Path]:
         """
@@ -164,15 +94,71 @@ class CalibreDB:
         """
         current = file_path.parent
 
-        # Go up max 5 levels looking for metadata.db
         for _ in range(5):
             if (current / "metadata.db").exists():
                 return current
-            if current.parent == current:  # Reached root
+            if current.parent == current:
                 break
             current = current.parent
 
         return None
+
+    # ── Custom columns ─────────────────────────────────────────
+
+    def get_custom_columns(self) -> Dict[int, Dict[str, Any]]:
+        """
+        Get all custom column definitions from Calibre database.
+
+        Returns:
+            Dictionary mapping column_id to column metadata
+            {1: {'label': 'mytags', 'name': 'My Tags', 'datatype': 'text'}, ...}
+        """
+        cursor = self.conn.execute(
+            "SELECT id, label, name, datatype, display FROM custom_columns"
+        )
+        return {
+            row['id']: {
+                'label': row['label'],
+                'name': row['name'],
+                'datatype': row['datatype'],
+                'display': row['display'],
+            }
+            for row in cursor.fetchall()
+        }
+
+    def get_custom_field_value(self, book_id: int, column_id: int, datatype: str) -> Any:
+        """
+        Get value of a custom field for a specific book.
+
+        Args:
+            book_id: Calibre book ID
+            column_id: Custom column ID
+            datatype: Data type of the field (text, datetime, float, etc.)
+
+        Returns:
+            Field value (type depends on datatype)
+        """
+        table_name = f"custom_column_{column_id}"
+
+        try:
+            cursor = self.conn.execute(
+                f"SELECT value FROM {table_name} WHERE book = ?", (book_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row or row['value'] is None:
+                return None
+
+            if datatype == 'comments':
+                return self.clean_html(row['value'])
+
+            return row['value']
+
+        except Exception as e:
+            logger.debug(f"Could not read custom column {column_id}: {e}")
+            return None
+
+    # ── Book lookup ────────────────────────────────────────────
 
     def get_book_by_path(self, file_path: Path) -> Optional[Dict[str, Any]]:
         """
@@ -184,23 +170,18 @@ class CalibreDB:
         Returns:
             Dictionary with book metadata, or None if not found
         """
-        # Make path relative to library
         try:
             rel_path = file_path.relative_to(self.library_path)
         except ValueError:
             logger.warning(f"File not in library: {file_path}")
             return None
 
-        # Extract book folder path (e.g., "Author/Book Title (123)")
-        # File structure: Author/Book (ID)/file.epub
         if len(rel_path.parts) < 2:
             return None
 
         # Calibre always uses forward slashes in DB, even on Windows
-        book_folder = str(Path(rel_path.parts[0]) / rel_path.parts[1]).replace('\\', '/')
-        filename_stem = file_path.stem
+        book_folder = f"{rel_path.parts[0]}/{rel_path.parts[1]}"
 
-        # Query database
         query = """
         SELECT
             books.id,
@@ -230,58 +211,53 @@ class CalibreDB:
 
         book_id = row['id']
 
-        # Get ISBN from identifiers table
-        isbn_query = """
-        SELECT val FROM identifiers
-        WHERE book = ? AND type = 'isbn'
-        LIMIT 1
-        """
-        cursor = self.conn.execute(isbn_query, (book_id,))
+        # Get ISBN
+        cursor = self.conn.execute(
+            "SELECT val FROM identifiers WHERE book = ? AND type = 'isbn' LIMIT 1",
+            (book_id,),
+        )
         isbn_row = cursor.fetchone()
-        isbn = isbn_row['val'] if isbn_row else None
 
-        # Get all authors (books can have multiple authors)
-        authors_query = """
-        SELECT authors.name
-        FROM authors
-        INNER JOIN books_authors_link ON authors.id = books_authors_link.author
-        WHERE books_authors_link.book = ?
-        ORDER BY books_authors_link.id
-        """
-        cursor = self.conn.execute(authors_query, (book_id,))
+        # Get all authors (books can have multiple)
+        cursor = self.conn.execute(
+            """
+            SELECT authors.name
+            FROM authors
+            INNER JOIN books_authors_link ON authors.id = books_authors_link.author
+            WHERE books_authors_link.book = ?
+            ORDER BY books_authors_link.id
+            """,
+            (book_id,),
+        )
         author_rows = cursor.fetchall()
-        # Join multiple authors with " & "
-        authors = ' & '.join([author_row['name'] for author_row in author_rows]) if author_rows else row['author']
+        authors = ' & '.join(r['name'] for r in author_rows) if author_rows else row['author']
 
         # Get tags
-        tags_query = """
-        SELECT tags.name
-        FROM tags
-        INNER JOIN books_tags_link ON tags.id = books_tags_link.tag
-        WHERE books_tags_link.book = ?
-        ORDER BY tags.name
-        """
-        cursor = self.conn.execute(tags_query, (book_id,))
-        tag_rows = cursor.fetchall()
-        tags = [tag_row['name'] for tag_row in tag_rows] if tag_rows else []
+        cursor = self.conn.execute(
+            """
+            SELECT tags.name
+            FROM tags
+            INNER JOIN books_tags_link ON tags.id = books_tags_link.tag
+            WHERE books_tags_link.book = ?
+            ORDER BY tags.name
+            """,
+            (book_id,),
+        )
+        tags = [r['name'] for r in cursor.fetchall()]
 
-        # Clean comments (remove HTML)
-        comments_text = row['comments'] if row['comments'] else None
-        if comments_text:
-            comments_text = self.clean_html(comments_text)
+        # Clean comments (stored as HTML in Calibre)
+        comments_text = self.clean_html(row['comments']) if row['comments'] else None
 
-        # Get custom fields (if any)
+        # Get custom fields
         custom_fields = {}
         try:
-            custom_columns = self.get_custom_columns()
-            for col_id, col_info in custom_columns.items():
+            for col_id, col_info in self.get_custom_columns().items():
                 value = self.get_custom_field_value(book_id, col_id, col_info['datatype'])
                 if value is not None:
-                    # Use label as key (e.g., 'mytags', 'reading_status')
                     custom_fields[col_info['label']] = {
                         'value': value,
-                        'name': col_info['name'],  # Display name
-                        'datatype': col_info['datatype']
+                        'name': col_info['name'],
+                        'datatype': col_info['datatype'],
                     }
         except Exception as e:
             logger.debug(f"Could not read custom fields: {e}")
@@ -289,16 +265,15 @@ class CalibreDB:
         result = {
             'calibre_id': book_id,
             'title': row['title'],
-            'author': authors,  # All authors joined with " & "
+            'author': authors,
             'publisher': row['publisher'],
             'language': row['language'],
-            'isbn': isbn,
+            'isbn': isbn_row['val'] if isbn_row else None,
             'path': row['path'],
             'tags': tags,
             'comments': comments_text,
         }
 
-        # Add custom fields to result (if any)
         if custom_fields:
             result['custom_fields'] = custom_fields
 

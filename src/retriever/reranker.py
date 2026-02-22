@@ -40,7 +40,6 @@ class CrossEncoderReranker:
         self._device = device
         self._max_length = max_length
         self._load_attempted = False
-        self._available = False
 
     def _ensure_loaded(self) -> bool:
         """Lazy-load the cross-encoder model. Returns True if available."""
@@ -54,11 +53,11 @@ class CrossEncoderReranker:
             from sentence_transformers import CrossEncoder
 
             logger.info(f"Loading cross-encoder: {self._model_name}")
-            kwargs = {"max_length": self._max_length}
-            if self._device:
-                kwargs["device"] = self._device
-            self._model = CrossEncoder(self._model_name, **kwargs)
-            self._available = True
+            self._model = CrossEncoder(
+                self._model_name,
+                max_length=self._max_length,
+                **({"device": self._device} if self._device else {}),
+            )
             logger.info(f"Cross-encoder loaded successfully on {self._model.device}")
             return True
         except Exception as e:
@@ -71,7 +70,7 @@ class CrossEncoderReranker:
     @property
     def is_available(self) -> bool:
         """Whether the cross-encoder model is loaded and ready."""
-        return self._available
+        return self._model is not None
 
     def rerank(
         self,
