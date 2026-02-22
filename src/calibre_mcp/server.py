@@ -12,10 +12,8 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-# Import CalibreAnalyzer from local module
 from .calibre_analyzer import CalibreAnalyzer
 
-# Import service layer for RAG search
 try:
     from src.service import ArchillesService
     SERVICE_AVAILABLE = True
@@ -25,15 +23,10 @@ except ImportError:
 
 from .annotations import (
     compute_book_hash,
-    get_book_annotations,
-    get_highlights,
-    get_notes,
-    get_bookmarks,
-    list_all_annotated_books,
-    search_annotations,
     get_annotations_dir,
     get_combined_annotations,
-    get_pdf_annotations
+    list_all_annotated_books,
+    search_annotations,
 )
 
 logger = logging.getLogger(__name__)
@@ -77,18 +70,8 @@ class CalibreMCPServer:
         self.annotations_dir = annotations_dir
         self.enable_semantic_search = enable_semantic_search
 
-        # Initialize database path for metadata operations
-        self.db_path = None
-        if library_path:
-            db_candidate = Path(library_path) / "metadata.db"
-            if db_candidate.exists():
-                self.db_path = str(db_candidate)
-            else:
-                # Check if library_path is the metadata.db itself
-                if Path(library_path).name == "metadata.db" and Path(library_path).exists():
-                    self.db_path = library_path
+        self.db_path = self._resolve_db_path(library_path)
 
-        # Initialize semantic search if enabled
         self.indexer = None
         if enable_semantic_search:
             try:
@@ -106,11 +89,8 @@ class CalibreMCPServer:
                 )
                 self.enable_semantic_search = False
 
-        # Citation style configuration
         self.citation_config = citation_config
 
-        # Initialize service layer for RAG search (lazy loading)
-        # Initialization is deferred until first use to avoid blocking server startup
         self.service = ArchillesService(
             db_path=rag_db_path or "./archilles_rag_db",
             enable_reranking=enable_reranking,
@@ -118,13 +98,30 @@ class CalibreMCPServer:
             citation_config=citation_config,
         ) if SERVICE_AVAILABLE else None
 
-    def _ensure_rag_initialized(self) -> bool:
-        """
-        Ensure RAG system is initialized (lazy loading via service layer).
+    @staticmethod
+    def _resolve_db_path(library_path: Optional[str]) -> Optional[str]:
+        """Resolve the path to Calibre's metadata.db from a library path."""
+        if not library_path:
+            return None
+        lib = Path(library_path)
+        db_candidate = lib / "metadata.db"
+        if db_candidate.exists():
+            return str(db_candidate)
+        if lib.name == "metadata.db" and lib.exists():
+            return str(lib)
+        return None
 
-        Returns:
-            True if RAG is available, False otherwise
-        """
+    def _require_db(self) -> Optional[dict[str, Any]]:
+        """Return an error dict if the library database is unavailable, else None."""
+        if self.db_path:
+            return None
+        return {
+            'error': 'Library database not available',
+            'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+        }
+
+    def _ensure_rag_initialized(self) -> bool:
+        """Ensure RAG system is initialized (lazy loading via service layer)."""
         if self.service is None:
             logger.warning("ArchillesService not available")
             return False
@@ -153,15 +150,9 @@ class CalibreMCPServer:
         Returns:
             Dictionary with annotations and metadata
         """
-        # Calculate the correct hash
         book_hash = compute_book_hash(book_path)
+        annotation_types = [annotation_type] if annotation_type else None
 
-        # Prepare annotation type filter
-        annotation_types = None
-        if annotation_type:
-            annotation_types = [annotation_type]
-
-        # Use the enhanced combined annotations function
         result = get_combined_annotations(
             book_path=book_path,
             annotations_dir=self.annotations_dir,
@@ -172,9 +163,7 @@ class CalibreMCPServer:
             annotation_types=annotation_types
         )
 
-        # Add hash to result
         result['book_hash'] = book_hash
-
         return result
 
     def search_annotations_tool(
@@ -200,7 +189,6 @@ class CalibreMCPServer:
         Returns:
             Dictionary with search results
         """
-        # Use semantic search if enabled and requested
         if use_semantic and self.enable_semantic_search and self.indexer:
             max_per_book_param = max_per_book if max_per_book > 0 else None
             results = self.indexer.search_annotations(
@@ -217,7 +205,6 @@ class CalibreMCPServer:
                 'results': results
             }
 
-        # Fall back to text-based search
         results = search_annotations(query, self.annotations_dir, case_sensitive)
 
         return {
@@ -335,23 +322,17 @@ class CalibreMCPServer:
         Returns:
             Dictionary with duplicate groups and statistics
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available',
-                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
-                result = analyzer.detect_duplicates(
+                return analyzer.detect_duplicates(
                     method=method,
                     include_doublette_tag=include_doublette_tag
                 )
-                return result
         except Exception as e:
-            return {
-                'error': f'Failed to detect duplicates: {str(e)}'
-            }
+            return {'error': f'Failed to detect duplicates: {e}'}
 
     def get_book_details_tool(self, book_id: int) -> dict[str, Any]:
         """
@@ -363,24 +344,17 @@ class CalibreMCPServer:
         Returns:
             Dictionary with book details
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available',
-                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
                 book = analyzer.get_book_details(book_id)
                 if not book:
-                    return {
-                        'error': f'Book with ID {book_id} not found'
-                    }
+                    return {'error': f'Book with ID {book_id} not found'}
                 return book
         except Exception as e:
-            return {
-                'error': f'Failed to get book details: {str(e)}'
-            }
+            return {'error': f'Failed to get book details: {e}'}
 
     def get_doublette_tag_instruction_tool(self, book_id: int) -> dict[str, Any]:
         """
@@ -395,18 +369,14 @@ class CalibreMCPServer:
         Returns:
             Dictionary with tagging instructions
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
                 return analyzer.add_doublette_tag(book_id)
         except Exception as e:
-            return {
-                'error': f'Failed to get tag instruction: {str(e)}'
-            }
+            return {'error': f'Failed to get tag instruction: {e}'}
 
     def export_bibliography_tool(
         self,
@@ -434,15 +404,12 @@ class CalibreMCPServer:
         Returns:
             Dictionary with exported bibliography data
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available',
-                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
-                result = analyzer.export_bibliography(
+                return analyzer.export_bibliography(
                     format=format,
                     author=author,
                     tag=tag,
@@ -450,11 +417,8 @@ class CalibreMCPServer:
                     year_to=year_to,
                     max_books=max_books
                 )
-                return result
         except Exception as e:
-            return {
-                'error': f'Failed to export bibliography: {str(e)}'
-            }
+            return {'error': f'Failed to export bibliography: {e}'}
 
     def list_books_by_author_tool(
         self,
@@ -481,26 +445,20 @@ class CalibreMCPServer:
         Returns:
             Dictionary with matched books and metadata
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available',
-                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
-                result = analyzer.list_books_by_author(
+                return analyzer.list_books_by_author(
                     author=author,
                     tags=tags,
                     year_from=year_from,
                     year_to=year_to,
                     sort_by=sort_by
                 )
-                return result
         except Exception as e:
-            return {
-                'error': f'Failed to list books by author: {str(e)}'
-            }
+            return {'error': f'Failed to list books by author: {e}'}
 
     def list_tags_tool(
         self,
@@ -517,36 +475,25 @@ class CalibreMCPServer:
         Returns:
             Dictionary with tag list and statistics
         """
-        if not self.db_path:
-            return {
-                'error': 'Library database not available',
-                'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
-            }
+        if err := self._require_db():
+            return err
 
         try:
             with CalibreAnalyzer(self.db_path) as analyzer:
-                tags_stats = analyzer.get_tags_stats()
+                all_tags = analyzer.get_tags_stats()
 
-                # Filter by min_books
-                filtered_tags = [
-                    tag for tag in tags_stats
-                    if tag['book_count'] >= min_books
-                ]
-
-                # Limit results
-                limited_tags = filtered_tags[:max_tags]
+                filtered = [t for t in all_tags if t['book_count'] >= min_books]
+                limited = filtered[:max_tags]
 
                 return {
-                    'total_tags': len(tags_stats),
-                    'filtered_tags': len(filtered_tags),
-                    'returned_tags': len(limited_tags),
-                    'tags': limited_tags,
+                    'total_tags': len(all_tags),
+                    'filtered_tags': len(filtered),
+                    'returned_tags': len(limited),
+                    'tags': limited,
                     'usage': 'Use these tag names in the "tags" parameter of search_books_with_citations'
                 }
         except Exception as e:
-            return {
-                'error': f'Failed to list tags: {str(e)}'
-            }
+            return {'error': f'Failed to list tags: {e}'}
 
     def search_books_with_citations_tool(
         self,
@@ -576,7 +523,6 @@ class CalibreMCPServer:
         Returns:
             Dictionary with XML prompts and search results
         """
-        # Lazy initialization of RAG system
         if not self._ensure_rag_initialized():
             return {
                 'error': 'RAG system not available',
@@ -585,7 +531,6 @@ class CalibreMCPServer:
             }
 
         try:
-            # Delegate to service layer (handles stdout redirection internally)
             result = self.service.search_with_citations(
                 query=query,
                 top_k=top_k,

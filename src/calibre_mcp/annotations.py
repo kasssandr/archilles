@@ -11,9 +11,8 @@ import hashlib
 import json
 import logging
 import os
-import re
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Optional
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -33,29 +32,26 @@ def compute_book_hash(book_path: str) -> str:
     Returns:
         SHA256 hash of the path (64 character hex string)
     """
-    # Hash the path string, not the file content
     return hashlib.sha256(book_path.encode('utf-8')).hexdigest()
 
 
 def get_annotations_dir() -> Path:
-    """
-    Get the default Calibre annotations directory.
-
-    Returns:
-        Path to the annotations directory
-    """
-    if os.name == 'nt':  # Windows
+    """Get the default Calibre annotations directory."""
+    if os.name == 'nt':
         appdata = os.environ.get('APPDATA', '')
         return Path(appdata) / 'calibre' / 'viewer' / 'annots'
-    else:  # Linux/Mac
-        home = Path.home()
-        return home / '.local' / 'share' / 'calibre' / 'viewer' / 'annots'
+    return Path.home() / '.local' / 'share' / 'calibre' / 'viewer' / 'annots'
+
+
+def _resolve_annotations_path(annotations_dir: Optional[str] = None) -> Path:
+    """Resolve the annotations directory, falling back to the platform default."""
+    return Path(annotations_dir) if annotations_dir else get_annotations_dir()
 
 
 def get_book_annotations(
     book_path: str,
     annotations_dir: Optional[str] = None
-) -> Optional[List[Dict[str, Any]]]:
+) -> Optional[list[dict[str, Any]]]:
     """
     Get all annotations for a specific book.
 
@@ -66,10 +62,7 @@ def get_book_annotations(
     Returns:
         List of annotations or None if not found
     """
-    if annotations_dir:
-        annots_path = Path(annotations_dir)
-    else:
-        annots_path = get_annotations_dir()
+    annots_path = _resolve_annotations_path(annotations_dir)
 
     # Calculate the correct hash from the path
     book_hash = compute_book_hash(book_path)
@@ -96,79 +89,46 @@ def get_book_annotations(
         return None
 
 
-def get_highlights(
+def _filter_by_type(
     book_path: str,
-    annotations_dir: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get only highlight annotations for a book.
-
-    Args:
-        book_path: Full path to the book file
-        annotations_dir: Optional custom annotations directory
-
-    Returns:
-        List of highlight annotations
-    """
+    annotations_dir: Optional[str],
+    predicate,
+) -> list[dict[str, Any]]:
+    """Return annotations matching the given predicate."""
     annotations = get_book_annotations(book_path, annotations_dir)
     if not annotations:
         return []
+    return [a for a in annotations if predicate(a)]
 
-    return [
-        annot for annot in annotations
-        if annot.get('type') == 'highlight'
-    ]
+
+def get_highlights(
+    book_path: str,
+    annotations_dir: Optional[str] = None
+) -> list[dict[str, Any]]:
+    """Get only highlight annotations for a book."""
+    return _filter_by_type(book_path, annotations_dir,
+                           lambda a: a.get('type') == 'highlight')
 
 
 def get_notes(
     book_path: str,
     annotations_dir: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get only note annotations for a book.
-
-    Args:
-        book_path: Full path to the book file
-        annotations_dir: Optional custom annotations directory
-
-    Returns:
-        List of note annotations
-    """
-    annotations = get_book_annotations(book_path, annotations_dir)
-    if not annotations:
-        return []
-
-    return [
-        annot for annot in annotations
-        if annot.get('type') == 'note' or annot.get('notes')
-    ]
+) -> list[dict[str, Any]]:
+    """Get only note annotations for a book."""
+    return _filter_by_type(book_path, annotations_dir,
+                           lambda a: a.get('type') == 'note' or a.get('notes'))
 
 
 def get_bookmarks(
     book_path: str,
     annotations_dir: Optional[str] = None
-) -> List[Dict[str, Any]]:
-    """
-    Get only bookmark annotations for a book.
-
-    Args:
-        book_path: Full path to the book file
-        annotations_dir: Optional custom annotations directory
-
-    Returns:
-        List of bookmark annotations
-    """
-    annotations = get_book_annotations(book_path, annotations_dir)
-    if not annotations:
-        return []
-
-    return [
-        annot for annot in annotations
-        if annot.get('type') == 'bookmark'
-    ]
+) -> list[dict[str, Any]]:
+    """Get only bookmark annotations for a book."""
+    return _filter_by_type(book_path, annotations_dir,
+                           lambda a: a.get('type') == 'bookmark')
 
 
-def format_annotation(annotation: Dict[str, Any]) -> str:
+def format_annotation(annotation: dict[str, Any]) -> str:
     """
     Format an annotation for display.
 
@@ -207,7 +167,7 @@ def format_annotation(annotation: Dict[str, Any]) -> str:
 
 def list_all_annotated_books(
     annotations_dir: Optional[str] = None
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     List all books that have annotations.
 
@@ -217,10 +177,7 @@ def list_all_annotated_books(
     Returns:
         List of annotation file info (hash, count, size)
     """
-    if annotations_dir:
-        annots_path = Path(annotations_dir)
-    else:
-        annots_path = get_annotations_dir()
+    annots_path = _resolve_annotations_path(annotations_dir)
 
     if not annots_path.exists():
         return []
@@ -255,7 +212,7 @@ def search_annotations(
     query: str,
     annotations_dir: Optional[str] = None,
     case_sensitive: bool = False
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Search through all annotations for matching text.
 
@@ -267,10 +224,7 @@ def search_annotations(
     Returns:
         List of matching annotations with file info
     """
-    if annotations_dir:
-        annots_path = Path(annotations_dir)
-    else:
-        annots_path = get_annotations_dir()
+    annots_path = _resolve_annotations_path(annotations_dir)
 
     if not annots_path.exists():
         return []
@@ -307,7 +261,7 @@ def search_annotations(
 
 
 def is_toc_marker(
-    annotation: Dict[str, Any],
+    annotation: dict[str, Any],
     min_length: int = 20,
     exclude_first_percent: float = 5.0
 ) -> bool:
@@ -330,11 +284,9 @@ def is_toc_marker(
     text = annotation.get('highlighted_text', '').strip()
     notes = annotation.get('notes', '').strip()
 
-    # Check text length
     if len(text) < min_length and not notes:
         return True
 
-    # TOC and technical keywords
     toc_keywords = [
         'inhaltsverzeichnis', 'table of contents', 'contents',
         'chapter', 'kapitel', 'part', 'teil', 'section',
@@ -343,16 +295,12 @@ def is_toc_marker(
         'bibliography', 'literaturverzeichnis'
     ]
 
-    # Combine text and notes for keyword check
     combined = f"{text} {notes}".lower()
 
-    # Check for TOC keywords (but only if text is short)
-    if len(text) < 50:  # Only apply keyword filter to short snippets
+    if len(text) < 50:
         if any(keyword in combined for keyword in toc_keywords):
             return True
 
-    # Check position in book (if available)
-    # Calibre stores position as 'pos' or calculate from 'spine_index'
     pos_frac = annotation.get('pos_frac')
     if pos_frac is not None:
         try:
@@ -362,22 +310,20 @@ def is_toc_marker(
         except (ValueError, TypeError):
             pass
 
-    # Alternative: check spine_index (chapter index)
     spine_index = annotation.get('spine_index')
     if spine_index is not None and spine_index == 0:
-        # First chapter might be TOC
         return True
 
     return False
 
 
 def filter_annotations(
-    annotations: List[Dict[str, Any]],
+    annotations: list[dict[str, Any]],
     exclude_toc_markers: bool = True,
     min_length: int = 20,
     exclude_first_percent: float = 5.0,
-    annotation_types: Optional[List[str]] = None
-) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    annotation_types: Optional[list[str]] = None
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """
     Filter annotations based on various criteria.
 
@@ -421,7 +367,20 @@ def filter_annotations(
     return filtered, exclusion_stats
 
 
-def get_pdf_annotations(pdf_path: str) -> List[Dict[str, Any]]:
+def _parse_pdf_date(mod_date: str) -> str:
+    """Parse a PDF date string (D:YYYYMMDDHHmmSS) into ISO format."""
+    if not mod_date:
+        return ""
+    try:
+        if mod_date.startswith("D:"):
+            date_str = mod_date[2:16]
+            return datetime.strptime(date_str, "%Y%m%d%H%M%S").isoformat()
+    except (ValueError, IndexError):
+        pass
+    return mod_date
+
+
+def get_pdf_annotations(pdf_path: str) -> list[dict[str, Any]]:
     """
     Extract annotations from PDF file using PyMuPDF.
 
@@ -434,7 +393,6 @@ def get_pdf_annotations(pdf_path: str) -> List[Dict[str, Any]]:
     try:
         import fitz  # PyMuPDF
     except ImportError:
-        # PyMuPDF not installed, return empty list
         return []
 
     pdf_path = Path(pdf_path)
@@ -456,37 +414,21 @@ def get_pdf_annotations(pdf_path: str) -> List[Dict[str, Any]]:
 
                 annot_type_raw = annot.type[1] if annot.type else "Unknown"
 
-                # Extract highlighted text
                 text = ""
-                if annot_type_raw in ["Highlight", "Underline", "StrikeOut", "Squiggly"]:
-                    # Get text from annotation rectangle
-                    rect = annot.rect
-                    text = page.get_textbox(rect).strip()
+                if annot_type_raw in ("Highlight", "Underline", "StrikeOut", "Squiggly"):
+                    text = page.get_textbox(annot.rect).strip()
 
-                # Extract note/comment
                 note_content = annot.info.get("content", "").strip()
 
-                # Extract timestamp
-                mod_date = annot.info.get("modDate", "")
-                timestamp = ""
-                if mod_date:
-                    # Parse PDF date format: D:YYYYMMDDHHmmSS
-                    try:
-                        if mod_date.startswith("D:"):
-                            date_str = mod_date[2:16]  # YYYYMMDDHHmmSS
-                            timestamp = datetime.strptime(date_str, "%Y%m%d%H%M%S").isoformat()
-                    except (ValueError, IndexError):
-                        timestamp = mod_date
+                timestamp = _parse_pdf_date(annot.info.get("modDate", ""))
 
-                # Determine annotation type
-                if annot_type_raw in ["Highlight", "Underline"]:
+                if annot_type_raw in ("Highlight", "Underline"):
                     anno_type = "highlight"
-                elif annot_type_raw in ["Text", "FreeText"]:
+                elif annot_type_raw in ("Text", "FreeText"):
                     anno_type = "note"
                 else:
                     anno_type = "bookmark"
 
-                # Calculate position in document
                 pos_frac = (page_num + 1) / total_pages if total_pages > 0 else 0
 
                 annotations.append({
@@ -502,8 +444,7 @@ def get_pdf_annotations(pdf_path: str) -> List[Dict[str, Any]]:
 
         doc.close()
 
-    except Exception as e:
-        # Silently fail if PDF cannot be read
+    except Exception:
         pass
 
     return annotations
@@ -516,8 +457,8 @@ def get_combined_annotations(
     exclude_toc_markers: bool = True,
     min_length: int = 20,
     exclude_first_percent: float = 5.0,
-    annotation_types: Optional[List[str]] = None
-) -> Dict[str, Any]:
+    annotation_types: Optional[list[str]] = None
+) -> dict[str, Any]:
     """
     Get annotations from both Calibre Viewer and PDF (if applicable).
 
@@ -538,19 +479,15 @@ def get_combined_annotations(
     """
     all_annotations = []
 
-    # Get Calibre Viewer annotations
     calibre_annots = get_book_annotations(book_path, annotations_dir)
     if calibre_annots:
         for annot in calibre_annots:
             annot['source'] = 'calibre_viewer'
         all_annotations.extend(calibre_annots)
 
-    # Get PDF annotations if requested and file is PDF
     if include_pdf and book_path.lower().endswith('.pdf'):
-        pdf_annots = get_pdf_annotations(book_path)
-        all_annotations.extend(pdf_annots)
+        all_annotations.extend(get_pdf_annotations(book_path))
 
-    # Apply filters
     filtered_annotations, exclusion_stats = filter_annotations(
         all_annotations,
         exclude_toc_markers=exclude_toc_markers,
@@ -559,7 +496,6 @@ def get_combined_annotations(
         annotation_types=annotation_types
     )
 
-    # Get book title from path
     book_title = Path(book_path).stem
 
     return {

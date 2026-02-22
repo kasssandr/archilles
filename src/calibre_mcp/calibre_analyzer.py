@@ -4,13 +4,13 @@ Calibre Metadata Analyzer
 A tool to analyze and evaluate Calibre library metadata.
 """
 
-import sqlite3
 import argparse
-import sys
-from pathlib import Path
-from collections import Counter, defaultdict
-from datetime import datetime
 import json
+import re
+import sqlite3
+import sys
+from collections import defaultdict
+from pathlib import Path
 
 
 class CalibreAnalyzer:
@@ -35,6 +35,17 @@ class CalibreAnalyzer:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.conn.close()
+
+    def _get_publisher(self, book_id: int) -> str:
+        """Get the publisher name for a book, or empty string if none."""
+        cursor = self.conn.execute("""
+            SELECT p.name
+            FROM publishers p
+            JOIN books_publishers_link bpl ON p.id = bpl.publisher
+            WHERE bpl.book = ?
+        """, (book_id,))
+        row = cursor.fetchone()
+        return row['name'] if row else ''
 
     def get_total_books(self):
         """Get total number of books in the library"""
@@ -239,25 +250,20 @@ class CalibreAnalyzer:
         return book_dict
 
     def normalize_title(self, title):
-        """Normalize title for comparison (remove articles, punctuation, lowercase)"""
+        """Normalize title for comparison (remove articles, punctuation, lowercase)."""
         if not title:
             return ""
 
-        # Convert to lowercase
         title = title.lower()
 
-        # Remove common articles in multiple languages
         articles = ['the ', 'a ', 'an ', 'der ', 'die ', 'das ', 'ein ', 'eine ',
                     'le ', 'la ', 'les ', 'un ', 'une ', 'el ', 'la ', 'los ', 'las ']
         for article in articles:
             if title.startswith(article):
                 title = title[len(article):]
 
-        # Remove punctuation and extra spaces
-        import re
         title = re.sub(r'[^\w\s]', '', title)
         title = re.sub(r'\s+', ' ', title).strip()
-
         return title
 
     def detect_duplicates(self, method='title_author', include_doublette_tag=True,
@@ -473,19 +479,19 @@ class CalibreAnalyzer:
         # Get full details for each book
         books = [self.get_book_details(book_id) for book_id in book_ids]
 
-        # Export in requested format
-        if format == 'bibtex':
-            exported = self._export_bibtex(books)
-        elif format == 'ris':
-            exported = self._export_ris(books)
-        elif format == 'endnote':
-            exported = self._export_endnote(books)
-        elif format == 'json':
-            exported = json.dumps(books, indent=2, ensure_ascii=False)
-        elif format == 'csv':
-            exported = self._export_csv(books)
-        else:
+        exporters = {
+            'bibtex': self._export_bibtex,
+            'ris': self._export_ris,
+            'endnote': self._export_endnote,
+            'json': lambda b: json.dumps(b, indent=2, ensure_ascii=False),
+            'csv': self._export_csv,
+        }
+
+        exporter = exporters.get(format)
+        if not exporter:
             return {'error': f'Unsupported format: {format}'}
+
+        exported = exporter(books)
 
         return {
             'format': format,
@@ -520,17 +526,9 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"  year = {{{book['pubdate'][:4]}}},\n"
 
-            # Get publisher info
-            query = """
-            SELECT p.name
-            FROM publishers p
-            JOIN books_publishers_link bpl ON p.id = bpl.publisher
-            WHERE bpl.book = ?
-            """
-            cursor = self.conn.execute(query, (book['id'],))
-            publisher = cursor.fetchone()
+            publisher = self._get_publisher(book['id'])
             if publisher:
-                entry += f"  publisher = {{{publisher['name']}}},\n"
+                entry += f"  publisher = {{{publisher}}},\n"
 
             if book['identifiers'].get('isbn'):
                 entry += f"  isbn = {{{book['identifiers']['isbn']}}},\n"
@@ -558,17 +556,9 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"PY  - {book['pubdate'][:4]}\n"
 
-            # Get publisher
-            query = """
-            SELECT p.name
-            FROM publishers p
-            JOIN books_publishers_link bpl ON p.id = bpl.publisher
-            WHERE bpl.book = ?
-            """
-            cursor = self.conn.execute(query, (book['id'],))
-            publisher = cursor.fetchone()
+            publisher = self._get_publisher(book['id'])
             if publisher:
-                entry += f"PB  - {publisher['name']}\n"
+                entry += f"PB  - {publisher}\n"
 
             if book['identifiers'].get('isbn'):
                 entry += f"SN  - {book['identifiers']['isbn']}\n"
@@ -595,17 +585,9 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"%D {book['pubdate'][:4]}\n"
 
-            # Get publisher
-            query = """
-            SELECT p.name
-            FROM publishers p
-            JOIN books_publishers_link bpl ON p.id = bpl.publisher
-            WHERE bpl.book = ?
-            """
-            cursor = self.conn.execute(query, (book['id'],))
-            publisher = cursor.fetchone()
+            publisher = self._get_publisher(book['id'])
             if publisher:
-                entry += f"%I {publisher['name']}\n"
+                entry += f"%I {publisher}\n"
 
             if book['identifiers'].get('isbn'):
                 entry += f"%@ {book['identifiers']['isbn']}\n"
@@ -624,22 +606,10 @@ class CalibreAnalyzer:
 
         output = StringIO()
         writer = csv.writer(output)
-
-        # Write header
         writer.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
 
-        # Write data
         for book in books:
-            # Get publisher
-            query = """
-            SELECT p.name
-            FROM publishers p
-            JOIN books_publishers_link bpl ON p.id = bpl.publisher
-            WHERE bpl.book = ?
-            """
-            cursor = self.conn.execute(query, (book['id'],))
-            publisher = cursor.fetchone()
-            publisher_name = publisher['name'] if publisher else ''
+            publisher_name = self._get_publisher(book['id'])
 
             writer.writerow([
                 book['id'],

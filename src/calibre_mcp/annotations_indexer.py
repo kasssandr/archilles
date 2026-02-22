@@ -9,8 +9,7 @@ Creates embeddings for annotations (highlights + notes) for fast semantic retrie
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import Any, Optional
 
 try:
     import chromadb
@@ -29,7 +28,7 @@ from .annotations import (
 logger = logging.getLogger(__name__)
 
 
-def load_config() -> Dict[str, Any]:
+def load_config() -> dict[str, Any]:
     """
     Load configuration from .archilles/config.json if available.
 
@@ -149,7 +148,7 @@ class AnnotationsIndexer:
             }
         )
 
-    def _create_hash_to_book_mapping(self) -> Dict[str, Dict[str, Any]]:
+    def _create_hash_to_book_mapping(self) -> Dict[str, dict[str, Any]]:
         """
         Create mapping from annotation hash to book metadata.
 
@@ -183,21 +182,16 @@ class AnnotationsIndexer:
 
         hash_mapping = {}
 
-        # Generate comprehensive path variants
-        path_bases = []
+        path_bases = [str(self.library_path)]
 
-        # 1. Current library path
-        path_bases.append(str(self.library_path))
-
-        # 2. All drive letters (A: through Z:) - comprehensive search
+        # Try all drive letters with the current path suffix
         current_path_without_drive = str(self.library_path)[2:] if len(str(self.library_path)) > 2 else ""
-
         if current_path_without_drive:
             for letter in 'CDEFGHIJKLMNOPQRSTUVWXYZ':
                 path_bases.append(f"{letter}:{current_path_without_drive}")
 
-        # 3. Common library locations with all drives
-        library_name = Path(self.library_path).name  # e.g., "Calibre-Bibliothek"
+        # Common library locations with typical drive letters
+        library_name = Path(self.library_path).name
         common_parent_paths = [
             "",  # Root
             "\\Users\\tomra",
@@ -226,7 +220,7 @@ class AnnotationsIndexer:
                 for lib_name in library_name_variants[:3]:
                     path_bases.append(f"{letter}:{parent}\\{lib_name}")
 
-        # Remove duplicates while preserving order
+        # Deduplicate while preserving order
         seen = set()
         path_bases = [x for x in path_bases if not (x in seen or seen.add(x))]
 
@@ -236,7 +230,6 @@ class AnnotationsIndexer:
             conn = sqlite3.connect(str(db_path))
             conn.row_factory = sqlite3.Row
 
-            # Query to get all books with their paths and metadata
             query = """
             SELECT
                 books.id,
@@ -260,14 +253,13 @@ class AnnotationsIndexer:
             books_matched = 0
 
             for row in rows:
-                relative_path = row['path']  # e.g., "Author\Title (123)"
-                fmt = row['format']  # e.g., "EPUB" (always uppercase in DB)
+                relative_path = row['path']
+                fmt = row['format']
 
-                # Calibre stores format uppercase in DB but files use lowercase
-                # extension on disk. Test both variants to maximize match rate.
+                # Test both lowercase (disk) and uppercase (DB) extensions
                 filename_variants = [
-                    f"{row['filename']}.{fmt.lower()}",   # book.epub (actual disk format)
-                    f"{row['filename']}.{fmt}",           # book.EPUB (DB format)
+                    f"{row['filename']}.{fmt.lower()}",
+                    f"{row['filename']}.{fmt}",
                 ]
 
                 book_metadata = {
@@ -280,37 +272,27 @@ class AnnotationsIndexer:
                 current_path = Path(self.library_path) / relative_path / filename_variants[0]
                 book_matched = False
 
-                # Test all path variants for this book
                 for base_path in path_bases:
                     for filename in filename_variants:
                         try:
-                            # Construct full path with this base
                             test_path_str = f"{base_path}\\{relative_path}\\{filename}"
 
-                            # Normalize separators in relative_path too
-                            # (metadata.db may store with / or \ depending on OS)
-                            test_path_backslash = test_path_str.replace('/', '\\')
-                            test_path_forward = test_path_str.replace('\\', '/')
+                            path_variants = {
+                                test_path_str.replace('/', '\\'),
+                                test_path_str.replace('\\', '/'),
+                                str(Path(test_path_str)),
+                            }
 
-                            # Test multiple slash variants (Windows path normalization)
-                            path_variants = [
-                                test_path_backslash,  # All backslashes
-                                test_path_forward,    # All forward slashes
-                                str(Path(test_path_str)),  # Platform normalized
-                            ]
-
-                            for path_variant in set(path_variants):  # Remove duplicates
+                            for path_variant in path_variants:
                                 test_hash = compute_book_hash(path_variant)
-
                                 if test_hash not in hash_mapping:
                                     hash_mapping[test_hash] = {
                                         **book_metadata,
-                                        'path': str(current_path),  # Store current path
-                                        'original_path_base': base_path  # Track which base worked
+                                        'path': str(current_path),
+                                        'original_path_base': base_path
                                     }
                                     book_matched = True
                         except Exception:
-                            # Skip invalid path combinations
                             continue
 
                 if book_matched:
@@ -329,8 +311,8 @@ class AnnotationsIndexer:
         self,
         annotation_hash: str,
         annotation_file: Path,
-        calibre_books: List[Dict[str, Any]]
-    ) -> Optional[Dict[str, Any]]:
+        calibre_books: list[dict[str, Any]]
+    ) -> Optional[dict[str, Any]]:
         """
         Fallback: Try to match annotation to book using fuzzy matching.
 
@@ -429,7 +411,7 @@ class AnnotationsIndexer:
         """Create unique ID for annotation."""
         return f"{book_hash}_anno_{index}"
 
-    def _prepare_annotation_text(self, annotation: Dict[str, Any]) -> str:
+    def _prepare_annotation_text(self, annotation: dict[str, Any]) -> str:
         """
         Prepare annotation text for embedding.
 
@@ -442,11 +424,9 @@ class AnnotationsIndexer:
 
         highlighted = annotation.get('highlighted_text', '').strip()
         if highlighted:
-            # Check if text is spaced (more than 30% single chars separated by spaces/newlines)
             words = re.split(r'\s+', highlighted)
             single_chars = sum(1 for w in words if len(w) <= 2)
             if len(words) > 10 and single_chars / len(words) > 0.3:
-                # Likely spaced/locked text - skip
                 return ""
             text_parts.append(highlighted)
 
@@ -458,17 +438,15 @@ class AnnotationsIndexer:
 
     def _prepare_annotation_metadata(
         self,
-        annotation: Dict[str, Any],
+        annotation: dict[str, Any],
         book_hash: str,
         book_path: str,
         book_title: Optional[str] = None,
         book_author: Optional[str] = None,
         book_id: Optional[int] = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
-        Prepare metadata for annotation.
-
-        ChromaDB requires metadata values to be str, int, float, or bool.
+        Prepare metadata for ChromaDB (values must be str, int, float, or bool).
         """
         metadata = {
             'book_hash': book_hash,
@@ -477,22 +455,17 @@ class AnnotationsIndexer:
             'source': annotation.get('source', 'unknown'),
         }
 
-        # Add book metadata if available
         if book_title:
             metadata['book_title'] = str(book_title)
-
         if book_author:
             metadata['book_author'] = str(book_author)
-
         if book_id is not None:
             metadata['book_id'] = int(book_id)
 
-        # Add timestamp if available
         timestamp = annotation.get('timestamp', '')
         if timestamp:
             metadata['timestamp'] = str(timestamp)
 
-        # Add page/position if available
         page = annotation.get('page')
         if page is not None:
             metadata['page'] = int(page)
@@ -587,7 +560,7 @@ class AnnotationsIndexer:
         exclude_toc_markers: bool = True,
         min_length: int = 20,
         force_reindex: bool = False
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """
         Index all annotations from all books in the library.
 
@@ -613,16 +586,13 @@ class AnnotationsIndexer:
             'fuzzy_matched': 0
         }
 
-        # Get all annotated books
         annotated_books = list_all_annotated_books(self.annotations_dir)
-
         if not annotated_books:
             logger.warning("No annotated books found")
             return stats
 
         stats['total_books'] = len(annotated_books)
 
-        # Create hash-to-book mapping from Calibre library
         logger.info("Creating hash-to-book mapping from Calibre library...")
         hash_mapping = self._create_hash_to_book_mapping()
 
@@ -631,7 +601,6 @@ class AnnotationsIndexer:
         else:
             logger.warning("No hash mapping available - will use placeholder paths")
 
-        # Get all Calibre books for fuzzy matching fallback
         calibre_books = []
         if self.library_path:
             try:
@@ -657,7 +626,6 @@ class AnnotationsIndexer:
             except Exception as e:
                 logger.debug(f"Could not load Calibre books for fuzzy matching: {e}")
 
-        # Report hash matching effectiveness
         if hash_mapping:
             annots_dir_path = Path(self.annotations_dir)
             actual_anno_hashes = {f.stem for f in annots_dir_path.glob("*.json")}
@@ -677,12 +645,10 @@ class AnnotationsIndexer:
             else:
                 logger.warning("No direct hash matches found - will use fuzzy matching for all books")
 
-        # Index annotations for each book
         for book_info in annotated_books:
             book_hash = book_info['hash']
 
             try:
-                # Check if already indexed (unless force reindex)
                 if not force_reindex:
                     existing = self.collection.get(
                         where={"book_hash": book_hash},
@@ -692,12 +658,10 @@ class AnnotationsIndexer:
                         stats['skipped_books'] += 1
                         continue
 
-                # Get book metadata from hash mapping
                 book_meta = hash_mapping.get(book_hash, {})
                 if book_meta:
                     stats['hash_matched'] += 1
 
-                # If hash didn't match, try fuzzy matching
                 if not book_meta and calibre_books:
                     anno_file = Path(self.annotations_dir) / f"{book_hash}.json"
                     book_meta = self._fuzzy_match_book(book_hash, anno_file, calibre_books)
@@ -706,7 +670,6 @@ class AnnotationsIndexer:
                         logger.info(f"Fuzzy matched annotation {book_hash[:12]} to '{book_meta.get('title', 'Unknown')}'")
 
                 if not book_meta:
-                    # No metadata found - use placeholder
                     book_meta = {
                         'title': f'Unknown (hash: {book_hash[:12]}...)',
                         'author': 'Unknown',
@@ -715,7 +678,6 @@ class AnnotationsIndexer:
                     }
                     stats['books_without_metadata'] += 1
 
-                # Read annotations file
                 anno_file = Path(self.annotations_dir) / f"{book_hash}.json"
                 if not anno_file.exists():
                     continue
@@ -726,13 +688,11 @@ class AnnotationsIndexer:
                 if not isinstance(annotations, list):
                     continue
 
-                # Prepare for indexing
                 ids = []
                 documents = []
                 metadatas = []
 
                 for idx, annotation in enumerate(annotations):
-                    # Apply filters
                     if exclude_toc_markers:
                         from .annotations import is_toc_marker
                         if is_toc_marker(annotation, min_length):
@@ -756,7 +716,6 @@ class AnnotationsIndexer:
                     documents.append(text)
                     metadatas.append(metadata)
 
-                # Index batch
                 if ids:
                     self.collection.upsert(
                         ids=ids,
@@ -788,9 +747,9 @@ class AnnotationsIndexer:
         self,
         query: str,
         n_results: int = 10,
-        filter_metadata: Optional[Dict[str, Any]] = None,
+        filter_metadata: Optional[dict[str, Any]] = None,
         max_per_book: Optional[int] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Semantic search through annotations.
 
@@ -803,74 +762,66 @@ class AnnotationsIndexer:
         Returns:
             List of matching annotations with metadata and scores
         """
-        # Fetch more results if we're limiting per book
         fetch_count = n_results * 3 if max_per_book else n_results
-
         results = self.collection.query(
             query_texts=[query],
             n_results=fetch_count,
             where=filter_metadata
         )
 
-        # Format results
         formatted_results = []
+        if not (results['ids'] and results['ids'][0]):
+            return formatted_results
 
-        if results['ids'] and results['ids'][0]:
-            book_counts = {}
+        book_counts: dict[str, int] = {}
 
-            for i in range(len(results['ids'][0])):
-                metadata = results['metadatas'][0][i]
-                book_hash = metadata.get('book_hash', 'unknown')
+        for i in range(len(results['ids'][0])):
+            metadata = results['metadatas'][0][i]
+            book_hash = metadata.get('book_hash', 'unknown')
 
-                # Check per-book limit
-                if max_per_book:
-                    book_counts[book_hash] = book_counts.get(book_hash, 0) + 1
-                    if book_counts[book_hash] > max_per_book:
-                        continue
+            if max_per_book:
+                book_counts[book_hash] = book_counts.get(book_hash, 0) + 1
+                if book_counts[book_hash] > max_per_book:
+                    continue
 
-                formatted_results.append({
-                    'id': results['ids'][0][i],
-                    'text': results['documents'][0][i],
-                    'metadata': metadata,
-                    'distance': results['distances'][0][i] if 'distances' in results else None
-                })
+            formatted_results.append({
+                'id': results['ids'][0][i],
+                'text': results['documents'][0][i],
+                'metadata': metadata,
+                'distance': results['distances'][0][i] if 'distances' in results else None
+            })
 
-                # Stop when we have enough results
-                if len(formatted_results) >= n_results:
-                    break
+            if len(formatted_results) >= n_results:
+                break
 
         return formatted_results
 
-    def get_collection_stats(self) -> Dict[str, Any]:
+    def get_collection_stats(self) -> dict[str, Any]:
         """Get statistics about the indexed annotations."""
         count = self.collection.count()
+        if count == 0:
+            return {'total_annotations': 0}
 
-        # Get sample to analyze
-        if count > 0:
-            sample = self.collection.get(limit=min(1000, count))
+        sample = self.collection.get(limit=min(1000, count))
 
-            # Count by type
-            type_counts = {}
-            source_counts = {}
+        type_counts: dict[str, int] = {}
+        source_counts: dict[str, int] = {}
 
-            for metadata in sample['metadatas']:
-                anno_type = metadata.get('type', 'unknown')
-                type_counts[anno_type] = type_counts.get(anno_type, 0) + 1
+        for metadata in sample['metadatas']:
+            anno_type = metadata.get('type', 'unknown')
+            type_counts[anno_type] = type_counts.get(anno_type, 0) + 1
 
-                source = metadata.get('source', 'unknown')
-                source_counts[source] = source_counts.get(source, 0) + 1
+            source = metadata.get('source', 'unknown')
+            source_counts[source] = source_counts.get(source, 0) + 1
 
-            # Count unique books
-            unique_books = len(set(m.get('book_hash') for m in sample['metadatas']))
+        unique_books = len(set(m.get('book_hash') for m in sample['metadatas']))
 
-            return {
-                'total_annotations': count,
-                'unique_books_sampled': unique_books,
-                'type_distribution': type_counts,
-                'source_distribution': source_counts
-            }
-
-        return {'total_annotations': 0}
+        return {
+            'total_annotations': count,
+            'unique_books_sampled': unique_books,
+            'type_distribution': type_counts,
+            'source_distribution': source_counts
+        }
 
     def clear_index(self):
         """Clear all annotations from the index."""

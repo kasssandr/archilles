@@ -50,15 +50,15 @@ Usage:
     python scripts/batch_index.py --all --filter-author "Tucholsky"
 """
 
-import sys
 import argparse
-import sqlite3
 import json
-import time
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import os
+import sqlite3
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -71,6 +71,9 @@ from scripts.find_books_missing_labels import find_books_missing_labels
 # Hardware-adaptive profile system
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
+
+# Preferred book formats in order of priority
+PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3']
 
 
 def get_calibre_library_path() -> Path:
@@ -91,6 +94,53 @@ def get_calibre_library_path() -> Path:
         print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
         sys.exit(1)
     return Path(library_path)
+
+
+def _discover_formats(book_path: Path) -> List[Dict[str, str]]:
+    """Find available book formats in a Calibre book directory."""
+    formats = []
+    for ext in PREFERRED_FORMATS:
+        for file in book_path.glob(f'*{ext}'):
+            formats.append({
+                'format': ext[1:].upper(),
+                'path': str(file)
+            })
+    return formats
+
+
+def _select_best_format(formats: List[Dict[str, str]]) -> Dict[str, str]:
+    """Select the best format from available formats (PDF > EPUB > first available)."""
+    for preferred in ('PDF', 'EPUB'):
+        for f in formats:
+            if f['format'] == preferred:
+                return f
+    return formats[0]
+
+
+def _build_book_entry(row: sqlite3.Row, library_path: Path, include_rating: bool = False) -> Optional[Dict[str, Any]]:
+    """Build a standardized book dictionary from a database row.
+
+    Returns None if the book has no supported formats on disk.
+    """
+    book_path = library_path / row['path']
+    formats = _discover_formats(book_path)
+
+    if not formats:
+        return None
+
+    entry = {
+        'id': row['id'],
+        'title': row['title'],
+        'author': row['author'] or 'Unknown',
+        'path': str(book_path),
+        'formats': formats,
+        'best_format': _select_best_format(formats),
+    }
+
+    if include_rating:
+        entry['rating'] = row['rating'] // 2 if row['rating'] else 0
+
+    return entry
 
 
 def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exclude_tags: List[str] = None, rating: Optional[int] = None, author_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -193,32 +243,9 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
 
     books = []
     for row in rows:
-        book_path = library_path / row['path']
-
-        # Find available formats (prefer PDF, then EPUB)
-        formats = []
-        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
-            for file in book_path.glob(f'*{ext}'):
-                formats.append({
-                    'format': ext[1:].upper(),
-                    'path': str(file)
-                })
-
-        if formats:
-            rating = row['rating'] // 2 if row['rating'] else 0
-            books.append({
-                'id': row['id'],
-                'title': row['title'],
-                'author': row['author'] or 'Unknown',
-                'rating': rating,
-                'path': str(book_path),
-                'formats': formats,
-                # Prefer PDF > EPUB > others
-                'best_format': next(
-                    (f for f in formats if f['format'] == 'PDF'),
-                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
-                )
-            })
+        entry = _build_book_entry(row, library_path, include_rating=True)
+        if entry:
+            books.append(entry)
 
     conn.close()
     return books
@@ -279,29 +306,9 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None)
 
     books = []
     for row in rows:
-        book_path = library_path / row['path']
-
-        # Find available formats
-        formats = []
-        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
-            for file in book_path.glob(f'*{ext}'):
-                formats.append({
-                    'format': ext[1:].upper(),
-                    'path': str(file)
-                })
-
-        if formats:
-            books.append({
-                'id': row['id'],
-                'title': row['title'],
-                'author': row['author'] or 'Unknown',
-                'path': str(book_path),
-                'formats': formats,
-                'best_format': next(
-                    (f for f in formats if f['format'] == 'PDF'),
-                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
-                )
-            })
+        entry = _build_book_entry(row, library_path)
+        if entry:
+            books.append(entry)
 
     conn.close()
     return books
@@ -369,31 +376,9 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
 
     books = []
     for row in rows:
-        book_path = library_path / row['path']
-
-        # Find available formats
-        formats = []
-        for ext in ['.pdf', '.epub', '.mobi', '.azw3']:
-            for file in book_path.glob(f'*{ext}'):
-                formats.append({
-                    'format': ext[1:].upper(),
-                    'path': str(file)
-                })
-
-        if formats:
-            rating_val = row['rating'] // 2 if row['rating'] else 0
-            books.append({
-                'id': row['id'],
-                'title': row['title'],
-                'author': row['author'] or 'Unknown',
-                'rating': rating_val,
-                'path': str(book_path),
-                'formats': formats,
-                'best_format': next(
-                    (f for f in formats if f['format'] == 'PDF'),
-                    next((f for f in formats if f['format'] == 'EPUB'), formats[0])
-                )
-            })
+        entry = _build_book_entry(row, library_path, include_rating=True)
+        if entry:
+            books.append(entry)
 
     conn.close()
     return books
@@ -583,12 +568,7 @@ def batch_index(
         print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
         print(f"         Format: {format_type} | ID: {book_id}")
 
-        # Skip logic:
-        # --force: never skip, always re-index everything
-        # --skip-existing: pass to index_book() which checks metadata/annotation hashes
-        #   → unchanged books are skipped, changed metadata/annotations get a fast update
-        # default (neither): let index_book() decide (it skips if chunks exist)
-        force_reindex = force or reindex_before or reindex_missing_labels
+        should_force = force or reindex_before is not None or reindex_missing_labels
 
         if dry_run:
             print(f"         🔍 Would index: {file_path}")
@@ -602,8 +582,6 @@ def batch_index(
         # Actually index the book
         try:
             start_time = time.time()
-            # Use force=True when re-indexing old books, missing labels, or --force
-            should_force = force or reindex_before is not None or reindex_missing_labels
             result = rag.index_book(file_path, book_id, force=should_force, phase=phase)
             elapsed = time.time() - start_time
 
@@ -638,7 +616,7 @@ def batch_index(
                 continue
 
             # Regular indexing completed
-            if force_reindex:
+            if should_force:
                 print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
             else:
                 print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
@@ -880,10 +858,10 @@ Profiles:
     print(f"    Chunk size: {profile.chunk_size} tokens")
 
     # Get books based on criteria
-    min_rating = getattr(args, 'min_rating', None) or 0
-    rating = getattr(args, 'rating', None)
-    filter_authors = getattr(args, 'filter_authors', None)
-    if getattr(args, 'all', False):
+    min_rating = args.min_rating or 0
+    rating = args.rating
+    filter_authors = args.filter_authors
+    if args.all:
         print(f"📚 Indexing ALL books in the library")
         if filter_authors:
             print(f"  Author filter: {', '.join(filter_authors)}")
@@ -897,7 +875,7 @@ Profiles:
                 print(f"  Exact rating: no rating (NULL)")
             else:
                 print(f"  Exact rating: {'*' * rating} ({rating} stars)")
-        exclude_tags = getattr(args, 'exclude_tags', None)
+        exclude_tags = args.exclude_tags
         if exclude_tags:
             print(f"  Excluding tags: {', '.join(exclude_tags)}")
         if filter_authors:
@@ -948,8 +926,8 @@ Profiles:
                 enable_ocr=args.enable_ocr,
                 force_ocr=args.force_ocr,
                 profile=profile_name,
-                hierarchical=getattr(args, 'hierarchical', False),
-                use_modular_pipeline=getattr(args, 'use_modular_pipeline', False)
+                hierarchical=args.hierarchical,
+                use_modular_pipeline=args.use_modular_pipeline
             )
         except ChromaDBCorruptionError as e:
             # ChromaDB is corrupted - show helpful error message

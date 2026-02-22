@@ -13,10 +13,10 @@ Features:
 """
 
 import sqlite3
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 
 class ProgressTracker:
@@ -287,7 +287,7 @@ class ProgressTracker:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT * FROM sessions
-                WHERE status = 'running' OR status = 'interrupted'
+                WHERE status IN ('running', 'interrupted')
                 ORDER BY start_time DESC
             """)
 

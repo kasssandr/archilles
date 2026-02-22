@@ -9,16 +9,16 @@ Environment:
     CALIBRE_LIBRARY_PATH: Path to Calibre library (required)
 """
 
+import os
+import re
 import sys
 from pathlib import Path
+from typing import Any, Dict, List
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import os
 import streamlit as st
-from typing import List, Dict, Any
-import re
 
 # Page config must be first Streamlit command
 st.set_page_config(
@@ -119,6 +119,15 @@ def extract_snippet(text: str, query_terms: List[str], context_chars: int = 200)
     return snippet
 
 
+def _get_result_field(result: Dict[str, Any], key: str, default: Any = '') -> Any:
+    """Extract a field from result metadata with fallback to top-level result dict."""
+    metadata = result.get('metadata', {})
+    value = metadata.get(key, default)
+    if not value:
+        value = result.get(key, default)
+    return value
+
+
 def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
                   show_expanded_context: bool = False, service=None):
     """Render a single search result."""
@@ -126,33 +135,34 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
     text = result.get('text', '')
 
     # Extract metadata (nested in 'metadata' dict from query results)
-    metadata = result.get('metadata', {})
-    book_title = metadata.get('book_title', '') or result.get('book_title', 'Unknown')
-    author = metadata.get('author', '') or result.get('author', '')
-    year = metadata.get('year', 0) or result.get('year', 0)
-    language = metadata.get('language', '') or result.get('language', '')
-    page = metadata.get('page_number', 0) or result.get('page_number', 0)
-    page_label = metadata.get('page_label', '') or result.get('page_label', '')
-    section_type = metadata.get('section_type', '') or result.get('section_type', '')
-    tags = metadata.get('tags', '') or result.get('tags', '')
-    calibre_id = metadata.get('calibre_id', 0) or result.get('calibre_id', 0)
-    chapter = metadata.get('chapter', '') or result.get('chapter', '')
-    section_title = metadata.get('section_title', '') or result.get('section_title', '')
-    chunk_type = metadata.get('chunk_type', '') or result.get('chunk_type', '')
-    window_text = metadata.get('window_text', '') or ''
-    parent_id = metadata.get('parent_id', '') or ''
+    book_title = _get_result_field(result, 'book_title', 'Unknown')
+    author = _get_result_field(result, 'author')
+    year = _get_result_field(result, 'year', 0)
+    language = _get_result_field(result, 'language')
+    page = _get_result_field(result, 'page_number', 0)
+    page_label = _get_result_field(result, 'page_label')
+    section_type = _get_result_field(result, 'section_type')
+    tags = _get_result_field(result, 'tags')
+    calibre_id = _get_result_field(result, 'calibre_id', 0)
+    chapter = _get_result_field(result, 'chapter')
+    section_title = _get_result_field(result, 'section_title')
+    chunk_type = _get_result_field(result, 'chunk_type')
+    window_text = _get_result_field(result, 'window_text')
+    parent_id = _get_result_field(result, 'parent_id')
 
     # Fallback for title
     if not book_title or book_title == 'Unknown':
-        book_title = metadata.get('title', '') or 'Unknown'
+        book_title = result.get('metadata', {}).get('title', '') or 'Unknown'
 
-    # Score color — adapt to score range (RRF scores are much smaller than cosine)
-    if score > 0.5:
-        # Cosine similarity range (semantic mode)
-        score_color = "green" if score > 0.8 else "orange"
+    # Score color -- adapt to score range (RRF scores are much smaller than cosine)
+    if score > 0.8:
+        score_color = "green"      # High cosine similarity (semantic mode)
+    elif score > 0.5:
+        score_color = "orange"     # Moderate cosine similarity
+    elif score > 0.03:
+        score_color = "green"      # High RRF score (hybrid mode)
     elif score > 0:
-        # RRF range (hybrid mode) — rank-based, typically 0.01-0.05
-        score_color = "green" if score > 0.03 else "orange"
+        score_color = "orange"     # Low RRF score
     else:
         score_color = "gray"
 

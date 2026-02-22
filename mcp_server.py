@@ -46,42 +46,30 @@ from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 sys.stdout = _original_stdout
 
 
+TOOL_MAP = {
+    'get_book_annotations': 'get_book_annotations_tool',
+    'search_annotations': 'search_annotations_tool',
+    'list_annotated_books': 'list_annotated_books_tool',
+    'compute_annotation_hash': 'compute_hash_tool',
+    'index_annotations': 'index_annotations_tool',
+    'get_index_stats': 'get_index_stats_tool',
+    'detect_duplicates': 'detect_duplicates_tool',
+    'get_book_details': 'get_book_details_tool',
+    'get_doublette_tag_instruction': 'get_doublette_tag_instruction_tool',
+    'export_bibliography': 'export_bibliography_tool',
+    'list_books_by_author': 'list_books_by_author_tool',
+    'list_tags': 'list_tags_tool',
+    'search_books_with_citations': 'search_books_with_citations_tool',
+}
+
+
 async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
-    """
-    Handle an MCP request by calling the appropriate server method.
-
-    Args:
-        server: The CalibreMCPServer instance
-        method: The tool method name
-        params: The parameters for the method
-
-    Returns:
-        Result dictionary
-    """
+    """Handle an MCP request by dispatching to the appropriate server method."""
     try:
-        # Map tool names to server methods
-        tool_map = {
-            'get_book_annotations': server.get_book_annotations_tool,
-            'search_annotations': server.search_annotations_tool,
-            'list_annotated_books': server.list_annotated_books_tool,
-            'compute_annotation_hash': server.compute_hash_tool,
-            'index_annotations': server.index_annotations_tool,
-            'get_index_stats': server.get_index_stats_tool,
-            'detect_duplicates': server.detect_duplicates_tool,
-            'get_book_details': server.get_book_details_tool,
-            'get_doublette_tag_instruction': server.get_doublette_tag_instruction_tool,
-            'export_bibliography': server.export_bibliography_tool,
-            'list_books_by_author': server.list_books_by_author_tool,
-            'list_tags': server.list_tags_tool,
-            'search_books_with_citations': server.search_books_with_citations_tool,
-        }
-
-        if method in tool_map:
-            result = tool_map[method](**params)
-            return result
-        else:
+        method_name = TOOL_MAP.get(method)
+        if not method_name:
             return {'error': f'Unknown method: {method}'}
-
+        return getattr(server, method_name)(**params)
     except Exception as e:
         logger.error(f"Error handling request {method}: {e}", exc_info=True)
         return {'error': str(e)}
@@ -95,29 +83,17 @@ async def stdio_server(server: CalibreMCPServer):
     """
     logger.info("Starting ARCHILLES MCP Server (stdio mode)")
 
-    # Ensure stdin/stdout are in proper mode for MCP protocol
-    # This is especially important on Windows where buffering can cause issues
-    import io
-
-    # Reconfigure stdin for line-buffered text mode
+    # Ensure line-buffered mode (important on Windows)
     if hasattr(sys.stdin, 'reconfigure'):
         sys.stdin.reconfigure(line_buffering=True)
-
-    # Reconfigure stdout for line-buffered text mode with explicit flushing
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(line_buffering=True)
 
-    logger.info("Configured stdio for MCP protocol (line-buffered mode)")
-
-    # Get tool definitions
     tools = create_mcp_tools(server)
-
-    # Log available tools
     logger.info(f"Registered {len(tools)} tools")
     for tool in tools:
         logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
 
-    # Process requests from stdin
     while True:
         try:
             line = sys.stdin.readline()
@@ -125,18 +101,16 @@ async def stdio_server(server: CalibreMCPServer):
                 break
 
             request = json.loads(line.strip())
-            logger.info(f"Received request: {request.get('method', 'unknown')}")
-
-            # Handle different request types
             request_id = request.get('id')
             method = request.get('method')
+            logger.info(f"Received request: {method or 'unknown'}")
 
-            # Handle notifications (no id, no response needed)
+            # Notifications have no id and need no response
             if request_id is None:
-                if method == 'notifications/initialized':
-                    logger.info("Client sent initialized notification")
-                else:
+                if method != 'notifications/initialized':
                     logger.warning(f"Received notification: {method}")
+                else:
+                    logger.info("Client sent initialized notification")
                 continue
 
             if method == 'initialize':
@@ -145,13 +119,8 @@ async def stdio_server(server: CalibreMCPServer):
                     'id': request_id,
                     'result': {
                         'protocolVersion': '2024-11-05',
-                        'capabilities': {
-                            'tools': {}
-                        },
-                        'serverInfo': {
-                            'name': 'archilles',
-                            'version': '1.0.0'
-                        }
+                        'capabilities': {'tools': {}},
+                        'serverInfo': {'name': 'archilles', 'version': '1.0.0'}
                     }
                 }
             elif method == 'tools/list':
@@ -163,61 +132,36 @@ async def stdio_server(server: CalibreMCPServer):
             elif method == 'tools/call':
                 tool_name = request['params']['name']
                 tool_params = request['params'].get('arguments', {})
-
                 result = await handle_request(server, tool_name, tool_params)
 
-                # MCP spec requires result.content array with text/image items
-                # Check if tool returned an error
-                if isinstance(result, dict) and 'error' in result:
-                    response = {
-                        'jsonrpc': '2.0',
-                        'id': request_id,
-                        'result': {
-                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}],
-                            'isError': True
-                        }
-                    }
-                else:
-                    response = {
-                        'jsonrpc': '2.0',
-                        'id': request_id,
-                        'result': {
-                            'content': [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}]
-                        }
-                    }
+                is_error = isinstance(result, dict) and 'error' in result
+                content = [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}]
+                result_payload = {'content': content}
+                if is_error:
+                    result_payload['isError'] = True
+
+                response = {'jsonrpc': '2.0', 'id': request_id, 'result': result_payload}
             else:
                 response = {
                     'jsonrpc': '2.0',
                     'id': request_id,
-                    'error': {
-                        'code': -32601,
-                        'message': f'Method not found: {method}'
-                    }
+                    'error': {'code': -32601, 'message': f'Method not found: {method}'}
                 }
 
-            # Send response
             sys.stdout.write(json.dumps(response) + '\n')
             sys.stdout.flush()
             logger.info(f"Sent response for request {request_id}")
 
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
-            # Don't send error response - client will timeout and retry
             continue
         except Exception as e:
             logger.error(f"Error processing request: {e}", exc_info=True)
-            # Try to extract id from request, fallback to -1 if not available
-            error_id = -1
-            if 'request' in locals() and isinstance(request, dict):
-                error_id = request.get('id', -1)
-
+            error_id = request.get('id', -1) if 'request' in locals() and isinstance(request, dict) else -1
             error_response = {
                 'jsonrpc': '2.0',
                 'id': error_id,
-                'error': {
-                    'code': -32603,
-                    'message': str(e)
-                }
+                'error': {'code': -32603, 'message': str(e)}
             }
             sys.stdout.write(json.dumps(error_response) + '\n')
             sys.stdout.flush()
@@ -245,10 +189,8 @@ def main():
         sys.stderr.flush()
         sys.exit(1)
 
-    # Load configuration from .archilles folder within library
     config_path = Path(library_path) / ".archilles" / "config.json"
     config = {}
-
     if config_path.exists():
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
@@ -257,39 +199,28 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    # Config can override the environment variable if specified
     library_path = config.get('calibre_library_path', library_path)
-
-    # Derive paths relative to library - ensures consistency between MCP server and CLI tools
     archilles_dir = Path(library_path) / ".archilles"
 
-    # RAG database for fulltext search (PDF/EPUB chunks)
-    default_rag_path = str(archilles_dir / "rag_db")
-    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', default_rag_path)
-
-    # ChromaDB for annotations (highlights/notes)
-    default_chroma_path = str(archilles_dir / "chroma_db")
-    chroma_persist_dir = config.get('chroma_persist_dir', default_chroma_path)
+    rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', str(archilles_dir / "rag_db"))
+    chroma_persist_dir = config.get('chroma_persist_dir', str(archilles_dir / "chroma_db"))
 
     logger.info(f"Library path: {library_path}")
     logger.info(f"RAG database path: {rag_db_path}")
     logger.info(f"ChromaDB path: {chroma_persist_dir}")
 
-    # Reranking config (optional, off by default)
     enable_reranking = config.get('enable_reranking', False)
-    reranker_device = config.get('reranker_device', 'cpu')  # CPU default to avoid GPU OOM with BGE-M3
+    reranker_device = config.get('reranker_device', 'cpu')
     if enable_reranking:
         logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
 
-    # Citation style config (optional, defaults to Chicago Author-Date / de-DE)
     from citation.config import CitationConfig
     citation_config = CitationConfig.from_dict(config.get('citation', {}))
     logger.info(f"Citation style: {citation_config.label} (locale: {citation_config.locale})")
 
-    # Initialize server
     server = CalibreMCPServer(
         library_path=library_path,
-        annotations_dir=None,  # Will auto-detect
+        annotations_dir=None,
         enable_semantic_search=True,
         chroma_persist_dir=chroma_persist_dir,
         rag_db_path=rag_db_path,
@@ -300,8 +231,6 @@ def main():
 
     logger.info(f"Server initialized with library: {library_path}")
     logger.info(f"Semantic search enabled: {server.enable_semantic_search}")
-
-    # Run stdio server
     asyncio.run(stdio_server(server))
 
 

@@ -22,13 +22,12 @@ Usage:
     python scripts/list_indexed_books.py --sort-by chunks
 """
 
-import sys
 import argparse
-import os
-from pathlib import Path
-from datetime import datetime
-from collections import defaultdict
 import csv
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -36,96 +35,46 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
 
 
-def get_indexed_books(rag: archillesRAG) -> dict:
+def get_indexed_books(rag: archillesRAG) -> list:
     """
     Get all indexed books with metadata and timestamps.
 
     Returns:
-        Dictionary mapping book_id to book info:
-        {
-            'book_id': str,
-            'title': str,
-            'author': str,
-            'chunks': int,
-            'indexed_at': datetime,
-            'format': str,
-            'tags': str
-        }
+        List of book dictionaries with keys:
+        book_id, title, author, chunks, indexed_at, format, tags, calibre_id
     """
     print("Analyzing indexed books...")
 
-    # Use LanceDB's get_indexed_books for efficiency
     indexed_books = rag.store.get_indexed_books()
     print(f"  Found {len(indexed_books)} books")
 
-    # Convert to expected format
-    all_metadatas = []
+    total_chunks = sum(b.get('chunks', 0) for b in indexed_books)
+    print(f"  Loaded {total_chunks} chunks")
+
+    result = []
     for book in indexed_books:
-        # Create a metadata entry for aggregation
-        all_metadatas.append({
-            'book_id': book.get('book_id', 'unknown'),
-            'book_title': book.get('title', 'Unknown'),
-            'author': book.get('author', 'Unknown'),
-            'format': book.get('format', 'Unknown'),
-            'tags': book.get('tags', ''),
-            'calibre_id': book.get('calibre_id'),
-            'indexed_at': book.get('indexed_at'),
-            '_chunk_count': book.get('chunks', 0)  # Pre-calculated
-        })
-
-    print(f"  Loaded {sum(m.get('_chunk_count', 1) for m in all_metadatas)} chunks")
-
-    # Group by book_id
-    books = defaultdict(lambda: {
-        'chunks': 0,
-        'indexed_at': None,
-        'title': None,
-        'author': None,
-        'format': None,
-        'tags': None,
-        'calibre_id': None
-    })
-
-    for metadata in all_metadatas:
-        book_id = metadata.get('book_id', 'unknown')
-
-        # Use pre-calculated chunk count from LanceDB
-        books[book_id]['chunks'] = metadata.get('_chunk_count', 1)
-
-        # Get earliest indexing timestamp for this book
-        indexed_at_str = metadata.get('indexed_at')
-        if indexed_at_str:
+        # Parse indexed_at timestamp
+        indexed_at = None
+        indexed_at_raw = book.get('indexed_at')
+        if indexed_at_raw:
             try:
-                indexed_at = datetime.fromisoformat(indexed_at_str) if isinstance(indexed_at_str, str) else indexed_at_str
-                if books[book_id]['indexed_at'] is None or (indexed_at and indexed_at < books[book_id]['indexed_at']):
-                    books[book_id]['indexed_at'] = indexed_at
+                indexed_at = (
+                    datetime.fromisoformat(indexed_at_raw)
+                    if isinstance(indexed_at_raw, str)
+                    else indexed_at_raw
+                )
             except (ValueError, AttributeError, TypeError):
                 pass
 
-        # Get book metadata (same for all chunks of a book)
-        if not books[book_id]['title']:
-            books[book_id]['title'] = metadata.get('book_title', 'Unknown')
-        if not books[book_id]['author']:
-            books[book_id]['author'] = metadata.get('author', 'Unknown')
-        if not books[book_id]['format']:
-            books[book_id]['format'] = metadata.get('format', 'Unknown')
-        if not books[book_id]['tags']:
-            books[book_id]['tags'] = metadata.get('tags', '')
-        if not books[book_id]['calibre_id']:
-            books[book_id]['calibre_id'] = metadata.get('calibre_id', '')
-
-    # Convert to list of dicts
-    result = []
-    for book_id, info in books.items():
         result.append({
-            'book_id': book_id,
-            'title': info['title'],
-            'author': info['author'],
-            'chunks': info['chunks'],
-            'indexed_at': info['indexed_at'],
-            'format': info['format'],
-            'tags': info['tags'],
-            'calibre_id': info['calibre_id']
+            'book_id': book.get('book_id', 'unknown'),
+            'title': book.get('title', 'Unknown'),
+            'author': book.get('author', 'Unknown'),
+            'chunks': book.get('chunks', 0),
+            'indexed_at': indexed_at,
+            'format': book.get('format', 'Unknown'),
+            'tags': book.get('tags', ''),
+            'calibre_id': book.get('calibre_id', ''),
         })
 
     return result
@@ -276,15 +225,14 @@ Examples:
         books = get_indexed_books(rag)
 
         # Sort books
-        if args.sort_by == 'date':
-            # Sort by date, oldest first (put None dates at end)
-            books.sort(key=lambda b: b['indexed_at'] or datetime.max)
-        elif args.sort_by == 'chunks':
-            books.sort(key=lambda b: b['chunks'], reverse=True)
-        elif args.sort_by == 'title':
-            books.sort(key=lambda b: (b['title'] or 'Unknown').lower())
-        elif args.sort_by == 'author':
-            books.sort(key=lambda b: (b['author'] or 'Unknown').lower())
+        sort_keys = {
+            'date': (lambda b: b['indexed_at'] or datetime.max, False),
+            'chunks': (lambda b: b['chunks'], True),
+            'title': (lambda b: (b['title'] or 'Unknown').lower(), False),
+            'author': (lambda b: (b['author'] or 'Unknown').lower(), False),
+        }
+        key_fn, reverse = sort_keys[args.sort_by]
+        books.sort(key=key_fn, reverse=reverse)
 
         # Export to CSV if requested
         if args.output:

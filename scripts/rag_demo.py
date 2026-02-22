@@ -71,9 +71,11 @@ class archillesRAG:
     - Semantic + keyword search
     """
 
+    # Fields to copy from Calibre book_data into chunk metadata
+    _CALIBRE_FIELDS = ('author', 'title', 'publisher', 'language', 'isbn',
+                       'calibre_id', 'tags', 'comments', 'custom_fields')
+
     # Common stop words for multilingual queries
-    # These are automatically removed from queries to improve search quality
-    # Covers all languages supported by ARCHILLES language detector (EN, DE, FR, LA, IT, ES, EL, HE, AR, RU, PT, NL)
     STOP_WORDS = {
         # English
         'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
@@ -119,6 +121,125 @@ class archillesRAG:
         'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
         'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
     }
+
+    @staticmethod
+    def _format_tags(tags) -> str:
+        """Format tags as a comma-separated string, whether input is a list or string."""
+        return ', '.join(tags) if isinstance(tags, list) else tags
+
+    @staticmethod
+    def _resolve_book_id(book_id: str):
+        """
+        Resolve book_id to (resolved_book_id, calibre_id) tuple.
+        If book_id is numeric, treat it as a calibre_id instead.
+        """
+        if book_id and str(book_id).isdigit():
+            return None, int(book_id)
+        return book_id, None
+
+    @staticmethod
+    def _format_section_citation(metadata: Dict[str, Any]) -> str:
+        """
+        Build a section/chapter citation string from metadata.
+        Returns empty string if no section info is available.
+        """
+        section = metadata.get('section')
+        section_title = metadata.get('section_title')
+
+        if section and section_title:
+            return f"Section {section} - {section_title}"
+        if section:
+            return f"Section {section}"
+        if section_title:
+            return section_title
+        if metadata.get('chapter'):
+            return metadata['chapter']
+        return ''
+
+    @staticmethod
+    def _format_section_meta(metadata: Dict[str, Any], label: str = "Kapitel") -> str:
+        """
+        Build a section/chapter metadata string for XML/inline output.
+        Returns empty string if no section info is available.
+        """
+        section = metadata.get('section')
+        section_title = metadata.get('section_title')
+
+        if section and section_title:
+            return f"{label}: {section} - {section_title}"
+        if section_title:
+            return f"{label}: {section_title}"
+        if section:
+            return f"Abschnitt: {section}"
+        if metadata.get('chapter'):
+            return f"{label}: {metadata['chapter']}"
+        return ''
+
+    @staticmethod
+    def _resolve_page_info(metadata: Dict[str, Any]):
+        """
+        Resolve the best page value and optional warning from metadata.
+        Returns (page_value_or_None, is_pdf_page: bool, warning_or_None).
+
+        page_value is the raw page number/label (e.g. "213", "xiv").
+        is_pdf_page indicates whether this is a PDF page (vs. printed/label).
+        """
+        page_label = metadata.get('page_label')
+        printed_page = metadata.get('printed_page')
+        printed_conf = metadata.get('printed_page_confidence', 0.0)
+
+        if page_label:
+            return page_label, False, None
+
+        if printed_page and printed_conf >= 0.8:
+            warning = None
+            if printed_conf < 0.9:
+                warning = f"Seitenzahl-Konfidenz: {printed_conf:.2f} - bitte verifizieren"
+            return printed_page, False, warning
+
+        page = metadata.get('page') or metadata.get('page_number')
+        if page:
+            warning = None
+            if printed_page:
+                warning = f"Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
+            return page, True, warning
+
+        return None, False, None
+
+    def _apply_book_metadata_to_chunk(self, chunk_data: Dict[str, Any],
+                                       book_metadata: Dict[str, Any]) -> None:
+        """Copy standard book metadata fields into a chunk dict (in-place)."""
+        if not book_metadata:
+            return
+        if book_metadata.get('author'):
+            chunk_data['author'] = book_metadata['author']
+        if book_metadata.get('title'):
+            chunk_data['book_title'] = book_metadata['title']
+        if book_metadata.get('year'):
+            chunk_data['year'] = book_metadata['year']
+        if book_metadata.get('publisher'):
+            chunk_data['publisher'] = book_metadata['publisher']
+        if book_metadata.get('calibre_id'):
+            chunk_data['calibre_id'] = book_metadata['calibre_id']
+        if book_metadata.get('tags'):
+            chunk_data['tags'] = self._format_tags(book_metadata['tags'])
+
+    @staticmethod
+    def _build_annotation_text(annot: Dict[str, Any]) -> str:
+        """
+        Build searchable annotation text from a highlight/note annotation.
+        Returns empty string if annotation has no meaningful content.
+        """
+        highlighted = annot.get('highlighted_text', '').strip()
+        notes = annot.get('notes', '').strip()
+
+        if highlighted and notes:
+            return f"[ANNOTATION] {highlighted} | Note: {notes}"
+        if highlighted:
+            return f"[ANNOTATION] {highlighted}"
+        if notes:
+            return f"[ANNOTATION_NOTE] {notes}"
+        return ''
 
     def __init__(
         self,
@@ -407,7 +528,6 @@ class archillesRAG:
                 try:
                     date_str = str(date[0][0])
                     # Try to extract year (formats: YYYY, YYYY-MM-DD, etc.)
-                    import re
                     year_match = re.search(r'(\d{4})', date_str)
                     if year_match:
                         metadata['year'] = int(year_match.group(1))
@@ -471,25 +591,9 @@ class archillesRAG:
                 book_data = calibre.get_book_by_path(file_path)
 
                 if book_data:
-                    # Map Calibre fields to our metadata
-                    if book_data.get('author'):
-                        metadata['author'] = book_data['author']
-                    if book_data.get('title'):
-                        metadata['title'] = book_data['title']
-                    if book_data.get('publisher'):
-                        metadata['publisher'] = book_data['publisher']
-                    if book_data.get('language'):
-                        metadata['language'] = book_data['language']
-                    if book_data.get('isbn'):
-                        metadata['isbn'] = book_data['isbn']
-                    if book_data.get('calibre_id'):
-                        metadata['calibre_id'] = book_data['calibre_id']
-                    if book_data.get('tags'):
-                        metadata['tags'] = book_data['tags']
-                    if book_data.get('comments'):
-                        metadata['comments'] = book_data['comments']
-                    if book_data.get('custom_fields'):
-                        metadata['custom_fields'] = book_data['custom_fields']
+                    for field in self._CALIBRE_FIELDS:
+                        if book_data.get(field):
+                            metadata[field] = book_data[field]
 
         except Exception as e:
             # Silently fail if Calibre DB not available
@@ -605,8 +709,7 @@ class archillesRAG:
 
         # Tags
         if book_metadata.get('tags'):
-            tags_str = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
-            metadata_parts.append(f"Tags: {tags_str}")
+            metadata_parts.append(f"Tags: {self._format_tags(book_metadata['tags'])}")
 
         # Subject/Keywords
         if book_metadata.get('subject'):
@@ -645,22 +748,12 @@ class archillesRAG:
         }
 
         # Add all book metadata fields
-        if book_metadata.get('author'):
-            chunk_metadata['author'] = book_metadata['author']
-        if book_metadata.get('publisher'):
-            chunk_metadata['publisher'] = book_metadata['publisher']
+        self._apply_book_metadata_to_chunk(chunk_metadata, book_metadata)
         if book_metadata.get('isbn'):
             chunk_metadata['isbn'] = book_metadata['isbn']
             if book_metadata.get('isbn_source'):
                 chunk_metadata['isbn_source'] = book_metadata['isbn_source']
-        if book_metadata.get('year'):
-            chunk_metadata['year'] = book_metadata['year']
-        if book_metadata.get('calibre_id'):
-            chunk_metadata['calibre_id'] = book_metadata['calibre_id']
-        if book_metadata.get('tags'):
-            chunk_metadata['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
         if book_metadata.get('custom_fields'):
-            import json
             chunk_metadata['custom_fields'] = json.dumps(book_metadata['custom_fields'])
 
         chunk_metadata['source_file'] = str(book_path)
@@ -869,12 +962,11 @@ class archillesRAG:
                 'indexed_at': datetime.now().isoformat(),
             }
 
-            # Context expansion fields (Small-to-Big Retrieval)
-            if 'metadata' in chunk:
-                if chunk['metadata'].get('char_start') is not None:
-                    chunk_data['char_start'] = chunk['metadata']['char_start']
-                if chunk['metadata'].get('char_end') is not None:
-                    chunk_data['char_end'] = chunk['metadata']['char_end']
+            # Copy optional fields from chunk metadata
+            chunk_meta = chunk.get('metadata', {})
+            for field in ('char_start', 'char_end'):
+                if chunk_meta.get(field) is not None:
+                    chunk_data[field] = chunk_meta[field]
             if chunk.get('window_text'):
                 chunk_data['window_text'] = chunk['window_text']
 
@@ -883,19 +975,7 @@ class archillesRAG:
                 chunk_data['parent_id'] = chunk['parent_id']
 
             # Add book metadata
-            if book_metadata:
-                if book_metadata.get('author'):
-                    chunk_data['author'] = book_metadata['author']
-                if book_metadata.get('title'):
-                    chunk_data['book_title'] = book_metadata['title']
-                if book_metadata.get('year'):
-                    chunk_data['year'] = book_metadata['year']
-                if book_metadata.get('publisher'):
-                    chunk_data['publisher'] = book_metadata['publisher']
-                if book_metadata.get('calibre_id'):
-                    chunk_data['calibre_id'] = book_metadata['calibre_id']
-                if book_metadata.get('tags'):
-                    chunk_data['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+            self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
 
             # Add metadata hash for change detection
             if book_metadata:
@@ -904,27 +984,15 @@ class archillesRAG:
             # Add source file path
             chunk_data['source_file'] = str(extracted.metadata.file_path)
 
-            # Add page info if available
-            if 'metadata' in chunk and chunk['metadata'].get('page'):
-                chunk_data['page_number'] = chunk['metadata']['page']
-            if 'metadata' in chunk and chunk['metadata'].get('page_label'):
-                chunk_data['page_label'] = chunk['metadata']['page_label']
-
-            # Add chapter info if available
-            if 'metadata' in chunk and chunk['metadata'].get('chapter'):
-                chunk_data['chapter'] = chunk['metadata']['chapter']
-
-            # Add section info if available (EPUB section metadata)
-            if 'metadata' in chunk and chunk['metadata'].get('section'):
-                chunk_data['section'] = chunk['metadata']['section']
-            if 'metadata' in chunk and chunk['metadata'].get('section_title'):
-                chunk_data['section_title'] = chunk['metadata']['section_title']
-            if 'metadata' in chunk and chunk['metadata'].get('section_type'):
-                chunk_data['section_type'] = chunk['metadata']['section_type']
-
-            # Add language info if available
-            if 'metadata' in chunk and chunk['metadata'].get('language'):
-                chunk_data['language'] = chunk['metadata']['language']
+            # Copy page, section, and language info from chunk metadata
+            for src_key, dst_key in [
+                ('page', 'page_number'), ('page_label', 'page_label'),
+                ('chapter', 'chapter'), ('section', 'section'),
+                ('section_title', 'section_title'), ('section_type', 'section_type'),
+                ('language', 'language'),
+            ]:
+                if chunk_meta.get(src_key):
+                    chunk_data[dst_key] = chunk_meta[src_key]
 
             chunks.append(chunk_data)
 
@@ -952,15 +1020,7 @@ class archillesRAG:
                 'indexed_at': datetime.now().isoformat(),
                 'metadata_hash': self._compute_metadata_hash(book_metadata),
             }
-
-            if book_metadata.get('author'):
-                comment_chunk['author'] = book_metadata['author']
-            if book_metadata.get('publisher'):
-                comment_chunk['publisher'] = book_metadata['publisher']
-            if book_metadata.get('calibre_id'):
-                comment_chunk['calibre_id'] = book_metadata['calibre_id']
-            if book_metadata.get('tags'):
-                comment_chunk['tags'] = ', '.join(book_metadata['tags']) if isinstance(book_metadata['tags'], list) else book_metadata['tags']
+            self._apply_book_metadata_to_chunk(comment_chunk, book_metadata)
 
             chunks.append(comment_chunk)
             embeddings.append(comment_embedding.tolist())
@@ -979,17 +1039,8 @@ class archillesRAG:
                 print(f"    Adding {len(annotations)} annotations as searchable chunks...")
 
                 for idx, annot in enumerate(annotations):
-                    highlighted = annot.get('highlighted_text', '').strip()
-                    notes = annot.get('notes', '').strip()
-
-                    # Build annotation text
-                    if highlighted and notes:
-                        annot_text = f"[ANNOTATION] {highlighted} | Note: {notes}"
-                    elif highlighted:
-                        annot_text = f"[ANNOTATION] {highlighted}"
-                    elif notes:
-                        annot_text = f"[ANNOTATION_NOTE] {notes}"
-                    else:
+                    annot_text = self._build_annotation_text(annot)
+                    if not annot_text:
                         continue
 
                     # Generate embedding
@@ -1012,15 +1063,7 @@ class archillesRAG:
                         'indexed_at': datetime.now().isoformat(),
                         'metadata_hash': self._compute_metadata_hash(book_metadata) if book_metadata else '',
                     }
-
-                    if book_metadata:
-                        if book_metadata.get('author'):
-                            annot_chunk['author'] = book_metadata['author']
-                        if book_metadata.get('calibre_id'):
-                            annot_chunk['calibre_id'] = book_metadata['calibre_id']
-                        if book_metadata.get('tags'):
-                            tags = book_metadata['tags']
-                            annot_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+                    self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
 
                     chunks.append(annot_chunk)
                     embeddings.append(annot_embedding.tolist())
@@ -1084,8 +1127,7 @@ class archillesRAG:
         if book_metadata.get('title'):
             updated_fields['book_title'] = book_metadata['title']
         if book_metadata.get('tags'):
-            tags = book_metadata['tags']
-            updated_fields['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+            updated_fields['tags'] = self._format_tags(book_metadata['tags'])
         if book_metadata.get('publisher'):
             updated_fields['publisher'] = book_metadata['publisher']
         updated_fields['metadata_hash'] = new_hash
@@ -1118,15 +1160,7 @@ class archillesRAG:
                     'indexed_at': datetime.now().isoformat(),
                     'metadata_hash': new_hash,
                 }
-                if book_metadata.get('author'):
-                    comment_chunk['author'] = book_metadata['author']
-                if book_metadata.get('publisher'):
-                    comment_chunk['publisher'] = book_metadata['publisher']
-                if book_metadata.get('calibre_id'):
-                    comment_chunk['calibre_id'] = book_metadata['calibre_id']
-                if book_metadata.get('tags'):
-                    tags = book_metadata['tags']
-                    comment_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+                self._apply_book_metadata_to_chunk(comment_chunk, book_metadata)
 
                 embeddings_array = np.array([comment_embedding.tolist()])
                 self.store.add_chunks([comment_chunk], embeddings_array)
@@ -1147,16 +1181,8 @@ class archillesRAG:
                 annot_chunks = []
                 annot_embeddings = []
                 for idx, annot in enumerate(annotations):
-                    highlighted = annot.get('highlighted_text', '').strip()
-                    notes = annot.get('notes', '').strip()
-
-                    if highlighted and notes:
-                        annot_text = f"[ANNOTATION] {highlighted} | Note: {notes}"
-                    elif highlighted:
-                        annot_text = f"[ANNOTATION] {highlighted}"
-                    elif notes:
-                        annot_text = f"[ANNOTATION_NOTE] {notes}"
-                    else:
+                    annot_text = self._build_annotation_text(annot)
+                    if not annot_text:
                         continue
 
                     annot_embedding = self.embedding_model.encode(
@@ -1178,13 +1204,7 @@ class archillesRAG:
                         'indexed_at': datetime.now().isoformat(),
                         'metadata_hash': new_hash,
                     }
-                    if book_metadata.get('author'):
-                        annot_chunk['author'] = book_metadata['author']
-                    if book_metadata.get('calibre_id'):
-                        annot_chunk['calibre_id'] = book_metadata['calibre_id']
-                    if book_metadata.get('tags'):
-                        tags = book_metadata['tags']
-                        annot_chunk['tags'] = ', '.join(tags) if isinstance(tags, list) else tags
+                    self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
 
                     annot_chunks.append(annot_chunk)
                     annot_embeddings.append(annot_embedding.tolist())
@@ -1216,34 +1236,21 @@ class archillesRAG:
         """
         Remove common stop words from query for better search results.
 
-        Args:
-            query_text: Original query string
-
         Returns:
             Tuple of (cleaned_query, removed_words)
         """
-        words = query_text.lower().split()
+        original_words = query_text.split()
+        result_words = []
         removed = []
-        kept = []
 
-        for word in words:
-            # Remove punctuation for stop word matching
-            clean_word = word.strip('.,;:!?"\'()[]{}')
+        for word in original_words:
+            clean_word = word.lower().strip('.,;:!?"\'()[]{}')
             if clean_word in self.STOP_WORDS:
                 removed.append(word)
             else:
-                kept.append(word)
+                result_words.append(word)
 
-        # Keep original case for kept words
-        original_words = query_text.split()
-        result_words = []
-        for orig_word in original_words:
-            clean_orig = orig_word.lower().strip('.,;:!?"\'()[]{}')
-            if clean_orig not in self.STOP_WORDS:
-                result_words.append(orig_word)
-
-        cleaned_query = ' '.join(result_words)
-        return cleaned_query, removed
+        return ' '.join(result_words), removed
 
     def query(
         self,
@@ -1409,20 +1416,13 @@ class archillesRAG:
         section_type: str = None
     ) -> List[Dict[str, Any]]:
         """Semantic search using BGE-M3 embeddings via LanceDB."""
-        # Generate query embedding
         query_embedding = self.embedding_model.encode(
             query_text,
             convert_to_numpy=True
         )
 
-        # Resolve book_id to calibre_id if numeric
-        calibre_id = None
-        resolved_book_id = book_id
-        if book_id and str(book_id).isdigit():
-            calibre_id = int(book_id)
-            resolved_book_id = None
+        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
 
-        # Search in LanceDB
         results = self.store.vector_search(
             query_vector=query_embedding,
             top_k=top_k,
@@ -1447,18 +1447,11 @@ class archillesRAG:
         section_type: str = None
     ) -> List[Dict[str, Any]]:
         """Keyword search using LanceDB full-text search."""
-        # For exact phrase matching, use different approach
         if exact_phrase:
             return self._exact_phrase_search(query_text, top_k, language, book_id, chunk_type_filter)
 
-        # Resolve book_id to calibre_id if numeric
-        calibre_id = None
-        resolved_book_id = book_id
-        if book_id and str(book_id).isdigit():
-            calibre_id = int(book_id)
-            resolved_book_id = None
+        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
 
-        # Search in LanceDB using full-text search
         results = self.store.fts_search(
             query_text=query_text,
             top_k=top_k,
@@ -1488,12 +1481,7 @@ class archillesRAG:
 
         IMPORTANT: Normalizes whitespace to handle line breaks!
         """
-        # Get all chunks (filtered by book/language if specified)
-        calibre_id = None
-        resolved_book_id = book_id
-        if book_id and str(book_id).isdigit():
-            calibre_id = int(book_id)
-            resolved_book_id = None
+        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
 
         # Fetch chunks to search through
         all_chunks = self.store.get_all(limit=10000)
@@ -1562,20 +1550,13 @@ class archillesRAG:
         if exact_phrase:
             return self._keyword_search(query_text, top_k, language, book_id, chunk_type_filter, exact_phrase=True, section_type=section_type)
 
-        # Generate query embedding
         query_embedding = self.embedding_model.encode(
             query_text,
             convert_to_numpy=True
         )
 
-        # Resolve book_id to calibre_id if numeric
-        calibre_id = None
-        resolved_book_id = book_id
-        if book_id and str(book_id).isdigit():
-            calibre_id = int(book_id)
-            resolved_book_id = None
+        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
 
-        # Use LanceDB native hybrid search
         results = self.store.hybrid_search(
             query_text=query_text,
             query_vector=query_embedding,
@@ -1661,8 +1642,6 @@ class archillesRAG:
         Returns:
             Snippet with "..." prefix/suffix if truncated
         """
-        import re
-
         text_lower = text.lower()
         query_lower = query_text.lower()
         best_match_pos = len(text)  # Default: end of text
@@ -1737,54 +1716,18 @@ class archillesRAG:
             if metadata.get('book_title'):
                 citation_parts.append(metadata['book_title'])
 
-            # Priority: Section number and/or section title
-            section = metadata.get('section')
-            section_title = metadata.get('section_title')
-
-            if section and section_title:
-                # Best case: "Section 19.20 - LAND WARFARE"
-                citation_parts.append(f"Section {section} - {section_title}")
-            elif section:
-                # Just section number: "Section 19.20"
-                citation_parts.append(f"Section {section}")
-            elif section_title:
-                # Just section title: "LAND WARFARE"
-                citation_parts.append(section_title)
-            elif metadata.get('chapter'):
-                # Fallback: chapter name
-                citation_parts.append(metadata['chapter'])
-
-            # Also show page number if available (in addition to section)
-            # Priority: page_label > printed_page > PDF page number
-            printed_page = metadata.get('printed_page')
-            printed_conf = metadata.get('printed_page_confidence', 0.0)
-            page_label = metadata.get('page_label')
-            page_warning = None
+            section_citation = self._format_section_citation(metadata)
+            if section_citation:
+                citation_parts.append(section_citation)
 
             # Debug mode: show raw metadata values
             if os.environ.get('DEBUG_METADATA'):
-                print(f"    [DEBUG] section: {repr(section)}, section_title: {repr(section_title)}")
-                print(f"    [DEBUG] page_label: {repr(page_label)}, printed_page: {repr(printed_page)}")
+                print(f"    [DEBUG] section: {repr(metadata.get('section'))}, section_title: {repr(metadata.get('section_title'))}")
+                print(f"    [DEBUG] page_label: {repr(metadata.get('page_label'))}, printed_page: {repr(metadata.get('printed_page'))}")
 
-            if page_label:
-                # Use page label from index (most reliable)
-                citation_parts.append(f"S. {page_label}")
-            elif printed_page and printed_conf >= 0.8:
-                # Use printed page number (high confidence)
-                printed_page_str = str(printed_page) if printed_page else ""
-                citation_parts.append(f"S. {printed_page_str}")
-
-                # Add warning if confidence < 0.9
-                if printed_conf < 0.9:
-                    page_warning = f"Seitenzahl-Konfidenz: {printed_conf:.2f} - bitte verifizieren"
-            elif metadata.get('page') or metadata.get('page_number'):
-                # Fallback to PDF page number
-                page = metadata.get('page') or metadata.get('page_number')
-                citation_parts.append(f"PDF S. {page}")
-
-                # Add warning if printed page exists but low confidence
-                if printed_page:
-                    page_warning = f"? Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
+            page_val, is_pdf, page_warning = self._resolve_page_info(metadata)
+            if page_val:
+                citation_parts.append(f"PDF S. {page_val}" if is_pdf else f"S. {page_val}")
 
             citation = ', '.join(citation_parts) if citation_parts else metadata.get('book_id', 'Unknown')
 
@@ -1830,8 +1773,6 @@ class archillesRAG:
         Returns:
             Path to the created markdown file
         """
-        from datetime import datetime
-
         if not output_file:
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             safe_query = "".join(c if c.isalnum() else "_" for c in query_text[:30])
@@ -1860,34 +1801,16 @@ class archillesRAG:
             # Build citation
             book_title = metadata.get('book_title', metadata.get('book_id', 'Unknown'))
 
-            # Build citation with section-aware priority
-            section = metadata.get('section')
-            section_title = metadata.get('section_title')
-            chapter = metadata.get('chapter')
-
             citation_parts = []
 
-            # Priority 1: Section info (if available)
-            if section and section_title:
-                citation_parts.append(f"Section {section} - {section_title}")
-            elif section:
-                citation_parts.append(f"Section {section}")
-            elif section_title:
-                citation_parts.append(section_title)
-            elif chapter:
-                citation_parts.append(chapter)
+            section_citation = self._format_section_citation(metadata)
+            if section_citation:
+                citation_parts.append(section_citation)
 
             # Add page info
-            printed_page = metadata.get('printed_page')
-            printed_conf = metadata.get('printed_page_confidence', 0.0)
-
-            if printed_page and printed_conf >= 0.8:
-                page_str = f"S. {str(printed_page)}"
-                if printed_conf < 1.0:
-                    page_str += f" (Konfidenz: {printed_conf:.2f})"
-                citation_parts.append(page_str)
-            elif metadata.get('page'):
-                citation_parts.append(f"PDF S. {metadata['page']}")
+            page_val, is_pdf, _ = self._resolve_page_info(metadata)
+            if page_val:
+                citation_parts.append(f"PDF S. {page_val}" if is_pdf else f"S. {page_val}")
 
             # Result header with author and year
             author = metadata.get('author', '')
@@ -2083,30 +2006,18 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
             if metadata.get('author'):
                 meta_parts.append(f"Autor: {metadata['author']}")
-
             if metadata.get('book_title'):
                 meta_parts.append(f"Titel: {metadata['book_title']}")
-
             if metadata.get('year'):
                 meta_parts.append(f"Jahr: {metadata['year']}")
 
-            # Chapter/Section
-            section_title = metadata.get('section_title')
-            section = metadata.get('section')
-            if section and section_title:
-                meta_parts.append(f"Kapitel: {section} - {section_title}")
-            elif section_title:
-                meta_parts.append(f"Kapitel: {section_title}")
-            elif metadata.get('chapter'):
-                meta_parts.append(f"Kapitel: {metadata['chapter']}")
+            section_meta = self._format_section_meta(metadata)
+            if section_meta:
+                meta_parts.append(section_meta)
 
-            # Page number (prefer page_label, then printed page, then PDF page)
-            if metadata.get('page_label'):
-                meta_parts.append(f"Seite: {metadata['page_label']}")
-            elif metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
-                meta_parts.append(f"Seite: {metadata['printed_page']}")
-            elif metadata.get('page'):
-                meta_parts.append(f"Seite: {metadata['page']}")
+            page_val, _, _ = self._resolve_page_info(metadata)
+            if page_val:
+                meta_parts.append(f"Seite: {page_val}")
 
             meta_str = " | ".join(meta_parts) if meta_parts else "Metadaten nicht verfügbar"
 
@@ -2175,42 +2086,26 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         Format: <<<QUELLE ID=doc_1>>>
                 [Autor: Arendt | Titel: Vita activa | Jahr: 1958 | Kapitel: Das Handeln | Seite: 213]
 
-        This provides context for interpretation — a sentence from Arendt
+        This provides context for interpretation -- a sentence from Arendt
         means something different than the same sentence from Heidegger.
         """
         meta_parts = []
 
         if metadata.get('author'):
             meta_parts.append(f"Autor: {metadata['author']}")
-
         if metadata.get('book_title'):
             meta_parts.append(f"Titel: {metadata['book_title']}")
-
         if metadata.get('year'):
             meta_parts.append(f"Jahr: {metadata['year']}")
 
-        # Chapter/Section info (critical for academic texts)
-        section = metadata.get('section')
-        section_title = metadata.get('section_title')
-        if section and section_title:
-            meta_parts.append(f"Kapitel: {section} - {section_title}")
-        elif section_title:
-            meta_parts.append(f"Kapitel: {section_title}")
-        elif section:
-            meta_parts.append(f"Abschnitt: {section}")
-        elif metadata.get('chapter'):
-            meta_parts.append(f"Kapitel: {metadata['chapter']}")
+        section_meta = self._format_section_meta(metadata)
+        if section_meta:
+            meta_parts.append(section_meta)
 
-        # Page number (prefer page_label, then printed_page, then PDF page)
-        if metadata.get('page_label'):
-            meta_parts.append(f"Seite: {metadata['page_label']}")
-        elif metadata.get('printed_page') and metadata.get('printed_page_confidence', 0) >= 0.8:
-            meta_parts.append(f"Seite: {metadata['printed_page']}")
-        elif metadata.get('page_number') or metadata.get('page'):
-            page = metadata.get('page_number') or metadata.get('page')
-            meta_parts.append(f"Seite: {page}")
+        page_val, _, _ = self._resolve_page_info(metadata)
+        if page_val:
+            meta_parts.append(f"Seite: {page_val}")
 
-        # Language (useful for multilingual corpora)
         if metadata.get('language'):
             meta_parts.append(f"Sprache: {metadata['language']}")
 
