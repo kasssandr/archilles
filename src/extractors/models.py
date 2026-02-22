@@ -18,23 +18,23 @@ class ChunkMetadata:
 
     # Position in document
     page: Optional[int] = None
-    page_label: Optional[str] = None  # e.g., "xiv" for roman numerals
+    page_label: Optional[str] = None
     chapter: Optional[str] = None
-    section: Optional[str] = None  # Section number, e.g., "19.20", "3.4.2"
-    section_title: Optional[str] = None  # Section/chapter title
-    section_type: Optional[str] = None  # front_matter, main_content, back_matter
+    section: Optional[str] = None
+    section_title: Optional[str] = None
+    section_type: Optional[str] = None
     char_start: Optional[int] = None
     char_end: Optional[int] = None
 
-    # PDF-specific coordinates (for clickable citations)
-    pdf_coords: Optional[Dict[str, float]] = None  # {x, y, width, height}
+    # PDF-specific coordinates for clickable citations
+    pdf_coords: Optional[Dict[str, float]] = None
 
     # Source file
     source_file: Optional[str] = None
-    format: Optional[str] = None  # pdf, epub, mobi, etc.
+    format: Optional[str] = None
 
     # Calibre integration
-    calibre_uri: Optional[str] = None  # calibre://view/123#page=42
+    calibre_uri: Optional[str] = None
 
     # Additional metadata
     language: Optional[str] = None
@@ -50,11 +50,11 @@ class ExtractionMetadata:
     file_path: Path
     file_size: int
     file_format: str
-    detected_format: str  # May differ from extension
+    detected_format: str
 
     # Extraction details
-    extraction_method: str  # native, calibre, pandoc
-    extraction_time: float  # seconds
+    extraction_method: str
+    extraction_time: float
     extracted_at: datetime = field(default_factory=datetime.now)
 
     # Quality indicators
@@ -68,7 +68,7 @@ class ExtractionMetadata:
     total_words: int = 0
     total_chunks: int = 0
 
-    # OCR information (if applicable)
+    # OCR information
     ocr_applied: bool = False
     ocr_pages: List[int] = field(default_factory=list)
     ocr_confidence: Optional[float] = None
@@ -78,23 +78,11 @@ class ExtractionMetadata:
 class ExtractedText:
     """Complete extracted text with metadata."""
 
-    # Raw content
     full_text: str
-
-    # Chunked content (for RAG)
     chunks: List[Dict[str, Any]] = field(default_factory=list)
-    # Each chunk: {"text": str, "metadata": ChunkMetadata}
-
-    # Extraction metadata
-    metadata: ExtractionMetadata = None
-
-    # Table of contents (if available)
+    metadata: Optional[ExtractionMetadata] = None
     toc: List[Dict[str, Any]] = field(default_factory=list)
-    # Each entry: {"title": str, "page": int, "level": int}
-
-    # Footnotes (extracted separately for humanities)
     footnotes: List[Dict[str, Any]] = field(default_factory=list)
-    # Each footnote: {"number": str, "text": str, "page": int}
 
     def __post_init__(self):
         """Auto-calculate statistics if not provided."""

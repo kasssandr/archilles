@@ -128,12 +128,9 @@ class PyMuPDFParser(DocumentParser):
                 try:
                     page = doc[page_num]
 
-                    # Extract text
-                    if self._preserve_whitespace:
-                        text = page.get_text("text")
-                    else:
-                        text = page.get_text("text")
-                        # Clean up excessive whitespace
+                    text = page.get_text("text")
+
+                    if not self._preserve_whitespace:
                         lines = text.split('\n')
                         lines = [' '.join(line.split()) for line in lines]
                         text = '\n'.join(line for line in lines if line)
@@ -142,23 +139,25 @@ class PyMuPDFParser(DocumentParser):
 
                     # Create chunk for this page if requested
                     if self._chunk_by_page and text.strip():
+                        chunk_metadata = {
+                            'width': page.rect.width,
+                            'height': page.rect.height,
+                        }
+
+                        # Note image locations if requested
+                        if self._extract_images:
+                            images = page.get_images()
+                            if images:
+                                chunk_metadata['image_count'] = len(images)
+
                         chunk = ParsedChunk(
                             text=text.strip(),
                             source_file=str(file_path),
                             page_number=page_num + 1,  # 1-indexed
                             chunk_index=len(chunks),
-                            metadata={
-                                'width': page.rect.width,
-                                'height': page.rect.height,
-                            }
+                            metadata=chunk_metadata,
                         )
                         chunks.append(chunk)
-
-                    # Note image locations if requested
-                    if self._extract_images:
-                        images = page.get_images()
-                        if images:
-                            chunks[-1].metadata['image_count'] = len(images) if chunks else 0
 
                 except Exception as e:
                     warnings.append(f"Error on page {page_num + 1}: {str(e)[:100]}")

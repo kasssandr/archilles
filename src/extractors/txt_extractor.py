@@ -36,26 +36,19 @@ class TXTExtractor(BaseExtractor):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         try:
-            # Detect encoding
             with open(file_path, 'rb') as f:
                 raw_data = f.read()
 
-            # Try to detect encoding
             detected = chardet.detect(raw_data)
             encoding = detected.get('encoding', 'utf-8')
 
             # Fallback encodings to try if detection fails
-            encodings_to_try = [
-                encoding,
-                'utf-8',
-                'latin-1',
-                'windows-1252',
-                'iso-8859-1',
-            ]
+            # Note: latin-1 never raises UnicodeDecodeError, so it acts as a
+            # guaranteed final fallback.
+            encodings_to_try = [encoding, 'utf-8', 'latin-1', 'windows-1252']
 
             text = None
             used_encoding = None
-
             for enc in encodings_to_try:
                 try:
                     text = raw_data.decode(enc)
@@ -65,7 +58,7 @@ class TXTExtractor(BaseExtractor):
                     continue
 
             if text is None:
-                raise ExtractionError(f"Could not decode file with any known encoding")
+                raise ExtractionError("Could not decode file with any known encoding")
 
             # Normalize line endings
             text = text.replace('\r\n', '\n').replace('\r', '\n')

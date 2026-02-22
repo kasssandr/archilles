@@ -8,7 +8,6 @@ then extracts text using our native extractors.
 from pathlib import Path
 import subprocess
 import tempfile
-import shutil
 from typing import Optional
 
 from .models import ExtractedText
@@ -206,6 +205,9 @@ class CalibreConverter:
         except Exception as e:
             raise ConversionError(f"Conversion error: {e}") from e
 
+    # Formats best converted to PDF (scanned/image-based documents)
+    _PDF_TARGET_FORMATS = {'djvu', 'djv'}
+
     @classmethod
     def get_optimal_target_format(cls, source_format: str) -> str:
         """
@@ -217,17 +219,6 @@ class CalibreConverter:
         Returns:
             'epub' or 'pdf'
         """
-        # DJVU is scanned, better to keep as PDF
-        if source_format.lower() in ['djvu', 'djv']:
+        if source_format.lower() in cls._PDF_TARGET_FORMATS:
             return 'pdf'
-
-        # DOC/DOCX → EPUB (better structure preservation)
-        if source_format.lower() in ['doc', 'docx', 'rtf', 'odt']:
-            return 'epub'
-
-        # Kindle formats → EPUB (similar structure)
-        if source_format.lower() in ['mobi', 'azw', 'azw3', 'azw4']:
-            return 'epub'
-
-        # Default to EPUB (more structure preserved)
         return 'epub'

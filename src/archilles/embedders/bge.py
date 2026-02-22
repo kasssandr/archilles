@@ -72,6 +72,17 @@ BGE_MODELS = {
 BGEModelName = Literal["bge-small", "bge-base", "bge-m3"]
 
 
+def _resolve_device(device: DeviceType) -> str:
+    """Resolve 'auto' to the best available device, or pass through explicit values."""
+    if device != "auto":
+        return device
+    if TORCH_AVAILABLE and torch.cuda.is_available():
+        return "cuda"
+    if TORCH_AVAILABLE and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 class BGEEmbedder(TextEmbedder):
     """
     BGE (BAAI General Embedding) text embedder.
@@ -113,18 +124,8 @@ class BGEEmbedder(TextEmbedder):
         self._show_progress = show_progress
         self._model: Optional[SentenceTransformer] = None
 
-        # Determine device
-        if device == "auto":
-            if TORCH_AVAILABLE and torch.cuda.is_available():
-                self._device = "cuda"
-            elif TORCH_AVAILABLE and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                self._device = "mps"
-            else:
-                self._device = "cpu"
-        else:
-            self._device = device
+        self._device = _resolve_device(device)
 
-        # Set batch size
         if batch_size is not None:
             self._batch_size = batch_size
         elif self._device == "cpu":
@@ -192,15 +193,7 @@ class BGEEmbedder(TextEmbedder):
         logger.info(f"Unloaded {self._model_name}")
 
     def embed_batch(self, texts: List[str]) -> EmbeddingResult:
-        """
-        Embed a batch of texts.
-
-        Args:
-            texts: List of text strings to embed
-
-        Returns:
-            EmbeddingResult with embeddings array
-        """
+        """Embed a batch of texts, returning an EmbeddingResult with the embeddings array."""
         if not texts:
             return EmbeddingResult(
                 embeddings=np.array([], dtype=np.float32).reshape(0, self._config["dimension"]),
@@ -211,13 +204,10 @@ class BGEEmbedder(TextEmbedder):
                 device=self._device
             )
 
-        # Ensure model is loaded
         if self._model is None:
             self.load_model()
 
         start = time.time()
-
-        # Generate embeddings
         embeddings = self._model.encode(
             texts,
             batch_size=self._batch_size,
@@ -228,10 +218,10 @@ class BGEEmbedder(TextEmbedder):
 
         duration = time.time() - start
 
-        # Ensure correct dtype
         if not isinstance(embeddings, np.ndarray):
-            embeddings = np.array(embeddings)
-        embeddings = embeddings.astype(np.float32)
+            embeddings = np.array(embeddings, dtype=np.float32)
+        else:
+            embeddings = embeddings.astype(np.float32)
 
         return EmbeddingResult(
             embeddings=embeddings,
@@ -270,6 +260,13 @@ def create_bge_embedder(
     return BGEEmbedder(model_name=model_name, device=device, **kwargs)
 
 
+_PROFILE_MAP = {
+    "minimal": ("bge-small", "cpu", 8),
+    "balanced": ("bge-base", "cuda", 32),
+    "maximal": ("bge-m3", "cuda", 64),
+}
+
+
 def create_embedder_for_profile(profile_name: str) -> Optional[BGEEmbedder]:
     """
     Create the appropriate BGE embedder for a hardware profile.
@@ -280,20 +277,14 @@ def create_embedder_for_profile(profile_name: str) -> Optional[BGEEmbedder]:
     Returns:
         Configured BGEEmbedder instance
     """
-    profile_map = {
-        "minimal": ("bge-small", "cpu", 8),
-        "balanced": ("bge-base", "cuda", 32),
-        "maximal": ("bge-m3", "cuda", 64),
-    }
-
-    if profile_name not in profile_map:
+    if profile_name not in _PROFILE_MAP:
         raise ValueError(f"Unknown profile: {profile_name}")
 
-    model_name, device, batch_size = profile_map[profile_name]
+    model_name, device, batch_size = _PROFILE_MAP[profile_name]
     return create_bge_embedder(
         model_name=model_name,
         device=device,
-        batch_size=batch_size
+        batch_size=batch_size,
     )
 
 
@@ -305,7 +296,7 @@ def _auto_register():
 
     from .registry import register_embedder
 
-    for model_name in BGE_MODELS.keys():
+    for model_name in BGE_MODELS:
         try:
             embedder = BGEEmbedder(model_name=model_name, device="cpu")
             register_embedder(embedder)

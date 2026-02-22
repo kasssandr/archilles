@@ -79,7 +79,7 @@ class EmbeddingResult:
 
     @property
     def texts_per_second(self) -> float:
-        """Calculate throughput."""
+        """Calculate text throughput."""
         if self.duration_seconds > 0:
             return self.texts_count / self.duration_seconds
         return 0.0
@@ -87,7 +87,7 @@ class EmbeddingResult:
     @property
     def tokens_per_second(self) -> float:
         """Calculate token throughput."""
-        if self.duration_seconds > 0 and self.tokens_processed > 0:
+        if self.duration_seconds > 0:
             return self.tokens_processed / self.duration_seconds
         return 0.0
 
@@ -96,7 +96,7 @@ class EmbeddingResult:
         return self.embeddings[index]
 
     def to_list(self) -> List[List[float]]:
-        """Convert embeddings to list of lists (for JSON serialization)."""
+        """Convert embeddings to nested lists for JSON serialization."""
         return self.embeddings.tolist()
 
     def __repr__(self) -> str:
@@ -137,45 +137,23 @@ class TextEmbedder(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """
-        Unique identifier for this embedder.
-
-        Used in registry lookups and logging.
-        Should be lowercase with hyphens (e.g., "bge-small", "openai-ada").
-        """
+        """Unique identifier, lowercase with hyphens (e.g., "bge-small", "openai-ada")."""
         pass
 
     @property
     @abstractmethod
     def capabilities(self) -> EmbedderCapabilities:
-        """
-        Declare embedder characteristics.
-
-        Returns:
-            EmbedderCapabilities describing model and performance
-        """
+        """Declare embedder characteristics."""
         pass
 
     @property
     def device(self) -> str:
-        """
-        Current device being used.
-
-        Returns:
-            Device string ("cpu", "cuda", "mps")
-        """
+        """Current device being used (cpu, cuda, or mps)."""
         return "cpu"
 
     @abstractmethod
     def embed_batch(self, texts: List[str]) -> EmbeddingResult:
-        """
-        Embed a batch of texts.
-
-        Args:
-            texts: List of text strings to embed
-
-        Returns:
-            EmbeddingResult with embeddings array
+        """Embed a batch of texts.
 
         Raises:
             RuntimeError: If embedding fails
@@ -183,49 +161,22 @@ class TextEmbedder(ABC):
         pass
 
     def embed(self, text: str) -> np.ndarray:
-        """
-        Embed a single text.
-
-        Convenience method that wraps embed_batch.
-
-        Args:
-            text: Text string to embed
-
-        Returns:
-            1D numpy array of embedding
-        """
+        """Embed a single text. Returns a 1D numpy array."""
         result = self.embed_batch([text])
         return result.get_embedding(0)
 
     def embed_with_metadata(self, text: str) -> EmbeddingResult:
-        """
-        Embed a single text with full metadata.
-
-        Args:
-            text: Text string to embed
-
-        Returns:
-            EmbeddingResult with single embedding
-        """
+        """Embed a single text, returning full EmbeddingResult metadata."""
         return self.embed_batch([text])
 
     @abstractmethod
     def load_model(self) -> None:
-        """
-        Load the model into memory.
-
-        Should be called before first embedding.
-        May be called automatically by embed methods.
-        """
+        """Load the model into memory. Called before first embedding."""
         pass
 
     @abstractmethod
     def unload_model(self) -> None:
-        """
-        Unload the model from memory.
-
-        Frees GPU memory and resources.
-        """
+        """Unload the model from memory, freeing GPU resources."""
         pass
 
     @property

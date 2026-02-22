@@ -21,15 +21,16 @@ class FormatDetector:
     """
 
     # Magic bytes for common formats
+    # Note: PK\x03\x04 (ZIP) covers EPUB, DOCX, and other ZIP-based formats.
+    # These are disambiguated in _detect_by_magic via content inspection.
     MAGIC_SIGNATURES = {
         b'%PDF': 'pdf',
-        b'PK\x03\x04': 'epub',  # EPUB is a ZIP file
-        b'<?xml': 'html',  # or XML-based formats
+        b'PK\x03\x04': 'zip',  # ZIP-based: EPUB, DOCX, etc. (disambiguated below)
+        b'<?xml': 'html',
         b'<!DOCTYPE html': 'html',
         b'<html': 'html',
         b'MOBI': 'mobi',
-        b'\xd0\xcf\x11\xe0': 'doc',  # Old DOC format
-        b'PK\x03\x04\x14\x00\x06\x00': 'docx',  # DOCX is ZIP
+        b'\xd0\xcf\x11\xe0': 'doc',
         b'{\\rtf': 'rtf',
         b'AT&TFORM': 'djvu',
     }
@@ -89,23 +90,22 @@ class FormatDetector:
     def _detect_by_magic(cls, file_path: Path) -> Optional[str]:
         """Detect format by reading magic bytes."""
         with open(file_path, 'rb') as f:
-            header = f.read(512)  # Read first 512 bytes
+            header = f.read(512)
 
         # Check known signatures
         for signature, fmt in cls.MAGIC_SIGNATURES.items():
             if header.startswith(signature):
-                return fmt
+                if fmt != 'zip':
+                    return fmt
 
-        # Special case: EPUB is ZIP, need to check further
-        if header.startswith(b'PK\x03\x04'):
-            # Read more to check for EPUB signature
-            with open(file_path, 'rb') as f:
-                content = f.read(4096)
+                # ZIP-based format: disambiguate by inspecting content
+                with open(file_path, 'rb') as f:
+                    content = f.read(4096)
                 if b'mimetype' in content and b'application/epub+zip' in content:
                     return 'epub'
-                # Could be DOCX or other ZIP-based format
                 if b'word/' in content or b'[Content_Types].xml' in content:
                     return 'docx'
+                return 'epub'  # Default ZIP-based ebook assumption
 
         return None
 

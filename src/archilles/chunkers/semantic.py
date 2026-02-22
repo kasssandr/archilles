@@ -10,7 +10,7 @@ This produces more coherent chunks for embedding.
 """
 
 import re
-from typing import List, Optional
+from typing import List
 
 from .base import TextChunker, TextChunk, ChunkerConfig
 
@@ -43,107 +43,77 @@ class SemanticChunker(TextChunker):
         return "Chunks text respecting sentence and paragraph boundaries"
 
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
-        """
-        Split text into semantically coherent chunks.
-
-        Args:
-            text: The text to chunk
-            source_file: Optional source file path for metadata
-
-        Returns:
-            List of TextChunk objects
-        """
+        """Split text into semantically coherent chunks."""
         if not text or not text.strip():
             return []
 
-        chunks = []
         chunk_size = self.config.chunk_size
         overlap = self.config.chunk_overlap
         min_size = self.config.min_chunk_size
 
-        # Split into paragraphs first
         paragraphs = self.PARAGRAPH_BREAK.split(text)
         paragraphs = [p.strip() for p in paragraphs if p.strip()]
 
+        chunks: List[TextChunk] = []
         current_chunk_text = ""
         current_start = 0
-        text_position = 0  # Track position in original text
+        text_position = 0
 
         for para in paragraphs:
-            # Find actual position of this paragraph in original text
             para_start = text.find(para, text_position)
             if para_start == -1:
                 para_start = text_position
             text_position = para_start + len(para)
 
-            # Check if adding this paragraph exceeds chunk size
-            potential_text = current_chunk_text + ("\n\n" if current_chunk_text else "") + para
+            separator = "\n\n" if current_chunk_text else ""
+            potential_text = current_chunk_text + separator + para
 
             if len(potential_text) <= chunk_size:
-                # Fits in current chunk
                 if not current_chunk_text:
                     current_start = para_start
                 current_chunk_text = potential_text
+                continue
+
+            # Flush the current chunk before starting a new one
+            if current_chunk_text and len(current_chunk_text) >= min_size:
+                chunks.append(self._create_chunk(
+                    current_chunk_text, len(chunks), source_file,
+                    current_start, current_start + len(current_chunk_text),
+                ))
+
+            # Handle the paragraph that caused overflow
+            if len(para) <= chunk_size:
+                current_chunk_text = para
+                current_start = para_start
             else:
-                # Need to handle overflow
-                if current_chunk_text:
-                    # Save current chunk if it meets minimum size
-                    if len(current_chunk_text) >= min_size:
-                        chunks.append(self._create_chunk(
-                            current_chunk_text,
-                            len(chunks),
-                            source_file,
-                            current_start,
-                            current_start + len(current_chunk_text)
-                        ))
-
-                # Handle the paragraph that didn't fit
-                if len(para) <= chunk_size:
-                    # Paragraph fits in a single chunk
-                    current_chunk_text = para
-                    current_start = para_start
+                para_chunks = self._split_long_paragraph(
+                    para, chunk_size, overlap, min_size,
+                )
+                for para_chunk in para_chunks[:-1]:
+                    chunks.append(self._create_chunk(
+                        para_chunk, len(chunks), source_file,
+                        para_start, para_start + len(para_chunk),
+                    ))
+                if para_chunks:
+                    current_chunk_text = para_chunks[-1]
+                    current_start = para_start + len(para) - len(current_chunk_text)
                 else:
-                    # Paragraph is too long, need to split it
-                    para_chunks = self._split_long_paragraph(
-                        para, chunk_size, overlap, min_size
-                    )
-                    for i, para_chunk in enumerate(para_chunks[:-1]):
-                        chunks.append(self._create_chunk(
-                            para_chunk,
-                            len(chunks),
-                            source_file,
-                            para_start,
-                            para_start + len(para_chunk)
-                        ))
-                    # Keep last part as current chunk for potential merging
-                    if para_chunks:
-                        current_chunk_text = para_chunks[-1]
-                        current_start = para_start + len(para) - len(current_chunk_text)
-                    else:
-                        current_chunk_text = ""
+                    current_chunk_text = ""
 
-        # Don't forget the last chunk
+        # Emit or merge the trailing chunk
         if current_chunk_text and len(current_chunk_text) >= min_size:
             chunks.append(self._create_chunk(
-                current_chunk_text,
-                len(chunks),
-                source_file,
-                current_start,
-                current_start + len(current_chunk_text)
+                current_chunk_text, len(chunks), source_file,
+                current_start, current_start + len(current_chunk_text),
             ))
         elif current_chunk_text and chunks:
-            # Merge small final chunk with previous
-            last_chunk = chunks[-1]
-            merged_text = last_chunk.text + "\n\n" + current_chunk_text
+            last = chunks[-1]
+            merged_text = last.text + "\n\n" + current_chunk_text
             chunks[-1] = self._create_chunk(
-                merged_text,
-                last_chunk.chunk_index,
-                source_file,
-                last_chunk.start_char,
-                current_start + len(current_chunk_text)
+                merged_text, last.chunk_index, source_file,
+                last.start_char, current_start + len(current_chunk_text),
             )
 
-        # Apply overlap by extending chunks
         if overlap > 0 and len(chunks) > 1:
             chunks = self._apply_overlap(chunks, text, overlap)
 
@@ -154,47 +124,40 @@ class SemanticChunker(TextChunker):
         para: str,
         chunk_size: int,
         overlap: int,
-        min_size: int
+        min_size: int,
     ) -> List[str]:
-        """
-        Split a paragraph that's too long into smaller chunks.
-
-        Tries to break at sentence boundaries.
-        """
+        """Split a paragraph that exceeds chunk_size, breaking at sentence boundaries."""
         if len(para) <= chunk_size:
             return [para]
 
-        chunks = []
-        sentences = self.SENTENCE_ENDINGS.split(para)
+        # Use finditer to get sentence boundaries without losing the delimiters
+        parts: List[str] = []
+        last_end = 0
+        for match in self.SENTENCE_ENDINGS.finditer(para):
+            parts.append(para[last_end:match.end()].rstrip())
+            last_end = match.end()
+        if last_end < len(para):
+            trailing = para[last_end:].strip()
+            if trailing:
+                parts.append(trailing)
 
+        chunks: List[str] = []
         current = ""
-        for i, sent in enumerate(sentences):
-            sent = sent.strip()
-            if not sent:
+        for part in parts:
+            if not part:
                 continue
-
-            # Re-add sentence ending if not last
-            if i < len(sentences) - 1:
-                # Find the ending that was removed
-                match = self.SENTENCE_ENDINGS.search(para, para.find(sent) + len(sent) - 1)
-                if match:
-                    sent += match.group().rstrip()
-
-            potential = current + (" " if current else "") + sent
-
+            potential = current + (" " if current else "") + part
             if len(potential) <= chunk_size:
                 current = potential
             else:
                 if current:
                     chunks.append(current)
-                # Handle sentence longer than chunk_size
-                if len(sent) > chunk_size:
-                    # Split by words
-                    word_chunks = self._split_by_words(sent, chunk_size)
+                if len(part) > chunk_size:
+                    word_chunks = self._split_by_words(part, chunk_size)
                     chunks.extend(word_chunks[:-1])
                     current = word_chunks[-1] if word_chunks else ""
                 else:
-                    current = sent
+                    current = part
 
         if current:
             chunks.append(current)

@@ -240,16 +240,27 @@ class UniversalExtractor:
             'calibre_available': self.calibre_available,
         }
 
+    # Map detected format names to the extractor attribute that handles them.
+    _FORMAT_TO_EXTRACTOR = {
+        'pdf': 'pdf_extractor',
+        'epub': 'epub_extractor',
+        'txt': 'txt_extractor',
+        'text': 'txt_extractor',
+        'log': 'txt_extractor',
+        'md': 'txt_extractor',
+        'markdown': 'txt_extractor',
+        'rst': 'txt_extractor',
+        'html': 'html_extractor',
+        'htm': 'html_extractor',
+        'xhtml': 'html_extractor',
+        'xml': 'html_extractor',
+    }
+
     def _get_native_extractor(self, format_name: str):
         """Get appropriate native extractor for format."""
-        if self.pdf_extractor.supports(Path(f"dummy.{format_name}")):
-            return self.pdf_extractor
-        elif self.epub_extractor.supports(Path(f"dummy.{format_name}")):
-            return self.epub_extractor
-        elif self.txt_extractor.supports(Path(f"dummy.{format_name}")):
-            return self.txt_extractor
-        elif self.html_extractor.supports(Path(f"dummy.{format_name}")):
-            return self.html_extractor
+        attr = self._FORMAT_TO_EXTRACTOR.get(format_name)
+        if attr:
+            return getattr(self, attr)
         return None
 
     def __repr__(self):

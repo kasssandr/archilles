@@ -88,13 +88,8 @@ def detect_hardware() -> HardwareProfile:
     Returns:
         HardwareProfile with detected capabilities
     """
-    # Get CPU cores
     cpu_cores = _get_cpu_cores()
-
-    # Get RAM
     ram_gb = _get_ram_gb()
-
-    # Get GPU info
     gpu_available, gpu_name, vram_gb, cuda_available = _get_gpu_info()
 
     profile = HardwareProfile(
@@ -161,6 +156,28 @@ def _get_gpu_info() -> tuple[bool, Optional[str], Optional[float], bool]:
         return False, None, None, False
 
 
+def _print_hardware_header(profile: HardwareProfile, recommended: ProfileName) -> None:
+    """Print the common hardware-detection banner used by display functions."""
+    print()
+    print("=" * 64)
+    print("  ARCHILLES - Hardware Detection")
+    print("=" * 64)
+    print()
+    print("  Detected Hardware:")
+    print(f"    CPU: {profile.cpu_cores} cores")
+    print(f"    RAM: {profile.ram_gb:.1f} GB")
+
+    if profile.gpu_available and profile.gpu_name:
+        vram_str = f"{profile.vram_gb:.1f} GB" if profile.vram_gb else "unknown"
+        print(f"    GPU: {profile.gpu_name} ({vram_str})")
+        print(f"    CUDA: {'available' if profile.cuda_available else 'not available'}")
+    else:
+        print("    GPU: not detected")
+
+    print()
+    print(f"  Recommended Profile: {recommended.upper()}")
+
+
 def print_hardware_detection(profile: Optional[HardwareProfile] = None) -> HardwareProfile:
     """
     Print hardware detection results in a formatted box.
@@ -175,32 +192,22 @@ def print_hardware_detection(profile: Optional[HardwareProfile] = None) -> Hardw
         profile = detect_hardware()
 
     recommended = profile.recommend_profile()
+    _print_hardware_header(profile, recommended)
 
-    # Build the display
-    print()
-    print("=" * 64)
-    print("  ARCHILLES - Hardware Detection")
-    print("=" * 64)
-    print()
-    print("  Detected Hardware:")
-
-    print(f"    CPU: {profile.cpu_cores} cores")
-    print(f"    RAM: {profile.ram_gb:.1f} GB")
-
-    if profile.gpu_available and profile.gpu_name:
-        vram_str = f"{profile.vram_gb:.1f} GB" if profile.vram_gb else "unknown"
-        print(f"    GPU: {profile.gpu_name} ({vram_str})")
-        print(f"    CUDA: {'available' if profile.cuda_available else 'not available'}")
-    else:
-        print("    GPU: not detected")
-
-    print()
-    print(f"  Recommended Profile: {recommended.upper()}")
     print()
     print("=" * 64)
     print()
 
     return profile
+
+
+_PROFILE_DESCRIPTIONS = {
+    "minimal": "Fast & resource-efficient (CPU-optimized)",
+    "balanced": "Good balance of speed and quality",
+    "maximal": "Maximum quality (requires strong GPU)",
+}
+
+_PROFILE_OPTIONS = ["minimal", "balanced", "maximal"]
 
 
 def select_profile_interactive(profile: Optional[HardwareProfile] = None) -> str:
@@ -217,57 +224,35 @@ def select_profile_interactive(profile: Optional[HardwareProfile] = None) -> str
         profile = detect_hardware()
 
     recommended = profile.recommend_profile()
+    _print_hardware_header(profile, recommended)
 
-    # Map recommendations to display
-    profile_descriptions = {
-        "minimal": "Fast & resource-efficient (CPU-optimized)",
-        "balanced": "Good balance of speed and quality",
-        "maximal": "Maximum quality (requires strong GPU)",
-    }
-
-    print()
-    print("=" * 64)
-    print("  ARCHILLES - Hardware Detection")
-    print("=" * 64)
-    print()
-    print("  Detected Hardware:")
-    print(f"    CPU: {profile.cpu_cores} cores")
-    print(f"    RAM: {profile.ram_gb:.1f} GB")
-
-    if profile.gpu_available and profile.gpu_name:
-        vram_str = f"{profile.vram_gb:.1f} GB" if profile.vram_gb else "unknown"
-        print(f"    GPU: {profile.gpu_name} ({vram_str})")
-    else:
-        print("    GPU: not detected")
-
-    print()
-    print(f"  Recommended: {recommended.upper()}")
     print()
     print("-" * 64)
     print()
     print("  Select a profile:")
     print()
 
-    options = ["minimal", "balanced", "maximal"]
-    for i, opt in enumerate(options, 1):
+    for i, opt in enumerate(_PROFILE_OPTIONS, 1):
         rec_marker = " <- recommended" if opt == recommended else ""
-        print(f"    [{i}] {opt.upper()}: {profile_descriptions[opt]}{rec_marker}")
+        print(f"    [{i}] {opt.upper()}: {_PROFILE_DESCRIPTIONS[opt]}{rec_marker}")
 
     print()
     print("=" * 64)
     print()
 
+    default_index = _PROFILE_OPTIONS.index(recommended) + 1
+
     while True:
         try:
-            choice = input(f"Choose profile [1-3, default={options.index(recommended)+1}]: ").strip()
+            choice = input(f"Choose profile [1-3, default={default_index}]: ").strip()
 
             if choice == "":
                 return recommended
 
-            if choice in ["1", "2", "3"]:
-                return options[int(choice) - 1]
+            if choice in ("1", "2", "3"):
+                return _PROFILE_OPTIONS[int(choice) - 1]
 
-            if choice.lower() in options:
+            if choice.lower() in _PROFILE_OPTIONS:
                 return choice.lower()
 
             print("  Invalid choice. Enter 1, 2, or 3.")

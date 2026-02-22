@@ -96,19 +96,18 @@ class EmbedderRegistry:
         Returns:
             List of compatible embedders
         """
-        compatible = []
-        for embedder in self._embedders.values():
-            caps = embedder.capabilities
-            if device == "cpu":
-                compatible.append(embedder)
-            elif device == "cuda" and caps.supports_cuda:
-                compatible.append(embedder)
-            elif device == "mps" and caps.supports_mps:
-                compatible.append(embedder)
-            elif device == "auto":
-                compatible.append(embedder)
+        if device in ("cpu", "auto"):
+            return list(self._embedders.values())
 
-        return compatible
+        device_support = {"cuda": "supports_cuda", "mps": "supports_mps"}
+        attr = device_support.get(device)
+        if not attr:
+            return []
+
+        return [
+            e for e in self._embedders.values()
+            if getattr(e.capabilities, attr, False)
+        ]
 
     def get_best_for_quality(self) -> Optional[TextEmbedder]:
         """

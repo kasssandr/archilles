@@ -243,15 +243,15 @@ class TesseractExtractor(OCRExtractor):
         )
 
 
-class LightOnOCRExtractor(OCRExtractor):
+class _PlaceholderVLMExtractor(OCRExtractor):
     """
-    LightOnOCR-2 Vision-Language model.
+    Base class for VLM-based OCR backends not yet implemented.
 
-    State-of-the-art OCR with layout understanding.
-    Best for complex documents with tables, formulas, multi-column layouts.
-
-    Note: Not yet implemented - placeholder for future development.
+    Subclasses only need to set _NAME and _DESCRIPTION.
     """
+
+    _NAME: str = "Placeholder"
+    _DESCRIPTION: str = "Not yet implemented"
 
     def __init__(
         self,
@@ -263,53 +263,29 @@ class LightOnOCRExtractor(OCRExtractor):
 
     @property
     def name(self) -> str:
-        return "LightOnOCR-2"
+        return self._NAME
 
     def is_available(self) -> bool:
-        """Check if LightOnOCR model is available."""
         # TODO: Check for model weights and dependencies
         return False
 
     def extract(self, pdf_path: Path, pages: Optional[List[int]] = None) -> OCRResult:
-        """Extract text using LightOnOCR-2 VLM."""
         raise NotImplementedError(
-            "LightOnOCR-2 integration is planned for future release. "
+            f"{self._NAME} integration is planned for future release. "
             "Use Tesseract backend for now."
         )
 
 
-class OlmOCRExtractor(OCRExtractor):
-    """
-    olmOCR-2 Vision-Language model.
+class LightOnOCRExtractor(_PlaceholderVLMExtractor):
+    """LightOnOCR-2: State-of-the-art VLM for complex layouts (planned)."""
+    _NAME = "LightOnOCR-2"
+    _DESCRIPTION = "Vision-Language model for complex layouts (planned)"
 
-    Alternative VLM optimized for academic documents.
 
-    Note: Not yet implemented - placeholder for future development.
-    """
-
-    def __init__(
-        self,
-        model_path: Optional[Path] = None,
-        device: str = "auto"
-    ):
-        self.model_path = model_path
-        self.device = device
-
-    @property
-    def name(self) -> str:
-        return "olmOCR-2"
-
-    def is_available(self) -> bool:
-        """Check if olmOCR model is available."""
-        # TODO: Check for model weights and dependencies
-        return False
-
-    def extract(self, pdf_path: Path, pages: Optional[List[int]] = None) -> OCRResult:
-        """Extract text using olmOCR-2 VLM."""
-        raise NotImplementedError(
-            "olmOCR-2 integration is planned for future release. "
-            "Use Tesseract backend for now."
-        )
+class OlmOCRExtractor(_PlaceholderVLMExtractor):
+    """olmOCR-2: Alternative VLM optimized for academic documents (planned)."""
+    _NAME = "olmOCR-2"
+    _DESCRIPTION = "VLM for academic documents (planned)"
 
 
 def get_ocr_extractor(backend: OCRBackend = OCRBackend.AUTO) -> OCRExtractor:
@@ -432,32 +408,25 @@ def get_ocr_status() -> Dict[str, Any]:
     Returns:
         Dictionary with availability status for each backend
     """
-    status = {
-        "tesseract": {
-            "available": TesseractExtractor().is_available(),
-            "name": "Tesseract OCR",
-            "description": "Classic OCR, best for simple documents"
-        },
-        "lighton": {
-            "available": LightOnOCRExtractor().is_available(),
-            "name": "LightOnOCR-2",
-            "description": "Vision-Language model for complex layouts (planned)"
-        },
-        "olmocr": {
-            "available": OlmOCRExtractor().is_available(),
-            "name": "olmOCR-2",
-            "description": "VLM for academic documents (planned)"
+    # Priority order: best quality first
+    backends = [
+        ("lighton", LightOnOCRExtractor(), "Vision-Language model for complex layouts (planned)"),
+        ("olmocr", OlmOCRExtractor(), "VLM for academic documents (planned)"),
+        ("tesseract", TesseractExtractor(), "Classic OCR, best for simple documents"),
+    ]
+
+    status: Dict[str, Any] = {}
+    recommended = None
+
+    for key, extractor, description in backends:
+        available = extractor.is_available()
+        status[key] = {
+            "available": available,
+            "name": extractor.name,
+            "description": description,
         }
-    }
+        if available and recommended is None:
+            recommended = key
 
-    # Find recommended backend
-    if status["lighton"]["available"]:
-        status["recommended"] = "lighton"
-    elif status["olmocr"]["available"]:
-        status["recommended"] = "olmocr"
-    elif status["tesseract"]["available"]:
-        status["recommended"] = "tesseract"
-    else:
-        status["recommended"] = None
-
+    status["recommended"] = recommended
     return status

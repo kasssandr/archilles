@@ -14,7 +14,7 @@ Features:
 import time
 import zipfile
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Optional, List, Dict
 import logging
 import re
 
@@ -68,7 +68,7 @@ class EPUBParser(DocumentParser):
         remove_formatting: bool = True
     ):
         self._chunk_by_chapter = chunk_by_chapter
-        self._extract_toc = extract_toc
+        self._should_extract_toc = extract_toc
         self._remove_formatting = remove_formatting
 
     @property
@@ -205,7 +205,7 @@ class EPUBParser(DocumentParser):
 
         # Extract TOC if requested
         toc_data = []
-        if self._extract_toc:
+        if self._should_extract_toc:
             try:
                 toc_data = self._extract_toc(book)
             except Exception as e:
@@ -226,7 +226,7 @@ class EPUBParser(DocumentParser):
             parser_version=self.version,
             metadata={
                 'chapter_count': len(chapters),
-                'toc': toc_data if toc_data else None,
+                'toc': toc_data or None,
             }
         )
 
@@ -323,7 +323,7 @@ class EPUBParser(DocumentParser):
         """Extract single metadata value from EPUB."""
         try:
             values = book.get_metadata(namespace, name)
-            if values and len(values) > 0:
+            if values:
                 return values[0][0]
         except Exception:
             pass
@@ -375,14 +375,12 @@ class EPUBParser(DocumentParser):
         return toc
 
     def _clean_text(self, text: str) -> str:
-        """Clean extracted text."""
-        # Normalize whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Remove multiple newlines
-        text = re.sub(r'\n\s*\n', '\n\n', text)
-        # Strip leading/trailing whitespace
-        text = text.strip()
-        return text
+        """Clean extracted text while preserving paragraph breaks."""
+        # Collapse runs of horizontal whitespace (spaces, tabs) on each line
+        text = re.sub(r'[^\S\n]+', ' ', text)
+        # Collapse three or more newlines into a double newline
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
 
 
 # Test if run directly

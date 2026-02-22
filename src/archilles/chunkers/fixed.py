@@ -10,12 +10,73 @@ from typing import List, Optional
 from .base import TextChunker, TextChunk, ChunkerConfig
 
 
+def _sliding_window_chunks(
+    text: str,
+    source_file: str,
+    chunk_size: int,
+    overlap: int,
+    min_size: int,
+    respect_word_boundaries: bool = True,
+    token_count_fn=None,
+) -> List[TextChunk]:
+    """
+    Core sliding-window chunking used by both FixedSizeChunker and TokenBasedChunker.
+
+    Args:
+        text: Pre-stripped text to chunk
+        source_file: Source file path for metadata
+        chunk_size: Maximum chunk size in characters
+        overlap: Overlap between consecutive chunks in characters
+        min_size: Minimum chunk size to emit
+        respect_word_boundaries: Whether to break at word boundaries
+        token_count_fn: Optional callable to compute token count per chunk
+    """
+    step = chunk_size - overlap
+    if step <= 0:
+        step = chunk_size // 2
+
+    chunks: List[TextChunk] = []
+    text_len = len(text)
+    position = 0
+
+    while position < text_len:
+        end = min(position + chunk_size, text_len)
+        chunk_text = text[position:end]
+
+        if end < text_len and respect_word_boundaries:
+            last_space = chunk_text.rfind(' ')
+            if last_space > min_size:
+                chunk_text = chunk_text[:last_space]
+                end = position + last_space
+
+        stripped = chunk_text.strip()
+        if len(stripped) >= min_size:
+            token_count = token_count_fn(stripped) if token_count_fn else None
+            chunks.append(TextChunk(
+                text=stripped,
+                chunk_index=len(chunks),
+                source_file=source_file,
+                start_char=position,
+                end_char=end,
+                char_count=len(stripped),
+                token_count=token_count,
+            ))
+
+        position += step
+
+        # Avoid infinite loop when step does not advance past the current end
+        if position >= end and end < text_len:
+            position = end
+
+    return chunks
+
+
 class FixedSizeChunker(TextChunker):
     """
     Fixed-size text chunker.
 
-    Splits text into chunks of approximately equal size.
-    Can break at word boundaries to avoid splitting words.
+    Splits text into chunks of approximately equal size,
+    optionally breaking at word boundaries to avoid splitting words.
     """
 
     @property
@@ -27,67 +88,17 @@ class FixedSizeChunker(TextChunker):
         return "Chunks text into fixed-size pieces"
 
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
-        """
-        Split text into fixed-size chunks.
-
-        Args:
-            text: The text to chunk
-            source_file: Optional source file path for metadata
-
-        Returns:
-            List of TextChunk objects
-        """
         if not text or not text.strip():
             return []
 
-        chunks = []
-        chunk_size = self.config.chunk_size
-        overlap = self.config.chunk_overlap
-        min_size = self.config.min_chunk_size
-
-        # Calculate step size (chunk_size - overlap)
-        step = chunk_size - overlap
-        if step <= 0:
-            step = chunk_size // 2  # Fallback
-
-        text = text.strip()
-        text_len = len(text)
-        position = 0
-
-        while position < text_len:
-            # Calculate end position
-            end = min(position + chunk_size, text_len)
-
-            # Extract chunk
-            chunk_text = text[position:end]
-
-            # Adjust to word boundary if not at end
-            if end < text_len and self.config.respect_sentences:
-                # Find last space in chunk
-                last_space = chunk_text.rfind(' ')
-                if last_space > min_size:
-                    chunk_text = chunk_text[:last_space]
-                    end = position + last_space
-
-            # Create chunk if meets minimum size
-            if len(chunk_text.strip()) >= min_size:
-                chunks.append(TextChunk(
-                    text=chunk_text.strip(),
-                    chunk_index=len(chunks),
-                    source_file=source_file,
-                    start_char=position,
-                    end_char=end,
-                    char_count=len(chunk_text.strip())
-                ))
-
-            # Move to next position
-            position = position + step
-
-            # Avoid infinite loop
-            if position >= end and end < text_len:
-                position = end
-
-        return chunks
+        return _sliding_window_chunks(
+            text=text.strip(),
+            source_file=source_file,
+            chunk_size=self.config.chunk_size,
+            overlap=self.config.chunk_overlap,
+            min_size=self.config.min_chunk_size,
+            respect_word_boundaries=self.config.respect_sentences,
+        )
 
 
 class TokenBasedChunker(TextChunker):
@@ -95,21 +106,15 @@ class TokenBasedChunker(TextChunker):
     Token-based chunker using approximate token counts.
 
     Useful when targeting specific token limits for embedding models.
-    Uses ~4 chars per token as default approximation.
+    Uses a configurable chars-per-token ratio (default ~4) to convert
+    token limits into character limits for the sliding window.
     """
 
     def __init__(
         self,
         config: Optional[ChunkerConfig] = None,
-        chars_per_token: float = 4.0
+        chars_per_token: float = 4.0,
     ):
-        """
-        Initialize token-based chunker.
-
-        Args:
-            config: Chunking configuration
-            chars_per_token: Character-to-token ratio (default: 4.0)
-        """
         super().__init__(config)
         self.chars_per_token = chars_per_token
 
@@ -122,62 +127,19 @@ class TokenBasedChunker(TextChunker):
         return f"Chunks text by approximate token count (~{self.chars_per_token} chars/token)"
 
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
-        """
-        Split text into chunks based on token count.
-
-        Args:
-            text: The text to chunk
-            source_file: Optional source file path for metadata
-
-        Returns:
-            List of TextChunk objects with token_count set
-        """
         if not text or not text.strip():
             return []
 
-        # Convert token-based config to character-based
-        char_chunk_size = int(self.config.chunk_size * self.chars_per_token)
-        char_overlap = int(self.config.chunk_overlap * self.chars_per_token)
-        char_min_size = int(self.config.min_chunk_size * self.chars_per_token)
-
-        chunks = []
-        step = char_chunk_size - char_overlap
-        if step <= 0:
-            step = char_chunk_size // 2
-
-        text = text.strip()
-        text_len = len(text)
-        position = 0
-
-        while position < text_len:
-            end = min(position + char_chunk_size, text_len)
-            chunk_text = text[position:end]
-
-            # Adjust to word boundary
-            if end < text_len:
-                last_space = chunk_text.rfind(' ')
-                if last_space > char_min_size:
-                    chunk_text = chunk_text[:last_space]
-                    end = position + last_space
-
-            chunk_text = chunk_text.strip()
-            if len(chunk_text) >= char_min_size:
-                token_count = self.estimate_tokens(chunk_text)
-                chunks.append(TextChunk(
-                    text=chunk_text,
-                    chunk_index=len(chunks),
-                    source_file=source_file,
-                    start_char=position,
-                    end_char=end,
-                    char_count=len(chunk_text),
-                    token_count=token_count
-                ))
-
-            position = position + step
-            if position >= end and end < text_len:
-                position = end
-
-        return chunks
+        ratio = self.chars_per_token
+        return _sliding_window_chunks(
+            text=text.strip(),
+            source_file=source_file,
+            chunk_size=int(self.config.chunk_size * ratio),
+            overlap=int(self.config.chunk_overlap * ratio),
+            min_size=int(self.config.min_chunk_size * ratio),
+            respect_word_boundaries=True,
+            token_count_fn=self.estimate_tokens,
+        )
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count using configured ratio."""

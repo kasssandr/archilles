@@ -79,17 +79,14 @@ class LanguageDetector:
             top_match = confidence_values[0]
             confidence = top_match.value
 
-            # Only return if confidence is high enough
             if confidence >= min_confidence:
-                # Convert Language enum to ISO code
-                lang_code = top_match.language.iso_code_639_1.name.lower()
-                return lang_code
-            else:
-                logger.debug(
-                    f"Language detection uncertain: {top_match.language.name} "
-                    f"({confidence:.2f} < {min_confidence})"
-                )
-                return None
+                return top_match.language.iso_code_639_1.name.lower()
+
+            logger.debug(
+                f"Language detection uncertain: {top_match.language.name} "
+                f"({confidence:.2f} < {min_confidence})"
+            )
+            return None
 
         except Exception as e:
             logger.debug(f"Language detection failed: {e}")

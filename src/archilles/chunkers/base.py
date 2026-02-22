@@ -20,24 +20,13 @@ SizeUnit = Literal["characters", "tokens"]
 
 @dataclass
 class ChunkerConfig:
-    """
-    Configuration for text chunking.
-
-    Attributes:
-        chunk_size: Target size for each chunk
-        chunk_overlap: Overlap between consecutive chunks
-        size_unit: Whether to measure in characters or tokens
-        min_chunk_size: Minimum chunk size (smaller chunks are merged)
-        max_chunk_size: Maximum chunk size (hard limit)
-        respect_sentences: Try to break at sentence boundaries
-        respect_paragraphs: Try to break at paragraph boundaries
-    """
+    """Configuration for text chunking."""
 
     chunk_size: int = 1000
     chunk_overlap: int = 200
     size_unit: SizeUnit = "characters"
     min_chunk_size: int = 100
-    max_chunk_size: Optional[int] = None  # None = no hard limit
+    max_chunk_size: Optional[int] = None
     respect_sentences: bool = True
     respect_paragraphs: bool = True
 
@@ -118,23 +107,12 @@ class TextChunker(ABC):
     """
 
     def __init__(self, config: Optional[ChunkerConfig] = None):
-        """
-        Initialize chunker with configuration.
-
-        Args:
-            config: Chunking configuration (uses defaults if None)
-        """
         self.config = config or ChunkerConfig()
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """
-        Unique identifier for this chunker.
-
-        Used in registry lookups and logging.
-        Should be lowercase with hyphens (e.g., "semantic", "fixed-size").
-        """
+        """Unique identifier, lowercase with hyphens (e.g., "semantic", "fixed-size")."""
         pass
 
     @property
@@ -144,16 +122,7 @@ class TextChunker(ABC):
 
     @abstractmethod
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
-        """
-        Split text into chunks.
-
-        Args:
-            text: The text to chunk
-            source_file: Optional source file path for metadata
-
-        Returns:
-            List of TextChunk objects
-        """
+        """Split text into chunks."""
         pass
 
     def chunk_with_pages(
@@ -161,18 +130,10 @@ class TextChunker(ABC):
         pages: List[str],
         source_file: str = ""
     ) -> List[TextChunk]:
-        """
-        Chunk text while preserving page information.
+        """Chunk text while preserving page information.
 
-        Default implementation joins pages and chunks, then maps back.
-        Subclasses can override for smarter page-aware chunking.
-
-        Args:
-            pages: List of page texts (index = page_number - 1)
-            source_file: Optional source file path for metadata
-
-        Returns:
-            List of TextChunk objects with page_start/page_end set
+        Joins pages, chunks the combined text, then maps chunks back to
+        their source pages. Subclasses can override for page-aware chunking.
         """
         if not pages:
             return []
@@ -212,18 +173,7 @@ class TextChunker(ABC):
         return chunks
 
     def estimate_tokens(self, text: str) -> int:
-        """
-        Estimate token count for text.
-
-        Uses simple heuristic: ~4 characters per token for English.
-        Subclasses can override with actual tokenizer.
-
-        Args:
-            text: Text to estimate
-
-        Returns:
-            Estimated token count
-        """
+        """Estimate token count (~4 chars/token). Override with actual tokenizer."""
         return len(text) // 4
 
     def __repr__(self) -> str:

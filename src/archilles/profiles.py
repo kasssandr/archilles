@@ -39,9 +39,10 @@ class IndexingProfile:
     max_parallel_docs: int
     description: str
 
-    # Additional settings with defaults
-    embedding_dimension: int = 384  # Varies by model
-    max_tokens_per_chunk: int = 512  # Model's max input
+    # These defaults are overridden by every profile definition below,
+    # but kept as sensible fallbacks for ad-hoc construction.
+    embedding_dimension: int = 384
+    max_tokens_per_chunk: int = 512
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -57,43 +58,37 @@ class IndexingProfile:
         return cls(**data)
 
 
-# Pre-defined profiles - ALL use BGE-M3 for consistent quality
+# Shared settings for all profiles (all use BGE-M3 for consistent quality)
+_COMMON = dict(
+    embedding_model="BAAI/bge-m3",
+    embedding_device="cuda",
+    chunk_size=512,
+    chunk_overlap=128,
+    embedding_dimension=1024,
+    max_tokens_per_chunk=8192,
+)
+
 PROFILES: Dict[ProfileName, IndexingProfile] = {
     "minimal": IndexingProfile(
         name="minimal",
-        embedding_model="BAAI/bge-m3",
-        embedding_device="cuda",  # Uses GPU if available, falls back to CPU
-        batch_size=8,  # Small batches for 4GB VRAM (tested on Quadro T1000)
-        chunk_size=512,
-        chunk_overlap=128,
+        batch_size=8,
         max_parallel_docs=2,
         description="For 4-6GB GPUs (Quadro T1000, GTX 1650). Full quality, ~2 min/book.",
-        embedding_dimension=1024,
-        max_tokens_per_chunk=8192,
+        **_COMMON,
     ),
     "balanced": IndexingProfile(
         name="balanced",
-        embedding_model="BAAI/bge-m3",
-        embedding_device="cuda",
-        batch_size=32,  # Medium batches for 8-12GB VRAM
-        chunk_size=512,
-        chunk_overlap=128,
+        batch_size=32,
         max_parallel_docs=4,
         description="For 8-12GB GPUs (RTX 3060, RTX 2070). Full quality, ~30s/book.",
-        embedding_dimension=1024,
-        max_tokens_per_chunk=8192,
+        **_COMMON,
     ),
     "maximal": IndexingProfile(
         name="maximal",
-        embedding_model="BAAI/bge-m3",
-        embedding_device="cuda",
-        batch_size=64,  # Large batches for 16GB+ VRAM
-        chunk_size=512,
-        chunk_overlap=128,
+        batch_size=64,
         max_parallel_docs=8,
         description="For 16GB+ GPUs (RTX 3090, RTX 4080). Full quality, ~15s/book.",
-        embedding_dimension=1024,
-        max_tokens_per_chunk=8192,
+        **_COMMON,
     ),
 }
 

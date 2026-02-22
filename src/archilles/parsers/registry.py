@@ -10,7 +10,7 @@ Features:
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional
 import logging
 
 from .base import DocumentParser, DocumentType
@@ -84,20 +84,12 @@ class ParserRegistry:
         Returns:
             Best matching parser, or None if no parser supports this file
         """
-        file_path = Path(file_path)
-        extension = file_path.suffix.lower()
-
-        candidates: List[DocumentParser] = []
-        for parser in self._parsers.values():
-            if parser.capabilities.supports_extension(extension):
-                candidates.append(parser)
-
-        if not candidates:
-            return None
-
-        # Sort by quality tier (descending) and return best
-        candidates.sort(key=lambda p: p.capabilities.quality_tier, reverse=True)
-        return candidates[0]
+        extension = Path(file_path).suffix.lower()
+        candidates = [
+            p for p in self._parsers.values()
+            if p.capabilities.supports_extension(extension)
+        ]
+        return self._best_by_quality(candidates)
 
     def get_for_type(self, doc_type: DocumentType) -> Optional[DocumentParser]:
         """
@@ -109,16 +101,18 @@ class ParserRegistry:
         Returns:
             Best matching parser, or None if no parser supports this type
         """
-        candidates: List[DocumentParser] = []
-        for parser in self._parsers.values():
-            if parser.capabilities.supports_type(doc_type):
-                candidates.append(parser)
+        candidates = [
+            p for p in self._parsers.values()
+            if p.capabilities.supports_type(doc_type)
+        ]
+        return self._best_by_quality(candidates)
 
+    @staticmethod
+    def _best_by_quality(candidates: List[DocumentParser]) -> Optional[DocumentParser]:
+        """Return the candidate with the highest quality_tier, or None."""
         if not candidates:
             return None
-
-        candidates.sort(key=lambda p: p.capabilities.quality_tier, reverse=True)
-        return candidates[0]
+        return max(candidates, key=lambda p: p.capabilities.quality_tier)
 
     def list_parsers(self) -> List[str]:
         """Get list of registered parser names."""
@@ -147,15 +141,13 @@ class ParserRegistry:
                 print(f"\n  [{name}] v{parser.version}")
                 print(f"    Extensions: {exts}")
                 print(f"    Quality tier: {caps.quality_tier}")
-                features = []
-                if caps.extracts_images:
-                    features.append("images")
-                if caps.extracts_tables:
-                    features.append("tables")
-                if caps.extracts_metadata:
-                    features.append("metadata")
-                if caps.supports_ocr:
-                    features.append("OCR")
+                feature_flags = {
+                    "images": caps.extracts_images,
+                    "tables": caps.extracts_tables,
+                    "metadata": caps.extracts_metadata,
+                    "OCR": caps.supports_ocr,
+                }
+                features = [k for k, v in feature_flags.items() if v]
                 if features:
                     print(f"    Features: {', '.join(features)}")
 

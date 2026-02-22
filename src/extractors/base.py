@@ -1,6 +1,7 @@
 """Base class for all text extractors."""
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Dict, Any
 import time
@@ -20,26 +21,12 @@ class BaseExtractor(ABC):
     """
 
     def __init__(self, chunk_size: int = 512, overlap: int = 128):
-        """
-        Initialize extractor.
-
-        Args:
-            chunk_size: Target chunk size in tokens (approximate)
-            overlap: Overlap between chunks in tokens
-        """
         self.chunk_size = chunk_size
         self.overlap = overlap
 
     @abstractmethod
     def extract(self, file_path: Path) -> ExtractedText:
-        """
-        Extract text from file.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            ExtractedText with full text, chunks, and metadata
+        """Extract text from file.
 
         Raises:
             ExtractionError: If extraction fails
@@ -48,19 +35,37 @@ class BaseExtractor(ABC):
 
     @abstractmethod
     def supports(self, file_path: Path) -> bool:
-        """
-        Check if this extractor supports the given file.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            True if supported, False otherwise
-        """
+        """Check if this extractor supports the given file."""
         pass
 
-    # Separators for recursive splitting (German + English academic texts)
-    SEPARATORS = ["\n\n", "\n", ". ", "? ", "! ", "; ", " ", ""]
+    @contextmanager
+    def _temporary_chunk_params(self, chunk_size: int, overlap: int):
+        """Temporarily override chunk_size and overlap, restoring on exit."""
+        saved_size, saved_overlap = self.chunk_size, self.overlap
+        self.chunk_size, self.overlap = chunk_size, overlap
+        try:
+            yield
+        finally:
+            self.chunk_size, self.overlap = saved_size, saved_overlap
+
+    @staticmethod
+    def _copy_metadata(base_metadata: ChunkMetadata) -> ChunkMetadata:
+        """Create a copy of base_metadata, or a blank ChunkMetadata if None."""
+        if base_metadata is None:
+            return ChunkMetadata()
+        return ChunkMetadata(**base_metadata.__dict__)
+
+    @staticmethod
+    def _add_window_text(
+        chunks: List[Dict[str, Any]], full_text: str, window_chars: int
+    ) -> None:
+        """Add window_text (surrounding context) to each chunk in-place."""
+        for chunk in chunks:
+            cs = chunk['metadata'].get('char_start', 0)
+            ce = chunk['metadata'].get('char_end', 0)
+            win_start = max(0, cs - window_chars)
+            win_end = min(len(full_text), ce + window_chars)
+            chunk['window_text'] = full_text[win_start:win_end]
 
     def _create_chunks(
         self,
@@ -74,19 +79,6 @@ class BaseExtractor(ABC):
 
         Uses paragraph boundaries to avoid splitting mid-sentence.
         For humanities texts, preserving argument structure is critical.
-
-        Each chunk includes:
-        - char_start/char_end: Character offsets in the full text
-        - window_text: Chunk text + surrounding context (~window_chars before/after)
-
-        Args:
-            text: Full text to chunk
-            base_metadata: Base metadata to copy to each chunk
-            detect_language: If True, automatically detect language for each chunk
-            window_chars: Characters of context to add before/after for window_text
-
-        Returns:
-            List of chunks with text, window_text, and metadata
         """
         if not text:
             return []
@@ -103,19 +95,12 @@ class BaseExtractor(ABC):
             if not para:
                 continue
 
-            # Rough token count (words * 1.3)
             para_tokens = len(para.split()) * 1.3
 
-            # If adding this paragraph exceeds chunk size, save current chunk
             if current_size + para_tokens > self.chunk_size and current_chunk:
                 chunk_text = '\n\n'.join(current_chunk)
 
-                # Create metadata for this chunk
-                chunk_meta = ChunkMetadata()
-                if base_metadata:
-                    for key, value in base_metadata.__dict__.items():
-                        setattr(chunk_meta, key, value)
-
+                chunk_meta = self._copy_metadata(base_metadata)
                 chunk_meta.char_start = char_position
                 chunk_meta.char_end = char_position + len(chunk_text)
 
@@ -141,10 +126,7 @@ class BaseExtractor(ABC):
         # Add final chunk
         if current_chunk:
             chunk_text = '\n\n'.join(current_chunk)
-            chunk_meta = ChunkMetadata()
-            if base_metadata:
-                for key, value in base_metadata.__dict__.items():
-                    setattr(chunk_meta, key, value)
+            chunk_meta = self._copy_metadata(base_metadata)
             chunk_meta.char_start = char_position
             chunk_meta.char_end = char_position + len(chunk_text)
 
@@ -153,16 +135,9 @@ class BaseExtractor(ABC):
                 'metadata': chunk_meta.__dict__
             })
 
-        # Generate window_text for each chunk (Small-to-Big context expansion)
         if window_chars > 0:
-            for chunk in chunks:
-                cs = chunk['metadata'].get('char_start', 0)
-                ce = chunk['metadata'].get('char_end', 0)
-                win_start = max(0, cs - window_chars)
-                win_end = min(len(text), ce + window_chars)
-                chunk['window_text'] = text[win_start:win_end]
+            self._add_window_text(chunks, text, window_chars)
 
-        # Detect language for all chunks
         if detect_language and LanguageDetector.is_available():
             chunks = LanguageDetector.detect_for_chunks(chunks)
 
@@ -183,88 +158,46 @@ class BaseExtractor(ABC):
         """
         Create two-level hierarchical chunks (parent + child).
 
-        Parents are large chunks (~2048 chars) representing sections/paragraphs.
-        Children are small chunks (~512 chars) for precise retrieval.
-        Each child has a parent_id linking to its parent.
-
-        At retrieval time:
-        1. Search on child level (high precision)
-        2. Load parent for broader context
-        3. Pass both to Claude
-
-        Args:
-            text: Full text to chunk
-            book_id: Book identifier for generating chunk IDs
-            base_metadata: Base metadata to copy to each chunk
-            detect_language: If True, detect language per chunk
-            parent_size: Target parent chunk size in tokens
-            parent_overlap: Overlap between parent chunks in tokens
-            child_size: Target child chunk size in tokens
-            child_overlap: Overlap between child chunks in tokens
-            window_chars: Characters of context for window_text
-
-        Returns:
-            List of all chunks (parents + children), each with chunk_type
-            set to "parent" or "child" and children having parent_id set.
+        Parents are large chunks for broad context. Children are small chunks
+        for precise retrieval, each linked to its parent via parent_id.
         """
         if not text:
             return []
 
         all_chunks = []
 
-        # Step 1: Create parent chunks (large)
-        saved_chunk_size = self.chunk_size
-        saved_overlap = self.overlap
-        self.chunk_size = parent_size
-        self.overlap = parent_overlap
+        # Create parent chunks (large)
+        with self._temporary_chunk_params(parent_size, parent_overlap):
+            parent_chunks = self._create_chunks(
+                text, base_metadata, detect_language=False, window_chars=0
+            )
 
-        parent_chunks = self._create_chunks(
-            text, base_metadata, detect_language=False, window_chars=0
-        )
-
-        self.chunk_size = saved_chunk_size
-        self.overlap = saved_overlap
-
-        # Step 2: For each parent, create child chunks
+        # For each parent, create child chunks
         for p_idx, parent in enumerate(parent_chunks):
             parent_id = f"{book_id}_parent_{p_idx}"
             parent['metadata']['chunk_type'] = 'parent'
             parent['chunk_id'] = parent_id
-            parent['parent_id'] = ''  # Parents have no parent
+            parent['parent_id'] = ''
 
-            # Generate window_text for parent
             if window_chars > 0:
-                cs = parent['metadata'].get('char_start', 0)
-                ce = parent['metadata'].get('char_end', 0)
-                win_start = max(0, cs - window_chars)
-                win_end = min(len(text), ce + window_chars)
-                parent['window_text'] = text[win_start:win_end]
+                self._add_window_text([parent], text, window_chars)
 
             all_chunks.append(parent)
 
             # Create children from parent text
-            parent_text = parent['text']
-            saved_chunk_size = self.chunk_size
-            saved_overlap = self.overlap
-            self.chunk_size = child_size
-            self.overlap = child_overlap
-
-            children = self._create_chunks(
-                parent_text, base_metadata, detect_language=False, window_chars=0
-            )
-
-            self.chunk_size = saved_chunk_size
-            self.overlap = saved_overlap
+            with self._temporary_chunk_params(child_size, child_overlap):
+                children = self._create_chunks(
+                    parent['text'], base_metadata,
+                    detect_language=False, window_chars=0
+                )
 
             # Adjust child offsets relative to full text and link to parent
             parent_char_start = parent['metadata'].get('char_start', 0)
             for c_idx, child in enumerate(children):
-                child_id = f"{book_id}_parent_{p_idx}_child_{c_idx}"
-                child['chunk_id'] = child_id
+                child['chunk_id'] = f"{book_id}_parent_{p_idx}_child_{c_idx}"
                 child['parent_id'] = parent_id
                 child['metadata']['chunk_type'] = 'child'
 
-                # Adjust char offsets to be relative to full text
                 child['metadata']['char_start'] = (
                     parent_char_start + child['metadata'].get('char_start', 0)
                 )
@@ -272,17 +205,11 @@ class BaseExtractor(ABC):
                     parent_char_start + child['metadata'].get('char_end', 0)
                 )
 
-                # Generate window_text for child using full text
                 if window_chars > 0:
-                    cs = child['metadata']['char_start']
-                    ce = child['metadata']['char_end']
-                    win_start = max(0, cs - window_chars)
-                    win_end = min(len(text), ce + window_chars)
-                    child['window_text'] = text[win_start:win_end]
+                    self._add_window_text([child], text, window_chars)
 
                 all_chunks.append(child)
 
-        # Detect language for all chunks
         if detect_language and LanguageDetector.is_available():
             all_chunks = LanguageDetector.detect_for_chunks(all_chunks)
 
@@ -295,18 +222,7 @@ class BaseExtractor(ABC):
         extraction_time: float,
         **kwargs
     ) -> ExtractionMetadata:
-        """
-        Create extraction metadata.
-
-        Args:
-            file_path: Source file path
-            format_name: Detected format
-            extraction_time: Time taken to extract
-            **kwargs: Additional metadata fields
-
-        Returns:
-            ExtractionMetadata object
-        """
+        """Create extraction metadata for a file."""
         return ExtractionMetadata(
             file_path=file_path,
             file_size=file_path.stat().st_size,
@@ -318,15 +234,7 @@ class BaseExtractor(ABC):
         )
 
     def _extract_with_timing(self, file_path: Path) -> ExtractedText:
-        """
-        Wrapper that times the extraction.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            ExtractedText with timing metadata
-        """
+        """Wrapper that times the extraction and records success/failure."""
         start_time = time.time()
         try:
             result = self.extract(file_path)
@@ -334,13 +242,4 @@ class BaseExtractor(ABC):
             result.metadata.success = True
             return result
         except Exception as e:
-            # Create error metadata
-            extraction_time = time.time() - start_time
-            metadata = self._create_extraction_metadata(
-                file_path=file_path,
-                format_name='unknown',
-                extraction_time=extraction_time,
-                success=False,
-                errors=[str(e)]
-            )
             raise ExtractionError(f"Extraction failed: {e}") from e

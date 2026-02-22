@@ -14,15 +14,13 @@ import time
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Iterator
+from typing import List, Optional, Iterator
 
 from .profiles import IndexingProfile, get_profile
-from .parsers.base import DocumentParser, ParsedDocument
+from .parsers.base import DocumentParser
 from .parsers.registry import ParserRegistry
 from .chunkers.base import TextChunker, TextChunk, ChunkerConfig
-from .chunkers.registry import ChunkerRegistry
-from .embedders.base import TextEmbedder, EmbeddingResult
-from .embedders.registry import EmbedderRegistry
+from .embedders.base import TextEmbedder
 
 logger = logging.getLogger(__name__)
 
@@ -170,73 +168,88 @@ class ModularPipeline:
         if parser:
             return parser
 
-        # Try to register PyMuPDF for PDFs if not already done
-        try:
-            from .parsers.pymupdf_parser import PyMuPDFParser, PYMUPDF_AVAILABLE
-            if PYMUPDF_AVAILABLE:
-                parser = PyMuPDFParser()
-                self._parser_registry.register(parser)
-                if parser.can_parse(file_path):
-                    return parser
-        except ImportError:
-            pass
+        # Try to discover and register parsers on demand
+        self._try_register_parsers()
 
-        # Try to register EPUB parser if not already done
-        try:
-            from .parsers.epub_parser import EPUBParser
-            parser = EPUBParser()
-            self._parser_registry.register(parser)
-            if parser.can_parse(file_path):
-                return parser
-        except ImportError:
-            pass
-        except ValueError:
-            # Parser already registered, try to get it
-            parser = self._parser_registry.get('epub')
-            if parser and parser.can_parse(file_path):
-                return parser
+        # Retry after registration
+        parser = self._parser_registry.get_for_file(file_path)
+        if parser:
+            return parser
 
         raise ValueError(f"No parser available for {file_path.suffix}")
 
+    def _try_register_parsers(self) -> None:
+        """Attempt to register all known parsers that are not yet registered."""
+        parser_factories = [
+            ('pymupdf', self._try_create_pymupdf_parser),
+            ('epub', self._try_create_epub_parser),
+        ]
+        for name, factory in parser_factories:
+            if self._parser_registry.get(name):
+                continue
+            parser = factory()
+            if parser:
+                try:
+                    self._parser_registry.register(parser)
+                except ValueError:
+                    pass  # Already registered by another path
+
+    @staticmethod
+    def _try_create_pymupdf_parser() -> Optional[DocumentParser]:
+        try:
+            from .parsers.pymupdf_parser import PyMuPDFParser, PYMUPDF_AVAILABLE
+            if PYMUPDF_AVAILABLE:
+                return PyMuPDFParser()
+        except ImportError:
+            pass
+        return None
+
+    @staticmethod
+    def _try_create_epub_parser() -> Optional[DocumentParser]:
+        try:
+            from .parsers.epub_parser import EPUBParser
+            return EPUBParser()
+        except ImportError:
+            pass
+        return None
+
     def _get_embedder(self) -> TextEmbedder:
         """Get or create embedder (lazy loading)."""
-        if self._embedder and self._embedder_loaded:
+        if self._embedder_loaded:
             return self._embedder
 
-        if self._embedder:
-            self._embedder.load_model()
-            self._embedder_loaded = True
-            return self._embedder
+        if not self._embedder:
+            self._embedder = self._create_embedder_from_profile()
 
-        # Create embedder from profile
-        if self.profile:
-            from .embedders.bge import BGEEmbedder, SENTENCE_TRANSFORMERS_AVAILABLE
+        self._embedder.load_model()
+        self._embedder_loaded = True
+        return self._embedder
 
-            if not SENTENCE_TRANSFORMERS_AVAILABLE:
-                raise ImportError(
-                    "sentence-transformers required for embedding. "
-                    "Install with: pip install sentence-transformers"
-                )
+    def _create_embedder_from_profile(self) -> TextEmbedder:
+        """Create an embedder instance from the current profile."""
+        if not self.profile:
+            raise ValueError("No embedder configured and no profile provided")
 
-            # Map profile model to BGE model name
-            model_map = {
-                'BAAI/bge-small-en-v1.5': 'bge-small',
-                'BAAI/bge-base-en-v1.5': 'bge-base',
-                'BAAI/bge-m3': 'bge-m3',
-            }
-            model_name = model_map.get(self.profile.embedding_model, 'bge-small')
-            device = self.profile.embedding_device
+        from .embedders.bge import BGEEmbedder, SENTENCE_TRANSFORMERS_AVAILABLE
 
-            self._embedder = BGEEmbedder(
-                model_name=model_name,
-                device=device,
-                batch_size=self.profile.batch_size
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            raise ImportError(
+                "sentence-transformers required for embedding. "
+                "Install with: pip install sentence-transformers"
             )
-            self._embedder.load_model()
-            self._embedder_loaded = True
-            return self._embedder
 
-        raise ValueError("No embedder configured and no profile provided")
+        model_map = {
+            'BAAI/bge-small-en-v1.5': 'bge-small',
+            'BAAI/bge-base-en-v1.5': 'bge-base',
+            'BAAI/bge-m3': 'bge-m3',
+        }
+        model_name = model_map.get(self.profile.embedding_model, 'bge-small')
+
+        return BGEEmbedder(
+            model_name=model_name,
+            device=self.profile.embedding_device,
+            batch_size=self.profile.batch_size
+        )
 
     def process(self, file_path: str | Path) -> ProcessedDocument:
         """

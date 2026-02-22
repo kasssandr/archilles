@@ -5,12 +5,18 @@ Replaces ChromaDB with native hybrid search support (vector + full-text).
 Designed for scalability to 1M+ chunks with IVF-PQ indexing.
 """
 
-import lancedb
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-from datetime import datetime
-import numpy as np
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import lancedb
+import numpy as np
+
+try:
+    from lancedb.rerankers import RRFReranker
+except ImportError:
+    RRFReranker = None
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +103,10 @@ class LanceDBStore:
         "char_end": "0",
         "window_text": "''",
         "parent_id": "''",
+        "metadata_hash": "''",
+        "annotation_type": "''",
+        "annotation_source": "''",
+        "annotation_hash": "''",
     }
 
     def _ensure_table(self):
@@ -216,7 +226,7 @@ class LanceDBStore:
                 "language": chunk.get("language") or "",
 
                 # Position metadata
-                "chunk_index": chunk.get("chunk_index") if chunk.get("chunk_index") is not None else i,
+                "chunk_index": chunk["chunk_index"] if "chunk_index" in chunk else i,
                 "chunk_type": chunk.get("chunk_type") or "content",
                 "page_number": chunk.get("page_number") or chunk.get("page") or 0,
                 "chapter": chunk.get("chapter") or "",
@@ -254,20 +264,7 @@ class LanceDBStore:
         if self.table is None:
             self._create_table_with_data(records)
         else:
-            # Schema migration: add new columns if not yet present
-            existing_cols = set(self.table.schema.names)
-            new_columns = {
-                'metadata_hash': "''",
-                'annotation_type': "''",
-                'annotation_source': "''",
-                'annotation_hash': "''",
-            }
-            for col_name, default_val in new_columns.items():
-                if col_name not in existing_cols:
-                    try:
-                        self.table.add_columns({col_name: default_val})
-                    except Exception:
-                        pass  # Column may already exist from concurrent access
+            self._migrate_schema()
             self.table.add(records)
 
         return len(records)
@@ -412,21 +409,14 @@ class LanceDBStore:
         )
 
         try:
-            # Use RRF (Reciprocal Rank Fusion) for hybrid reranking.
-            # RRF combines by rank position, not raw scores, which handles
-            # the scale mismatch between vector similarity (0-1) and BM25 scores.
-            try:
-                from lancedb.rerankers import RRFReranker
-                reranker = RRFReranker()
-            except ImportError:
-                reranker = None
-
+            # RRF (Reciprocal Rank Fusion) combines by rank position, not raw
+            # scores, handling the scale mismatch between cosine (0-1) and BM25.
             search = self.table.search(query_type="hybrid") \
                 .vector(query_vector.tolist()) \
                 .text(query_text)
 
-            if reranker is not None:
-                search = search.rerank(reranker=reranker)
+            if RRFReranker is not None:
+                search = search.rerank(reranker=RRFReranker())
 
             if filters:
                 search = search.where(filters)
@@ -573,6 +563,15 @@ class LanceDBStore:
 
         return " AND ".join(conditions) if conditions else None
 
+    # LanceDB score columns mapped to (unified_key, transform).
+    # _distance is cosine distance (lower = better), so we invert it.
+    # _relevance_score and _score are already higher-is-better.
+    _SCORE_COLUMNS = {
+        "_distance": lambda d: 1.0 - d,
+        "_relevance_score": lambda s: s,
+        "_score": lambda s: s,
+    }
+
     def _results_to_dicts(self, df) -> List[Dict[str, Any]]:
         """Convert pandas DataFrame results to list of dictionaries."""
         if df is None or len(df) == 0:
@@ -581,69 +580,36 @@ class LanceDBStore:
         results = []
         for _, row in df.iterrows():
             result = row.to_dict()
-            # Convert distance/score columns to unified 'score' field
-            # LanceDB returns different columns depending on search type:
-            # - _distance: vector search (cosine distance, lower is better)
-            # - _score: FTS search (higher is better)
-            # - _relevance_score: hybrid search (higher is better)
-            if '_distance' in result:
-                result['score'] = 1.0 - result['_distance']
-                del result['_distance']
-            elif '_relevance_score' in result:
-                result['score'] = result['_relevance_score']
-                del result['_relevance_score']
-            elif '_score' in result:
-                result['score'] = result['_score']
-                del result['_score']
-            else:
-                result['score'] = 0.0
 
-            # Remove vector from results (too large)
-            if 'vector' in result:
-                del result['vector']
+            # Normalise search-type-specific score into a unified 'score' field
+            result['score'] = 0.0
+            for col, transform in self._SCORE_COLUMNS.items():
+                if col in result:
+                    result['score'] = transform(result.pop(col))
+                    break
+
+            # Remove vector from results (too large for downstream consumers)
+            result.pop('vector', None)
 
             results.append(result)
 
         return results
 
-    def delete_by_book_id(self, book_id: str) -> int:
-        """
-        Delete all chunks for a specific book.
-
-        Args:
-            book_id: The book_id to delete
-
-        Returns:
-            Number of chunks deleted (approximate)
-        """
+    def _delete_where(self, condition: str) -> int:
+        """Delete rows matching a SQL condition and return the count removed."""
         if self.table is None:
             return 0
-
         count_before = self.count()
-        self.table.delete(f"book_id = '{book_id}'")
-        count_after = self.count()
+        self.table.delete(condition)
+        return count_before - self.count()
 
-        return count_before - count_after
+    def delete_by_book_id(self, book_id: str) -> int:
+        """Delete all chunks for a specific book."""
+        return self._delete_where(f"book_id = '{book_id}'")
 
     def delete_by_book_id_and_type(self, book_id: str, chunk_type: str) -> int:
-        """
-        Delete chunks for a specific book filtered by chunk_type.
-
-        Args:
-            book_id: The book_id to filter by
-            chunk_type: The chunk_type to delete (e.g. 'calibre_comment', 'content')
-
-        Returns:
-            Number of chunks deleted (approximate)
-        """
-        if self.table is None:
-            return 0
-
-        count_before = self.count()
-        self.table.delete(f"book_id = '{book_id}' AND chunk_type = '{chunk_type}'")
-        count_after = self.count()
-
-        return count_before - count_after
+        """Delete chunks for a specific book filtered by chunk_type."""
+        return self._delete_where(f"book_id = '{book_id}' AND chunk_type = '{chunk_type}'")
 
     def update_metadata_fields(self, book_id: str, updates: dict) -> int:
         """
@@ -669,7 +635,7 @@ class LanceDBStore:
         safe_updates = {k: v for k, v in updates.items() if k in existing_columns}
         skipped = set(updates.keys()) - set(safe_updates.keys())
         if skipped:
-            print(f"    ⚠️  Skipping columns not yet in schema: {skipped}")
+            logger.warning(f"Skipping columns not yet in schema: {skipped}")
 
         if not safe_updates:
             return 0
@@ -684,73 +650,27 @@ class LanceDBStore:
             return 0
 
     def delete_by_calibre_id(self, calibre_id: int) -> int:
-        """
-        Delete all chunks for a specific Calibre ID.
+        """Delete all chunks for a specific Calibre ID."""
+        return self._delete_where(f"calibre_id = {calibre_id}")
 
-        Args:
-            calibre_id: The Calibre ID to delete
-
-        Returns:
-            Number of chunks deleted (approximate)
-        """
+    def _query_where(self, condition: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Run a filtered query and return results as dicts."""
         if self.table is None:
-            return 0
-
-        count_before = self.count()
-        self.table.delete(f"calibre_id = {calibre_id}")
-        count_after = self.count()
-
-        return count_before - count_after
+            return []
+        df = self.table.search().where(condition).limit(limit).to_pandas()
+        return self._results_to_dicts(df)
 
     def get_by_book_id(self, book_id: str, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Get all chunks for a specific book.
-
-        Args:
-            book_id: The book_id to query
-            limit: Maximum number of chunks to return
-
-        Returns:
-            List of chunk dictionaries
-        """
-        if self.table is None:
-            return []
-
-        df = self.table.search().where(f"book_id = '{book_id}'").limit(limit).to_pandas()
-        return self._results_to_dicts(df)
+        """Get all chunks for a specific book."""
+        return self._query_where(f"book_id = '{book_id}'", limit)
 
     def get_by_calibre_id(self, calibre_id: int, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Get all chunks for a specific Calibre ID.
-
-        Args:
-            calibre_id: The Calibre ID to query
-            limit: Maximum number of chunks to return
-
-        Returns:
-            List of chunk dictionaries
-        """
-        if self.table is None:
-            return []
-
-        df = self.table.search().where(f"calibre_id = {calibre_id}").limit(limit).to_pandas()
-        return self._results_to_dicts(df)
+        """Get all chunks for a specific Calibre ID."""
+        return self._query_where(f"calibre_id = {calibre_id}", limit)
 
     def get_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Get a single chunk by its ID (used for parent lookup).
-
-        Args:
-            chunk_id: The chunk ID to retrieve
-
-        Returns:
-            Chunk dictionary, or None if not found
-        """
-        if self.table is None:
-            return None
-
-        df = self.table.search().where(f"id = '{chunk_id}'").limit(1).to_pandas()
-        results = self._results_to_dicts(df)
+        """Get a single chunk by its ID (used for parent lookup)."""
+        results = self._query_where(f"id = '{chunk_id}'", limit=1)
         return results[0] if results else None
 
     def get_book_ids_for_skip_check(self) -> List[Dict[str, Any]]:

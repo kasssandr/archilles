@@ -38,7 +38,7 @@ class ParserCapabilities:
     and by callers to understand parser limitations.
     """
 
-    # Supported file extensions (e.g., {'.pdf', '.PDF'})
+    # Supported file extensions, lowercase (e.g., {'.pdf', '.epub'})
     supported_extensions: Set[str]
 
     # Supported document types
@@ -60,8 +60,8 @@ class ParserCapabilities:
     quality_tier: int = 1
 
     def supports_extension(self, ext: str) -> bool:
-        """Check if this parser supports a file extension."""
-        return ext.lower() in {e.lower() for e in self.supported_extensions}
+        """Check if this parser supports a file extension (case-insensitive)."""
+        return ext.lower() in self.supported_extensions
 
     def supports_type(self, doc_type: DocumentType) -> bool:
         """Check if this parser supports a document type."""
@@ -152,7 +152,7 @@ class ParsedDocument:
     @property
     def has_chunks(self) -> bool:
         """Check if document has pre-chunked content."""
-        return len(self.chunks) > 0
+        return bool(self.chunks)
 
     @property
     def chunk_count(self) -> int:
@@ -160,18 +160,9 @@ class ParsedDocument:
         return len(self.chunks)
 
     def get_text_by_page(self, page_number: int) -> str:
-        """
-        Get text for a specific page.
-
-        Args:
-            page_number: 1-indexed page number
-
-        Returns:
-            Text from that page, or empty string if not available
-        """
+        """Get text for a specific 1-indexed page, or empty string if unavailable."""
         if not self.has_chunks:
             return ""
-
         page_chunks = [c for c in self.chunks if c.page_number == page_number]
         return "\n".join(c.text for c in page_chunks)
 
@@ -219,46 +210,24 @@ class DocumentParser(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """
-        Unique identifier for this parser.
-
-        Used in registry lookups and logging.
-        Should be lowercase with hyphens (e.g., "pymupdf", "pdfplumber").
-        """
+        """Unique identifier, lowercase with hyphens (e.g., "pymupdf")."""
         pass
 
     @property
     @abstractmethod
     def version(self) -> str:
-        """
-        Version string for this parser.
-
-        Should follow semver (e.g., "1.0.0").
-        Include underlying library version if relevant.
-        """
+        """Version string following semver (e.g., "1.0.0")."""
         pass
 
     @property
     @abstractmethod
     def capabilities(self) -> ParserCapabilities:
-        """
-        Declare what this parser can handle.
-
-        Returns:
-            ParserCapabilities describing supported formats and features
-        """
+        """Declare what this parser can handle."""
         pass
 
     @abstractmethod
     def parse(self, file_path: Path) -> ParsedDocument:
-        """
-        Parse a document and extract its content.
-
-        Args:
-            file_path: Path to the document file
-
-        Returns:
-            ParsedDocument with extracted text and metadata
+        """Parse a document and extract its content.
 
         Raises:
             FileNotFoundError: If file doesn't exist
@@ -268,15 +237,7 @@ class DocumentParser(ABC):
         pass
 
     def can_parse(self, file_path: Path) -> bool:
-        """
-        Check if this parser can handle a file.
-
-        Args:
-            file_path: Path to check
-
-        Returns:
-            True if this parser supports the file type
-        """
+        """Check if this parser can handle a file based on its extension."""
         return self.capabilities.supports_extension(file_path.suffix)
 
     def __repr__(self) -> str:
@@ -309,7 +270,7 @@ if __name__ == "__main__":
     print(f"Document: {doc}")
 
     caps = ParserCapabilities(
-        supported_extensions={'.pdf', '.PDF'},
+        supported_extensions={'.pdf'},
         supported_types={DocumentType.PDF},
         extracts_metadata=True
     )
