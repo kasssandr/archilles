@@ -2011,13 +2011,27 @@ class archillesRAG:
         return output_file
 
     @staticmethod
-    def get_system_prompt() -> str:
+    def get_system_prompt(citation_config=None) -> str:
         """
         Get the system prompt for Claude with citation instructions.
 
+        Args:
+            citation_config: Optional CitationConfig instance. When provided,
+                rule 5 includes the user's preferred bibliography style.
+
         Returns XML-formatted instructions that tell Claude to cite sources.
         """
-        return """<system_instructions>
+        # Build bibliography instruction (rule 5)
+        if citation_config is not None:
+            from src.citation.config import format_bibliography_instruction
+            bib_instruction = (
+                "Fasse am Ende alle zitierten Quellen als Literaturliste zusammen. "
+                + format_bibliography_instruction(citation_config)
+            )
+        else:
+            bib_instruction = "Fasse am Ende alle zitierten Quellen als Literaturliste zusammen."
+
+        return f"""<system_instructions>
 Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage des Nutzers NUR auf Basis der bereitgestellten Dokumentenauszüge zu beantworten.
 
 <rules>
@@ -2025,7 +2039,7 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 2. Nutze keine externen Informationen. Wenn die Antwort nicht in den Dokumenten steht, sage das klar.
 3. Antworte in der Sprache des Nutzers, behalte aber den wissenschaftlichen Fachjargon bei.
 4. Bei mehreren Quellen für dieselbe Aussage: gib alle relevanten IDs an, z.B. [doc_1, doc_3].
-5. Fasse am Ende alle zitierten Quellen als Literaturliste zusammen.
+5. {bib_instruction}
 </rules>
 </system_instructions>"""
 
@@ -2218,13 +2232,14 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         results: List[Dict[str, Any]],
         query_text: str,
         expand_context: bool = False,
-        expansion_chars: int = 400
+        expansion_chars: int = 400,
+        citation_config=None,
     ) -> Dict[str, str]:
         """
         Create a complete prompt package for Claude with system instructions and XML documents.
 
         This combines:
-        - System prompt with citation rules
+        - System prompt with citation rules (style-aware when citation_config is provided)
         - XML-formatted documents with metadata
         - User query
 
@@ -2233,11 +2248,12 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
             query_text: Original user query
             expand_context: Enable context expansion (Small-to-Big) if available
             expansion_chars: Characters to add before/after chunk (default: 400)
+            citation_config: Optional CitationConfig for bibliography style
 
         Returns:
             Dictionary with 'system' and 'user' prompts
         """
-        system_prompt = self.get_system_prompt()
+        system_prompt = self.get_system_prompt(citation_config=citation_config)
         xml_content = self.format_results_as_xml(
             results,
             query_text,

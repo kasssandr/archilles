@@ -58,6 +58,7 @@ class CalibreMCPServer:
         rag_db_path: Optional[str] = None,
         enable_reranking: bool = False,
         reranker_device: Optional[str] = 'cpu',
+        citation_config: Optional[Any] = None,
     ):
         """
         Initialize the Calibre MCP Server.
@@ -70,6 +71,7 @@ class CalibreMCPServer:
             rag_db_path: Path to RAG database (default: ./archilles_rag_db)
             enable_reranking: Enable cross-encoder reranking for search results
             reranker_device: Device for reranker model ('cpu' to avoid GPU OOM)
+            citation_config: CitationConfig instance for bibliography formatting
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
@@ -104,12 +106,16 @@ class CalibreMCPServer:
                 )
                 self.enable_semantic_search = False
 
+        # Citation style configuration
+        self.citation_config = citation_config
+
         # Initialize service layer for RAG search (lazy loading)
         # Initialization is deferred until first use to avoid blocking server startup
         self.service = ArchillesService(
             db_path=rag_db_path or "./archilles_rag_db",
             enable_reranking=enable_reranking,
             reranker_device=reranker_device,
+            citation_config=citation_config,
         ) if SERVICE_AVAILABLE else None
 
     def _ensure_rag_initialized(self) -> bool:
