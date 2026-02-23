@@ -51,9 +51,11 @@ class BaseExtractor(ABC):
     @staticmethod
     def _copy_metadata(base_metadata: ChunkMetadata) -> ChunkMetadata:
         """Create a copy of base_metadata, or a blank ChunkMetadata if None."""
-        if base_metadata is None:
-            return ChunkMetadata()
-        return ChunkMetadata(**base_metadata.__dict__)
+        chunk_meta = ChunkMetadata()
+        if base_metadata:
+            for key, value in base_metadata.__dict__.items():
+                setattr(chunk_meta, key, value)
+        return chunk_meta
 
     @staticmethod
     def _add_window_text(

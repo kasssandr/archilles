@@ -264,7 +264,6 @@ class LanceDBStore:
         if self.table is None:
             self._create_table_with_data(records)
         else:
-            self._migrate_schema()
             self.table.add(records)
 
         return len(records)
