@@ -1,0 +1,10 @@
+{
+  "keywords": [
+    "Aristotle", "Aristote", "Aristoteles",
+    "feudalism", "féodalisme", "Feudalismus",
+    "Renaissance", "humanism", "Humanismus",
+    "Reformation", "Luther",
+    "Roman Empire", "empire romain", "Römisches Reich"
+  ],
+  "boost_factor": 0.15
+}
