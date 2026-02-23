@@ -878,10 +878,18 @@ class archillesRAG:
         extracted = self.extractor.extract(book_path)
         extract_time = time.time() - start_time
 
-        # If hierarchical mode, re-chunk using parent-child hierarchy
-        # Warn if no text was extracted (likely scanned/image-only PDF)
-        if not extracted.chunks and extracted.metadata.detected_format == 'pdf':
-            print(f"  ⚠️  No text extracted — likely scanned PDF. Re-index with --enable-ocr.")
+        # Detect scanned/mostly-scanned PDFs
+        needs_ocr = False
+        if extracted.metadata.detected_format == 'pdf':
+            total_pages = extracted.metadata.total_pages or 0
+            total_words = extracted.metadata.total_words or 0
+            if not extracted.chunks:
+                needs_ocr = True
+                print(f"  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
+            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 50:
+                needs_ocr = True
+                wpp = total_words // total_pages
+                print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p) — likely mostly scanned. Re-index with --enable-ocr.")
 
         if self.hierarchical and extracted.full_text:
             from src.extractors.base import BaseExtractor
@@ -1083,7 +1091,6 @@ class archillesRAG:
         total_time = extract_time + embed_time + index_time
         print(f"  Index:   {num_indexed} chunks{extras_str} ({index_time:.1f}s) | total {total_time:.1f}s")
 
-        no_text = not extracted.chunks and extracted.metadata.detected_format == 'pdf'
         return {
             'book_id': book_id,
             'chunks_indexed': num_indexed,
@@ -1093,7 +1100,7 @@ class archillesRAG:
             'embedding_time': embed_time,
             'indexing_time': index_time,
             'total_time': total_time,
-            'needs_ocr': no_text,
+            'needs_ocr': needs_ocr,
         }
 
     def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
