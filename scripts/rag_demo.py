@@ -879,6 +879,10 @@ class archillesRAG:
         extract_time = time.time() - start_time
 
         # If hierarchical mode, re-chunk using parent-child hierarchy
+        # Warn if no text was extracted (likely scanned/image-only PDF)
+        if not extracted.chunks and extracted.metadata.detected_format == 'pdf':
+            print(f"  ⚠️  No text extracted — likely scanned PDF. Re-index with --enable-ocr.")
+
         if self.hierarchical and extracted.full_text:
             from src.extractors.base import BaseExtractor
             from src.extractors.models import ChunkMetadata
@@ -1079,6 +1083,7 @@ class archillesRAG:
         total_time = extract_time + embed_time + index_time
         print(f"  Index:   {num_indexed} chunks{extras_str} ({index_time:.1f}s) | total {total_time:.1f}s")
 
+        no_text = not extracted.chunks and extracted.metadata.detected_format == 'pdf'
         return {
             'book_id': book_id,
             'chunks_indexed': num_indexed,
@@ -1088,6 +1093,7 @@ class archillesRAG:
             'embedding_time': embed_time,
             'indexing_time': index_time,
             'total_time': total_time,
+            'needs_ocr': no_text,
         }
 
     def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],

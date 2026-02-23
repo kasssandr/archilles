@@ -550,6 +550,7 @@ def batch_index(
         'skipped': 0,
         'failed': 0,
         'errors': [],
+        'needs_ocr': [],
         'start_time': datetime.now().isoformat(),
         'books_processed': []
     }
@@ -670,6 +671,8 @@ def batch_index(
                 )
 
             stats['indexed'] += 1
+            if result.get('needs_ocr'):
+                stats['needs_ocr'].append({'id': book_id, 'title': book['title']})
             stats['books_processed'].append({
                 'id': book_id,
                 'title': book['title'],
@@ -719,6 +722,11 @@ def batch_index(
         print(f"\n⚠️  Errors:")
         for err in stats['errors']:
             print(f"    - {err['title']}: {err['error'][:50]}...")
+
+    if stats['needs_ocr']:
+        print(f"\n🔍 Scanned PDFs (no text extracted — re-index with --enable-ocr):")
+        for book in stats['needs_ocr']:
+            print(f"    - [{book['id']}] {book['title']}")
 
     print(f"{'='*60}\n")
 
