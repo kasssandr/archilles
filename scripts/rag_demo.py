@@ -805,8 +805,7 @@ class archillesRAG:
 
         book_id = book_id or book_path.stem
 
-        print(f"INDEXING BOOK: {book_path.name}")
-        print(f"  Book ID: {book_id}\n")
+        print(f"  File: {book_path.name}")
 
         # Check for existing CONTENT chunks (not just metadata)
         # Books with only phase1_metadata chunks still need full content indexing
@@ -875,7 +874,6 @@ class archillesRAG:
 
         # PHASE 2: Full content indexing (default)
         # Step 1: Extract text
-        print("  [1/3] Extracting text...")
         start_time = time.time()
         extracted = self.extractor.extract(book_path)
         extract_time = time.time() - start_time
@@ -885,10 +883,6 @@ class archillesRAG:
             from src.extractors.base import BaseExtractor
             from src.extractors.models import ChunkMetadata
 
-            print(f"    Extracted {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages")
-            print(f"    Re-chunking with parent-child hierarchy...")
-
-            # Create a temporary chunker instance for hierarchical chunking
             chunker = type('HierarchicalChunker', (BaseExtractor,), {
                 'extract': lambda self, fp: None,
                 'supports': lambda self, fp: True
@@ -914,14 +908,11 @@ class archillesRAG:
             )
             parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'parent')
             child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'child')
-            print(f"    Hierarchical: {parent_count} parents, {child_count} children ({len(extracted.chunks)} total)")
+            print(f"  Extract: {parent_count}p+{child_count}c chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
         else:
-            print(f"    Extracted {len(extracted.chunks)} chunks in {extract_time:.1f}s")
-
-        print(f"    {extracted.metadata.total_words:,} words, {extracted.metadata.total_pages or 'N/A'} pages\n")
+            print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
 
         # Step 2: Generate embeddings
-        print("  [2/3] Generating embeddings...")
         start_time = time.time()
 
         texts = [chunk['text'] for chunk in extracted.chunks]
@@ -938,10 +929,9 @@ class archillesRAG:
             embeddings.extend(batch_embeddings.tolist())
 
         embed_time = time.time() - start_time
-        print(f"    ? Generated {len(embeddings)} embeddings in {embed_time:.1f}s\n")
+        print(f"  Embed:   {len(embeddings)} vectors ({embed_time:.1f}s)")
 
         # Step 3: Index in LanceDB
-        print("  [3/3] Indexing in LanceDB...")
         start_time = time.time()
 
         # Prepare chunks with metadata
@@ -997,8 +987,8 @@ class archillesRAG:
             chunks.append(chunk_data)
 
         # Add Calibre comments as separate chunk (if available)
-        if book_metadata and book_metadata.get('comments'):
-            print(f"    Adding Calibre comment as searchable chunk...")
+        has_comment = bool(book_metadata and book_metadata.get('comments'))
+        if has_comment:
 
             comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
 
@@ -1026,6 +1016,7 @@ class archillesRAG:
             embeddings.append(comment_embedding.tolist())
 
         # Add user annotations (highlights, notes from Calibre Viewer + PDF)
+        annot_count = 0
         try:
             annot_result = get_combined_annotations(
                 book_path=str(book_path),
@@ -1036,7 +1027,7 @@ class archillesRAG:
             annotations = annot_result.get('annotations', [])
             if annotations:
                 annot_hash = self._compute_annotation_hash(annotations)
-                print(f"    Adding {len(annotations)} annotations as searchable chunks...")
+                annot_count = len(annotations)
 
                 for idx, annot in enumerate(annotations):
                     annot_text = self._build_annotation_text(annot)
@@ -1068,9 +1059,9 @@ class archillesRAG:
                     chunks.append(annot_chunk)
                     embeddings.append(annot_embedding.tolist())
 
-                print(f"    ✓ {len(annotations)} annotation chunks added")
         except Exception as e:
-            print(f"    ⚠️  Annotation extraction failed (non-fatal): {e}")
+            logger.warning("Annotation extraction failed (non-fatal): %s", e)
+            annot_count = 0
 
         # Convert embeddings to numpy array
         embeddings_array = np.array(embeddings)
@@ -1079,13 +1070,14 @@ class archillesRAG:
         num_indexed = self.store.add_chunks(chunks, embeddings_array)
 
         index_time = time.time() - start_time
-        print(f"    Indexed {num_indexed} chunks in {index_time:.1f}s\n")
-
-        # Summary
+        extras = []
+        if has_comment:
+            extras.append("comment")
+        if annot_count:
+            extras.append(f"{annot_count} annot")
+        extras_str = f" + {', '.join(extras)}" if extras else ""
         total_time = extract_time + embed_time + index_time
-        print(f"INDEXING COMPLETE")
-        print(f"  Total time: {total_time:.1f}s")
-        print(f"  Collection size: {self.store.count()} chunks\n")
+        print(f"  Index:   {num_indexed} chunks{extras_str} ({index_time:.1f}s) | total {total_time:.1f}s")
 
         return {
             'book_id': book_id,

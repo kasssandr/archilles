@@ -140,7 +140,7 @@ class LanguageDetector:
         cls,
         chunks: List[Dict],
         min_confidence: float = 0.9,
-        show_progress: bool = True
+        show_progress: bool = False
     ) -> List[Dict]:
         """
         Add language detection to chunks.
