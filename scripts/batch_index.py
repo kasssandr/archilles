@@ -48,6 +48,9 @@ Usage:
     python scripts/batch_index.py --tag "Leit-Literatur" --filter-author "Arendt"
     python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
     python scripts/batch_index.py --all --filter-author "Tucholsky"
+
+    # Include books tagged "exclude" or "Übersetzung" (excluded by default)
+    python scripts/batch_index.py --tag "Leit-Literatur" --include-excluded
 """
 
 import argparse
@@ -74,6 +77,10 @@ from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, 
 
 # Preferred book formats in order of priority
 PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3']
+
+# Tags excluded by default — books carrying these tags are skipped unless
+# --include-excluded is passed explicitly.
+DEFAULT_EXCLUDED_TAGS = ['exclude', 'Übersetzung']
 
 
 def get_calibre_library_path() -> Path:
@@ -251,7 +258,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
     return books
 
 
-def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None, exclude_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Get ALL books from Calibre database (no filtering).
 
@@ -262,6 +269,7 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None)
         author_filter: Optional list of author name fragments; only books where at least one
                        author matches ANY of the fragments (partial, case-insensitive) are
                        returned.
+        exclude_tags: List of tags to exclude (e.g., ['exclude', 'Übersetzung'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -286,18 +294,28 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None)
     """
 
     params: List[Any] = []
+    conditions = []
 
     if author_filter:
         or_clauses = ' OR '.join(['LOWER(af.name) LIKE LOWER(?)' for _ in author_filter])
-        query += f"""
-    WHERE EXISTS (
+        conditions.append(f"""EXISTS (
         SELECT 1 FROM books_authors_link bal_f
         INNER JOIN authors af ON bal_f.author = af.id
-        WHERE bal_f.book = books.id
-        AND ({or_clauses})
-    )
-        """
+        WHERE bal_f.book = books.id AND ({or_clauses})
+    )""")
         params.extend([f'%{a}%' for a in author_filter])
+
+    if exclude_tags:
+        placeholders = ', '.join(['LOWER(?)' for _ in exclude_tags])
+        conditions.append(f"""NOT EXISTS (
+        SELECT 1 FROM books_tags_link btl_excl
+        INNER JOIN tags t_excl ON btl_excl.tag = t_excl.id
+        WHERE btl_excl.book = books.id AND LOWER(t_excl.name) IN ({placeholders})
+    )""")
+        params.extend(exclude_tags)
+
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
 
     query += " GROUP BY books.id ORDER BY books.id"
 
@@ -314,7 +332,7 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None)
     return books
 
 
-def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 0, rating: Optional[int] = None) -> List[Dict[str, Any]]:
+def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 0, rating: Optional[int] = None, exclude_tags: Optional[List[str]] = None) -> List[Dict[str, Any]]:
     """
     Get all books by a specific author from Calibre database.
 
@@ -324,6 +342,7 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
         min_rating: Minimum star rating (1-5, 0 = no filter). Mutually exclusive with rating.
         rating: Exact star rating to filter by (0 = no rating / NULL, 1-5 = exact star count).
                 Mutually exclusive with min_rating.
+        exclude_tags: List of tags to exclude (e.g., ['exclude', 'Übersetzung'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -368,6 +387,18 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
         else:
             query += " AND ratings.rating = ?"
             params.append(rating * 2)
+
+    if exclude_tags:
+        placeholders = ', '.join(['LOWER(?)' for _ in exclude_tags])
+        query += f"""
+        AND NOT EXISTS (
+            SELECT 1 FROM books_tags_link btl_excl
+            INNER JOIN tags t_excl ON btl_excl.tag = t_excl.id
+            WHERE btl_excl.book = books.id
+            AND LOWER(t_excl.name) IN ({placeholders})
+        )
+        """
+        params.extend(exclude_tags)
 
     query += " GROUP BY books.id ORDER BY ratings.rating DESC, books.title"
 
@@ -767,7 +798,11 @@ Profiles:
 
     # Exclude filter (can be used multiple times)
     parser.add_argument('--exclude-tag', action='append', dest='exclude_tags', metavar='TAG',
-                        help='Exclude books with this tag (can be used multiple times, e.g., --exclude-tag "DeepL" --exclude-tag "Übersetzung")')
+                        help='Exclude books with this tag (can be used multiple times). '
+                             'Added on top of the default excludes.')
+    parser.add_argument('--include-excluded', action='store_true',
+                        help=f'Override default tag exclusions ({", ".join(DEFAULT_EXCLUDED_TAGS)}) '
+                             'and include those books. User-specified --exclude-tag values still apply.')
 
     # Author filter — additional, not mutually exclusive with --tag / --all / --author
     parser.add_argument('--filter-author', action='append', dest='filter_authors', metavar='AUTHOR',
@@ -861,11 +896,21 @@ Profiles:
     min_rating = args.min_rating or 0
     rating = args.rating
     filter_authors = args.filter_authors
+
+    # Build effective exclude list: defaults + user additions, unless --include-excluded
+    base_excludes = [] if args.include_excluded else list(DEFAULT_EXCLUDED_TAGS)
+    effective_excludes = base_excludes + (args.exclude_tags or [])
+
+    if args.include_excluded:
+        print(f"  Default excludes overridden (--include-excluded)")
+    if effective_excludes:
+        print(f"  Excluding tags: {', '.join(effective_excludes)}")
+
     if args.all:
         print(f"📚 Indexing ALL books in the library")
         if filter_authors:
             print(f"  Author filter: {', '.join(filter_authors)}")
-        books = get_all_books(library_path, author_filter=filter_authors)
+        books = get_all_books(library_path, author_filter=filter_authors, exclude_tags=effective_excludes or None)
     elif args.tag:
         print(f"  Filtering by tag: {args.tag}")
         if min_rating > 0:
@@ -875,12 +920,9 @@ Profiles:
                 print(f"  Exact rating: no rating (NULL)")
             else:
                 print(f"  Exact rating: {'*' * rating} ({rating} stars)")
-        exclude_tags = args.exclude_tags
-        if exclude_tags:
-            print(f"  Excluding tags: {', '.join(exclude_tags)}")
         if filter_authors:
             print(f"  Author filter: {', '.join(filter_authors)}")
-        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=exclude_tags, rating=rating, author_filter=filter_authors)
+        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=effective_excludes or None, rating=rating, author_filter=filter_authors)
     elif args.author:
         print(f"  Filtering by author: {args.author}")
         if min_rating > 0:
@@ -892,7 +934,7 @@ Profiles:
                 print(f"  Exact rating: {'*' * rating} ({rating} stars)")
         if filter_authors:
             print(f"  Additional author filter: {', '.join(filter_authors)}")
-        books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating)
+        books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating, exclude_tags=effective_excludes or None)
 
     if not books:
         print("❌ No books found matching criteria")
