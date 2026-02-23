@@ -570,12 +570,19 @@ def batch_index(
             rag, reindex_before, reindex_missing_labels, db_path
         ) if should_check else set()
 
+    # When --skip-existing is set (without reindex flags), pre-filter the book
+    # list so already-indexed books are never passed to index_book() at all.
+    # This lets the loop jump directly to unindexed books rather than checking
+    # every single book via a LanceDB read.
+    if skip_existing and existing_ids and not reindex_before and not reindex_missing_labels:
+        books = [b for b in books if create_book_id(b) not in existing_ids]
+
     print(f"\n{'='*60}")
     print(f"📚 ARCHILLES BATCH INDEXER")
     print(f"{'='*60}")
     print(f"  Books to process: {len(books)}")
     if skip_existing:
-        print(f"  Already indexed: {len(existing_ids)}")
+        print(f"  Already indexed (skipped): {len(existing_ids)}")
     if reindex_before:
         reindex_count = len(books) - len(existing_ids)
         print(f"  📅 Re-indexing books indexed before: {reindex_before.strftime('%Y-%m-%d')}")
