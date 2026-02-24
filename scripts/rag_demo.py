@@ -886,7 +886,7 @@ class archillesRAG:
             if not extracted.chunks:
                 needs_ocr = True
                 print(f"  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
-            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 200:
+            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
                 needs_ocr = True
                 wpp = total_words // total_pages
                 print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p) — likely mostly scanned. Re-index with --enable-ocr.")
