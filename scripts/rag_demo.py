@@ -887,9 +887,17 @@ class archillesRAG:
                 needs_ocr = True
                 print(f"  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
             elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
-                needs_ocr = True
-                wpp = total_words // total_pages
-                print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p) — likely mostly scanned. Re-index with --enable-ocr.")
+                # Also check page coverage: if most pages have chunks, it's front-matter, not scanned
+                pages_with_text = len(set(
+                    c['metadata'].get('page', 0)
+                    for c in extracted.chunks
+                    if isinstance(c.get('metadata'), dict)
+                )) if extracted.chunks else 0
+                page_coverage = pages_with_text / total_pages if total_pages > 0 else 1.0
+                if page_coverage < 0.4:
+                    needs_ocr = True
+                    wpp = total_words // total_pages
+                    print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
 
         if self.hierarchical and extracted.full_text:
             from src.extractors.base import BaseExtractor
