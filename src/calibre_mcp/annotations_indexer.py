@@ -148,7 +148,7 @@ class AnnotationsIndexer:
             }
         )
 
-    def _create_hash_to_book_mapping(self) -> Dict[str, dict[str, Any]]:
+    def _create_hash_to_book_mapping(self) -> dict[str, dict[str, Any]]:
         """
         Create mapping from annotation hash to book metadata.
 
