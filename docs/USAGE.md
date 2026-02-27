@@ -246,8 +246,7 @@ In Claude Desktop:
 ```
 D:\Calibre-Bibliothek\
 ├── .archilles\
-│   ├── chroma_db\       # Annotations-Index
-│   ├── rag_db\          # Volltext-Index
+│   ├── rag_db\          # LanceDB-Index (Volltexte + Annotationen)
 │   └── config.json      # Optionale Konfiguration
 ├── Autor 1\
 │   └── Buch (ID)\

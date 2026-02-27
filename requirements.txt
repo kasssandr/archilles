@@ -26,10 +26,8 @@ lingua-language-detector==2.1.1  # Modern, accurate language detection (supports
 
 # Embeddings & Vector Search
 sentence-transformers==2.3.1  # BGE-M3 embeddings (multilingual)
-chromadb==0.4.22  # Vector database (legacy, will be replaced by LanceDB)
 lancedb>=0.5.0  # Vector database with native hybrid search
 pyarrow>=14.0.0  # Arrow format for LanceDB
-rank-bm25==0.2.2  # BM25 keyword search (legacy, LanceDB has native FTS)
 
 # Progress bars & utilities
 tqdm==4.66.1  # Progress bars for indexing

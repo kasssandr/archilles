@@ -562,10 +562,10 @@ def batch_index(
     if safe_indexer:
         # Check progress tracker for indexed books
         existing_ids_from_tracker = set(safe_indexer.tracker.get_indexed_books(phase))
-        existing_ids_from_chromadb = get_indexed_book_ids(
+        existing_ids_from_lancedb = get_indexed_book_ids(
             rag, reindex_before, reindex_missing_labels, db_path
         ) if should_check else set()
-        existing_ids = existing_ids_from_tracker | existing_ids_from_chromadb
+        existing_ids = existing_ids_from_tracker | existing_ids_from_lancedb
     else:
         existing_ids = get_indexed_book_ids(
             rag, reindex_before, reindex_missing_labels, db_path
@@ -624,9 +624,9 @@ def batch_index(
             result = rag.index_book(file_path, book_id, force=should_force, phase=phase)
             elapsed = time.time() - start_time
 
-            # Handle already-indexed books (from ChromaDB check, not progress tracker)
+            # Handle already-indexed books (from LanceDB check, not progress tracker)
             if result.get('status') == 'already_indexed':
-                print(f"         ⏭️  SKIPPED (already in ChromaDB: {result['chunks_indexed']} chunks)")
+                print(f"         ⏭️  SKIPPED (already in LanceDB: {result['chunks_indexed']} chunks)")
                 stats['skipped'] += 1
                 if safe_indexer:
                     safe_indexer.record_book(book_id, phase, 'skipped')
@@ -634,7 +634,7 @@ def batch_index(
                     'id': book_id,
                     'title': book['title'],
                     'status': 'skipped',
-                    'reason': 'already in ChromaDB'
+                    'reason': 'already in LanceDB'
                 })
                 continue
 

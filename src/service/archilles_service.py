@@ -212,12 +212,13 @@ class ArchillesService:
     def search_with_citations(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 10,
         mode: str = "hybrid",
         language: Optional[str] = None,
         tags: Optional[List[str]] = None,
         expand_context: bool = False,
         boost_research_interests: bool = True,
+        max_per_book: int = 3,
     ) -> Dict[str, Any]:
         """
         Search and generate XML-structured prompts with citation support.
@@ -242,6 +243,7 @@ class ArchillesService:
                 mode=mode,
                 language=language,
                 tag_filter=tags,
+                max_per_book=max_per_book,
             )
 
         if boost_research_interests and self._archilles_dir:

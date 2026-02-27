@@ -46,8 +46,6 @@ class CalibreMCPServer:
         self,
         library_path: Optional[str] = None,
         annotations_dir: Optional[str] = None,
-        enable_semantic_search: bool = False,
-        chroma_persist_dir: Optional[str] = None,
         rag_db_path: Optional[str] = None,
         enable_reranking: bool = False,
         reranker_device: Optional[str] = 'cpu',
@@ -59,8 +57,6 @@ class CalibreMCPServer:
         Args:
             library_path: Path to the Calibre library
             annotations_dir: Custom path to annotations directory
-            enable_semantic_search: Enable semantic search with ChromaDB
-            chroma_persist_dir: Directory to persist ChromaDB data
             rag_db_path: Path to RAG database (default: ./archilles_rag_db)
             enable_reranking: Enable cross-encoder reranking for search results
             reranker_device: Device for reranker model ('cpu' to avoid GPU OOM)
@@ -68,26 +64,8 @@ class CalibreMCPServer:
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
-        self.enable_semantic_search = enable_semantic_search
 
         self.db_path = self._resolve_db_path(library_path)
-
-        self.indexer = None
-        if enable_semantic_search:
-            try:
-                from .annotations_indexer import AnnotationsIndexer
-                self.indexer = AnnotationsIndexer(
-                    chroma_persist_dir=chroma_persist_dir,
-                    annotations_dir=annotations_dir,
-                    library_path=library_path
-                )
-                logger.info("Semantic search enabled")
-            except ImportError:
-                logger.warning(
-                    "ChromaDB not available. Semantic search disabled. "
-                    "Install with: pip install chromadb"
-                )
-                self.enable_semantic_search = False
 
         self.citation_config = citation_config
 
@@ -172,48 +150,40 @@ class CalibreMCPServer:
     def search_annotations_tool(
         self,
         query: str,
-        case_sensitive: bool = False,
-        use_semantic: bool = False,
-        max_results: int = 10,
-        max_per_book: int = 2
+        max_results: int = 30,
+        max_per_book: int = 5
     ) -> dict[str, Any]:
         """
-        MCP Tool: Search through all annotations.
-
-        Supports both text-based and semantic search.
+        MCP Tool: Search through all annotations and Calibre comments via LanceDB.
 
         Args:
             query: Search query string
-            case_sensitive: Whether to use case-sensitive search (text search only)
-            use_semantic: Use semantic search instead of text search
-            max_results: Maximum number of results (semantic search only)
-            max_per_book: Maximum results per book to prevent one book dominating results (semantic only)
+            max_results: Maximum number of results
+            max_per_book: Maximum results per book to prevent one book dominating results
 
         Returns:
             Dictionary with search results
         """
-        if use_semantic and self.enable_semantic_search and self.indexer:
-            max_per_book_param = max_per_book if max_per_book > 0 else None
-            results = self.indexer.search_annotations(
+        if self._ensure_rag_initialized():
+            results = self.service.search(
                 query=query,
-                n_results=max_results,
-                max_per_book=max_per_book_param
+                top_k=max_results,
+                chunk_type_filter='annotations_and_comments',
+                section_filter=None,
+                max_per_book=max_per_book if max_per_book > 0 else 999,
             )
-
             return {
                 'query': query,
                 'search_type': 'semantic',
                 'result_count': len(results),
-                'max_per_book': max_per_book,
                 'results': results
             }
 
-        results = search_annotations(query, self.annotations_dir, case_sensitive)
-
+        # Fallback: text search if LanceDB not initialized
+        results = search_annotations(query, self.annotations_dir, case_sensitive=False)
         return {
             'query': query,
             'search_type': 'text',
-            'case_sensitive': case_sensitive,
             'result_count': len(results),
             'results': results
         }
@@ -253,56 +223,6 @@ class CalibreMCPServer:
             'hash': book_hash,
             'expected_annotation_file': str(expected_file),
             'file_exists': expected_file.exists()
-        }
-
-    def index_annotations_tool(
-        self,
-        force_reindex: bool = False,
-        exclude_toc_markers: bool = True
-    ) -> dict[str, Any]:
-        """
-        MCP Tool: Index all annotations for semantic search.
-
-        Args:
-            force_reindex: Force reindexing of all annotations
-            exclude_toc_markers: Whether to exclude TOC markers
-
-        Returns:
-            Dictionary with indexing statistics
-        """
-        if not self.enable_semantic_search or not self.indexer:
-            return {
-                'error': 'Semantic search is not enabled',
-                'help': 'Initialize server with enable_semantic_search=True'
-            }
-
-        stats = self.indexer.index_all_annotations(
-            exclude_toc_markers=exclude_toc_markers,
-            force_reindex=force_reindex
-        )
-
-        return {
-            'status': 'completed',
-            'statistics': stats
-        }
-
-    def get_index_stats_tool(self) -> dict[str, Any]:
-        """
-        MCP Tool: Get statistics about the annotation index.
-
-        Returns:
-            Dictionary with index statistics
-        """
-        if not self.enable_semantic_search or not self.indexer:
-            return {
-                'error': 'Semantic search is not enabled'
-            }
-
-        stats = self.indexer.get_collection_stats()
-
-        return {
-            'status': 'ok',
-            'statistics': stats
         }
 
     def detect_duplicates_tool(
@@ -555,12 +475,13 @@ class CalibreMCPServer:
     def search_books_with_citations_tool(
         self,
         query: str,
-        top_k: int = 5,
+        top_k: int = 10,
         mode: str = 'hybrid',
         language: Optional[str] = None,
         tags: Optional[list[str]] = None,
         expand_context: bool = False,
         boost_research_interests: bool = True,
+        max_per_book: int = 3,
     ) -> dict[str, Any]:
         """
         MCP Tool: Search books and generate XML-structured prompts with citation support.
@@ -597,6 +518,7 @@ class CalibreMCPServer:
                 tags=tags,
                 expand_context=expand_context,
                 boost_research_interests=boost_research_interests,
+                max_per_book=max_per_book,
             )
 
             if "error" in result:
@@ -699,7 +621,7 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
         },
         {
             'name': 'search_annotations',
-            'description': 'Search through all annotations using text-based or semantic search with intelligent deduplication',
+            'description': 'Semantically search highlights, notes, and Calibre comments via LanceDB',
             'inputSchema': {
                 'type': 'object',
                 'properties': {
@@ -707,25 +629,15 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                         'type': 'string',
                         'description': 'Search query string'
                     },
-                    'case_sensitive': {
-                        'type': 'boolean',
-                        'description': 'Whether to use case-sensitive search (text search only)',
-                        'default': False
-                    },
-                    'use_semantic': {
-                        'type': 'boolean',
-                        'description': 'Use semantic search instead of text search (requires ChromaDB)',
-                        'default': False
-                    },
                     'max_results': {
                         'type': 'integer',
-                        'description': 'Maximum number of results (semantic search only)',
-                        'default': 10
+                        'description': 'Maximum number of results',
+                        'default': 30
                     },
                     'max_per_book': {
                         'type': 'integer',
-                        'description': 'Maximum results per book to prevent one book dominating results (semantic search only, use 0 for unlimited)',
-                        'default': 2
+                        'description': 'Maximum results per book (0 for unlimited)',
+                        'default': 5
                     }
                 },
                 'required': ['query']
@@ -751,33 +663,6 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     }
                 },
                 'required': ['book_path']
-            }
-        },
-        {
-            'name': 'index_annotations',
-            'description': 'Index all annotations for semantic search (requires semantic search to be enabled)',
-            'inputSchema': {
-                'type': 'object',
-                'properties': {
-                    'force_reindex': {
-                        'type': 'boolean',
-                        'description': 'Force reindexing of all annotations',
-                        'default': False
-                    },
-                    'exclude_toc_markers': {
-                        'type': 'boolean',
-                        'description': 'Whether to exclude TOC markers',
-                        'default': True
-                    }
-                }
-            }
-        },
-        {
-            'name': 'get_index_stats',
-            'description': 'Get statistics about the annotation index',
-            'inputSchema': {
-                'type': 'object',
-                'properties': {}
             }
         },
         {
@@ -927,8 +812,8 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     },
                     'top_k': {
                         'type': 'integer',
-                        'description': 'Number of results to return (default: 5)',
-                        'default': 5
+                        'description': 'Number of results to return (default: 10)',
+                        'default': 10
                     },
                     'mode': {
                         'type': 'string',
@@ -954,6 +839,11 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                         'type': 'boolean',
                         'description': 'Apply research interest keyword boosting to re-rank results (default: true). Configure keywords with set_research_interests.',
                         'default': True
+                    },
+                    'max_per_book': {
+                        'type': 'integer',
+                        'description': 'Maximum results per book to ensure source diversity (default: 3)',
+                        'default': 3
                     }
                 },
                 'required': ['query']

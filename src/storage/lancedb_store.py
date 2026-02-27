@@ -554,6 +554,8 @@ class LanceDBStore:
                 # Include both flat chunks ("content") and hierarchical children ("child")
                 # Parents are excluded — they serve as context, not search targets
                 conditions.append("(chunk_type = 'content' OR chunk_type = 'child')")
+            elif chunk_type == "annotations_and_comments":
+                conditions.append("(chunk_type = 'annotation' OR chunk_type = 'calibre_comment')")
             else:
                 conditions.append(f"chunk_type = '{chunk_type}'")
 

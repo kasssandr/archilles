@@ -58,7 +58,6 @@ test_improved_export_*.md
 
 # Local RAG databases (not for GitHub)
 archilles_rag_db/
-chroma_db/
 .archilles/
 
 # Claude Code worktrees

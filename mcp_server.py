@@ -51,8 +51,6 @@ TOOL_MAP = {
     'search_annotations': 'search_annotations_tool',
     'list_annotated_books': 'list_annotated_books_tool',
     'compute_annotation_hash': 'compute_hash_tool',
-    'index_annotations': 'index_annotations_tool',
-    'get_index_stats': 'get_index_stats_tool',
     'detect_duplicates': 'detect_duplicates_tool',
     'get_book_details': 'get_book_details_tool',
     'get_doublette_tag_instruction': 'get_doublette_tag_instruction_tool',
@@ -204,11 +202,9 @@ def main():
     archilles_dir = Path(library_path) / ".archilles"
 
     rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', str(archilles_dir / "rag_db"))
-    chroma_persist_dir = config.get('chroma_persist_dir', str(archilles_dir / "chroma_db"))
 
     logger.info(f"Library path: {library_path}")
     logger.info(f"RAG database path: {rag_db_path}")
-    logger.info(f"ChromaDB path: {chroma_persist_dir}")
 
     enable_reranking = config.get('enable_reranking', False)
     reranker_device = config.get('reranker_device', 'cpu')
@@ -222,8 +218,6 @@ def main():
     server = CalibreMCPServer(
         library_path=library_path,
         annotations_dir=None,
-        enable_semantic_search=True,
-        chroma_persist_dir=chroma_persist_dir,
         rag_db_path=rag_db_path,
         enable_reranking=enable_reranking,
         reranker_device=reranker_device,
@@ -231,7 +225,6 @@ def main():
     )
 
     logger.info(f"Server initialized with library: {library_path}")
-    logger.info(f"Semantic search enabled: {server.enable_semantic_search}")
     asyncio.run(stdio_server(server))
 
 
