@@ -56,9 +56,6 @@ class LanceDBError(Exception):
     pass
 
 
-# Keep for backward compatibility with other scripts
-ChromaDBCorruptionError = LanceDBError
-
 
 class archillesRAG:
     """
@@ -2352,9 +2349,27 @@ Examples:
 
         elif args.command == 'stats':
             # Show stats
+            stats = rag.store.get_stats()
             print(f"INDEX STATISTICS\n")
-            print(f"  Total chunks: {rag.store.count()}")
+            print(f"  Total chunks:  {stats['total_chunks']}")
+            print(f"  Total books:   {stats['total_books']}")
+            print(f"  Avg chunks/book: {stats['avg_chunks_per_book']:.1f}")
             print(f"  Database path: {args.db_path}\n")
+            if stats.get('chunk_types'):
+                print(f"  Chunk types:")
+                for ct, n in sorted(stats['chunk_types'].items(), key=lambda x: -x[1]):
+                    print(f"    {ct:<25} {n:>8}")
+                print()
+            if stats.get('languages'):
+                print(f"  Languages:")
+                for lang, n in sorted(stats['languages'].items(), key=lambda x: -x[1])[:10]:
+                    print(f"    {lang:<25} {n:>8}")
+                print()
+            if stats.get('file_types'):
+                print(f"  File types:")
+                for ft, n in sorted(stats['file_types'].items(), key=lambda x: -x[1]):
+                    print(f"    {ft:<25} {n:>8}")
+                print()
 
         elif args.command == 'create-index':
             # Create search indexes

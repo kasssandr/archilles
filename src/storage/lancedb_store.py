@@ -800,6 +800,7 @@ class LanceDBStore:
             "total_chunks": len(df),
             "total_books": df["book_id"].nunique(),
             "avg_chunks_per_book": len(df) / max(1, df["book_id"].nunique()),
+            "chunk_types": df["chunk_type"].value_counts().to_dict() if "chunk_type" in df else {},
             "file_types": df["format"].value_counts().to_dict() if "format" in df else {},
             "section_types": df["section_type"].value_counts().to_dict() if "section_type" in df else {},
             "languages": df["language"].value_counts().to_dict() if "language" in df else {},

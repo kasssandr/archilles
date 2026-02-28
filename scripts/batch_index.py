@@ -66,7 +66,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.rag_demo import archillesRAG, ChromaDBCorruptionError
+from scripts.rag_demo import archillesRAG, LanceDBError
 from scripts.safe_indexer import SafeIndexer
 from scripts.import_calibre_annotations import import_annotations, find_latest_export
 from scripts.find_books_missing_labels import find_books_missing_labels
@@ -413,6 +413,78 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
 
     conn.close()
     return books
+
+
+def get_all_calibre_ids(library_path: Path) -> set:
+    """
+    Return the set of ALL Calibre book IDs (as strings, no filters).
+    Used for orphan detection — we compare against the full library,
+    not just the subset selected by --tag / --author / --all.
+    """
+    db_path = library_path / "metadata.db"
+    if not db_path.exists():
+        raise FileNotFoundError(f"Calibre database not found: {db_path}")
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.execute("SELECT id FROM books")
+        return {str(row[0]) for row in cursor.fetchall()}
+    finally:
+        conn.close()
+
+
+def cleanup_orphans(
+    rag: archillesRAG,
+    library_path: Path,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """
+    Remove LanceDB entries for books that no longer exist in Calibre.
+
+    Compares every book_id in the index against the full unfiltered Calibre
+    library and deletes chunks for any book that has been removed from Calibre.
+
+    Args:
+        rag: Initialized archillesRAG instance
+        library_path: Path to the Calibre library directory
+        dry_run: If True, report orphans without deleting anything
+
+    Returns:
+        Dict with 'orphans_found' and 'orphans_removed' counts.
+    """
+    print("\n🔍 Scanning for orphaned index entries...")
+
+    calibre_ids = get_all_calibre_ids(library_path)
+    print(f"   Calibre library: {len(calibre_ids)} books")
+
+    all_chunks = rag.store.get_book_ids_for_skip_check()
+    indexed_ids = {chunk['book_id'] for chunk in all_chunks}
+    print(f"   LanceDB index:   {len(indexed_ids)} books")
+
+    orphan_ids = indexed_ids - calibre_ids
+
+    if not orphan_ids:
+        print("   ✅ No orphans found — index is clean")
+        return {'orphans_found': 0, 'orphans_removed': 0}
+
+    print(f"\n   ⚠️  Found {len(orphan_ids)} orphaned book(s):")
+    for book_id in sorted(orphan_ids, key=lambda x: int(x) if x.isdigit() else x):
+        chunks = rag.store.get_by_book_id(book_id, limit=1)
+        title = chunks[0].get('book_title', '?') if chunks else '?'
+        author = chunks[0].get('author', '?') if chunks else '?'
+        print(f"      [{book_id}] {author}: {title}")
+
+    if dry_run:
+        print(f"\n   ℹ️  DRY RUN — no deletions performed")
+        return {'orphans_found': len(orphan_ids), 'orphans_removed': 0}
+
+    removed = 0
+    for book_id in sorted(orphan_ids, key=lambda x: int(x) if x.isdigit() else x):
+        deleted = rag.store.delete_by_book_id(book_id)
+        print(f"   🗑️  Deleted {deleted} chunks for book_id={book_id}")
+        removed += 1
+
+    print(f"\n   ✅ Cleanup complete: {removed} orphaned book(s) removed from index")
+    return {'orphans_found': len(orphan_ids), 'orphans_removed': removed}
 
 
 def create_book_id(book: Dict[str, Any]) -> str:
@@ -795,8 +867,8 @@ Profiles:
         """
     )
 
-    # Selection criteria (mutually exclusive)
-    group = parser.add_mutually_exclusive_group(required=True)
+    # Selection criteria (mutually exclusive; not required when --cleanup-orphans is used alone)
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument('--all', action='store_true',
                        help='Index ALL books in the library (no tag/author filter)')
     group.add_argument('--tag', help='Index books with this tag')
@@ -864,6 +936,10 @@ Profiles:
                         help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
     parser.add_argument('--use-modular-pipeline', action='store_true',
                         help='Use ModularPipeline architecture (parser -> chunker -> embedder)')
+    parser.add_argument('--cleanup-orphans', action='store_true',
+                        help='Remove index entries for books deleted from Calibre. '
+                             'Can be used standalone or combined with an indexing run. '
+                             'Use --dry-run to preview orphans without deleting.')
 
     args = parser.parse_args()
 
@@ -871,6 +947,10 @@ Profiles:
     if args.show_profiles:
         list_profiles()
         sys.exit(0)
+
+    # Validate: require --all/--tag/--author unless --cleanup-orphans is the sole operation
+    if not args.all and not args.tag and not args.author and not args.cleanup_orphans:
+        parser.error("one of the arguments --all --tag --author --cleanup-orphans is required")
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -921,56 +1001,16 @@ Profiles:
     if effective_excludes:
         print(f"  Excluding tags: {', '.join(effective_excludes)}")
 
-    if args.all:
-        print(f"📚 Indexing ALL books in the library")
-        if filter_authors:
-            print(f"  Author filter: {', '.join(filter_authors)}")
-        books = get_all_books(library_path, author_filter=filter_authors, exclude_tags=effective_excludes or None)
-    elif args.tag:
-        print(f"  Filtering by tag: {args.tag}")
-        if min_rating > 0:
-            print(f"  Minimum rating: {'*' * min_rating} ({min_rating}+ stars)")
-        if rating is not None:
-            if rating == 0:
-                print(f"  Exact rating: no rating (NULL)")
-            else:
-                print(f"  Exact rating: {'*' * rating} ({rating} stars)")
-        if filter_authors:
-            print(f"  Author filter: {', '.join(filter_authors)}")
-        books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=effective_excludes or None, rating=rating, author_filter=filter_authors)
-    elif args.author:
-        print(f"  Filtering by author: {args.author}")
-        if min_rating > 0:
-            print(f"  Minimum rating: {'*' * min_rating} ({min_rating}+ stars)")
-        if rating is not None:
-            if rating == 0:
-                print(f"  Exact rating: no rating (NULL)")
-            else:
-                print(f"  Exact rating: {'*' * rating} ({rating} stars)")
-        if filter_authors:
-            print(f"  Additional author filter: {', '.join(filter_authors)}")
-        books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating, exclude_tags=effective_excludes or None)
-
-    if not books:
-        print("❌ No books found matching criteria")
-        return
-
-    print(f"📖 Found {len(books)} books")
-
-    # Apply limit if specified
-    if args.limit:
-        books = books[:args.limit]
-        print(f"📊 Limited to first {args.limit} books")
-
     # Determine RAG database path
     if args.db_path is None:
         args.db_path = str(library_path / ".archilles" / "rag_db")
 
     print(f"💾 RAG database: {args.db_path}")
 
-    # Initialize RAG (unless dry run with no skip-existing check needed)
-    if args.dry_run and not args.skip_existing:
-        # For pure dry run, create minimal object
+    # Initialize RAG
+    # DummyRAG only for pure dry-run without skip-existing and without cleanup-orphans
+    needs_real_rag = args.skip_existing or args.cleanup_orphans or not args.dry_run
+    if not needs_real_rag:
         class DummyRAG:
             def __init__(self):
                 self.collection = type('obj', (object,), {'count': lambda: 0})()
@@ -986,65 +1026,108 @@ Profiles:
                 hierarchical=args.hierarchical,
                 use_modular_pipeline=args.use_modular_pipeline
             )
-        except ChromaDBCorruptionError as e:
-            # ChromaDB is corrupted - show helpful error message
+        except LanceDBError as e:
             print(f"\n{'='*60}")
-            print(f"❌ DATABASE CORRUPTION DETECTED")
+            print(f"❌ DATABASE ERROR")
             print(f"{'='*60}\n")
             print(str(e))
             print(f"\n{'='*60}\n")
             sys.exit(1)
 
-    # Initialize SafeIndexer for crash-safety
-    safe_indexer = None
-    if not args.dry_run:
-        safe_indexer = SafeIndexer(
-            db_path=Path(args.db_path),
-            backup_interval=50,  # Backup every 50 books
-            max_backups=2         # Keep 2 most recent backups
-        )
+    # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
+    stats = {'indexed': 0, 'failed': 0}
+    if args.all or args.tag or args.author:
+        if args.all:
+            print(f"📚 Indexing ALL books in the library")
+            if filter_authors:
+                print(f"  Author filter: {', '.join(filter_authors)}")
+            books = get_all_books(library_path, author_filter=filter_authors, exclude_tags=effective_excludes or None)
+        elif args.tag:
+            print(f"  Filtering by tag: {args.tag}")
+            if min_rating > 0:
+                print(f"  Minimum rating: {'*' * min_rating} ({min_rating}+ stars)")
+            if rating is not None:
+                if rating == 0:
+                    print(f"  Exact rating: no rating (NULL)")
+                else:
+                    print(f"  Exact rating: {'*' * rating} ({rating} stars)")
+            if filter_authors:
+                print(f"  Author filter: {', '.join(filter_authors)}")
+            books = get_books_by_tag(library_path, args.tag, min_rating=min_rating, exclude_tags=effective_excludes or None, rating=rating, author_filter=filter_authors)
+        elif args.author:
+            print(f"  Filtering by author: {args.author}")
+            if min_rating > 0:
+                print(f"  Minimum rating: {'*' * min_rating} ({min_rating}+ stars)")
+            if rating is not None:
+                if rating == 0:
+                    print(f"  Exact rating: no rating (NULL)")
+                else:
+                    print(f"  Exact rating: {'*' * rating} ({rating} stars)")
+            if filter_authors:
+                print(f"  Additional author filter: {', '.join(filter_authors)}")
+            books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating, exclude_tags=effective_excludes or None)
 
-        # Determine phase
-        phase = 'phase1' if args.phase1_only else 'phase2'
+        if not books:
+            print("❌ No books found matching criteria")
+            if not args.cleanup_orphans:
+                return
 
-        # Start indexing session (auto-detect interactive mode unless --non-interactive)
-        interactive = None if not args.non_interactive else False
-        session_id = safe_indexer.start_session(phase, interactive=interactive)
+        else:
+            print(f"📖 Found {len(books)} books")
 
-    # Run batch indexing
-    log_file = Path(args.log) if args.log else None
-    stats = batch_index(
-        books=books,
-        rag=rag,
-        dry_run=args.dry_run,
-        skip_existing=args.skip_existing,
-        reindex_before=reindex_before,
-        reindex_missing_labels=args.reindex_missing_labels,
-        force=args.force,
-        log_file=log_file,
-        safe_indexer=safe_indexer,
-        phase=phase if safe_indexer else 'phase2',
-        db_path=args.db_path
-    )
+            if args.limit:
+                books = books[:args.limit]
+                print(f"📊 Limited to first {args.limit} books")
 
-    # End session (if not dry run)
-    if safe_indexer:
-        status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
-        safe_indexer.end_session(status)
+            # Initialize SafeIndexer for crash-safety
+            safe_indexer = None
+            if not args.dry_run:
+                safe_indexer = SafeIndexer(
+                    db_path=Path(args.db_path),
+                    backup_interval=50,
+                    max_backups=2
+                )
+                phase = 'phase1' if args.phase1_only else 'phase2'
+                interactive = None if not args.non_interactive else False
+                session_id = safe_indexer.start_session(phase, interactive=interactive)
 
-    # Create FTS index for keyword search (if not dry run and we indexed something)
-    if not args.dry_run and stats['indexed'] > 0:
-        print("\n📇 Creating full-text search index...")
-        try:
-            rag.store.create_fts_index()
-            print("   ✅ FTS index created - keyword search now available")
-        except Exception as e:
-            print(f"   ⚠️  FTS index creation failed: {e}")
-            print("   Keyword search may not work. Run: python scripts/rag_demo.py create-index")
+            # Run batch indexing
+            log_file = Path(args.log) if args.log else None
+            stats = batch_index(
+                books=books,
+                rag=rag,
+                dry_run=args.dry_run,
+                skip_existing=args.skip_existing,
+                reindex_before=reindex_before,
+                reindex_missing_labels=args.reindex_missing_labels,
+                force=args.force,
+                log_file=log_file,
+                safe_indexer=safe_indexer,
+                phase=phase if safe_indexer else 'phase2',
+                db_path=args.db_path
+            )
 
-    # Exit with error code if any failures
-    if stats['failed'] > 0:
-        sys.exit(1)
+            # End session (if not dry run)
+            if safe_indexer:
+                status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
+                safe_indexer.end_session(status)
+
+            # Create FTS index if we indexed something new
+            if not args.dry_run and stats['indexed'] > 0:
+                print("\n📇 Creating full-text search index...")
+                try:
+                    rag.store.create_fts_index()
+                    print("   ✅ FTS index created - keyword search now available")
+                except Exception as e:
+                    print(f"   ⚠️  FTS index creation failed: {e}")
+                    print("   Keyword search may not work. Run: python scripts/rag_demo.py create-index")
+
+            if stats['failed'] > 0:
+                sys.exit(1)
+
+    # Orphan cleanup (after indexing, or standalone)
+    if args.cleanup_orphans:
+        cleanup_orphans(rag, library_path, dry_run=args.dry_run)
 
 
 if __name__ == '__main__':
