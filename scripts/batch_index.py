@@ -115,11 +115,19 @@ def _discover_formats(book_path: Path) -> List[Dict[str, str]]:
     return formats
 
 
-def _select_best_format(formats: List[Dict[str, str]]) -> Dict[str, str]:
-    """Select the best format from available formats (PDF > EPUB > first available)."""
-    for preferred in ('PDF', 'EPUB'):
+def _select_best_format(formats: List[Dict[str, str]], prefer_format: str = 'PDF') -> Dict[str, str]:
+    """Select the best format from available formats.
+
+    Tries prefer_format first, then falls back through the remaining
+    PREFERRED_FORMATS order, then returns whatever is available.
+    """
+    order = [prefer_format.upper()] + [
+        f[1:].upper() for f in PREFERRED_FORMATS
+        if f[1:].upper() != prefer_format.upper()
+    ]
+    for fmt in order:
         for f in formats:
-            if f['format'] == preferred:
+            if f['format'] == fmt:
                 return f
     return formats[0]
 
@@ -586,7 +594,8 @@ def batch_index(
     log_file: Optional[Path] = None,
     safe_indexer: Optional[SafeIndexer] = None,
     phase: str = 'phase2',
-    db_path: str = None
+    db_path: str = None,
+    prefer_format: str = 'PDF',
 ) -> Dict[str, Any]:
     """
     Index multiple books into the RAG database.
@@ -672,8 +681,9 @@ def batch_index(
             break
 
         book_id = create_book_id(book)
-        file_path = book['best_format']['path']
-        format_type = book['best_format']['format']
+        selected = _select_best_format(book['formats'], prefer_format)
+        file_path = selected['path']
+        format_type = selected['format']
 
         # Progress header
         print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
@@ -936,6 +946,11 @@ Profiles:
                         help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
     parser.add_argument('--use-modular-pipeline', action='store_true',
                         help='Use ModularPipeline architecture (parser -> chunker -> embedder)')
+    parser.add_argument('--prefer-format', choices=['pdf', 'epub', 'mobi', 'azw3'],
+                        default='pdf',
+                        help='Preferred file format when a book has multiple formats '
+                             '(default: pdf). Use "epub" to prefer EPUB over PDF — '
+                             'faster indexing, no page-number citations.')
     parser.add_argument('--cleanup-orphans', action='store_true',
                         help='Remove index entries for books deleted from Calibre. '
                              'Can be used standalone or combined with an indexing run. '
@@ -1104,7 +1119,8 @@ Profiles:
                 log_file=log_file,
                 safe_indexer=safe_indexer,
                 phase=phase if safe_indexer else 'phase2',
-                db_path=args.db_path
+                db_path=args.db_path,
+                prefer_format=args.prefer_format,
             )
 
             # End session (if not dry run)
