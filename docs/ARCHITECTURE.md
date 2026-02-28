@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring)
+**Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring, ChromaDB removed)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/app.asar/DECISIONS.md "DECISIONS.md").
 
@@ -42,13 +42,12 @@ The system is built around three principles: privacy by architecture (not by pol
                     ┌────────────────▼────────────────┐
                     │         Storage Layer            │
                     │  ┌──────────────────────────┐   │
-                    │  │  LanceDB (archilles_books) │  │
-                    │  │  (full-text book chunks)   │  │
-                    │  └──────────────────────────┘   │
-                    │  ┌──────────────────────────┐   │
-                    │  │  LanceDB (annotations)    │  │
-                    │  │  (highlights, notes)       │  │
-                    │  │  BGE-M3 embeddings        │  │
+                    │  │  LanceDB ("chunks" table) │   │
+                    │  │  book content, annotations│   │
+                    │  │  calibre comments         │   │
+                    │  │  BGE-M3 embeddings        │   │
+                    │  │  (chunk_type field filters│   │
+                    │  │   content vs annotations) │   │
                     │  └──────────────────────────┘   │
                     └────────────────┬────────────────┘
                                      │
@@ -180,7 +179,7 @@ The central storage backend for book content. `LanceDBStore` provides:
 | `book_id`, `book_title`, `author`, `publisher`, `year` | —   | Book metadata |
 | `calibre_id` | int | Calibre internal book ID |
 | `tags`, `language` | str | Calibre tags, detected language |
-| `chunk_index`, `chunk_type` | —   | Position and type (content/parent/child/calibre_comment) |
+| `chunk_index`, `chunk_type` | —   | Position and type (content/parent/child/calibre_comment/annotation) |
 | `page_number`, `page_label` | —   | Physical page + printed label ("xiv", "62") |
 | `chapter`, `section`, `section_title`, `section_type` | —   | Structural metadata |
 | `char_start`, `char_end`, `window_text` | —   | Context expansion (Small-to-Big) |
@@ -189,16 +188,14 @@ The central storage backend for book content. `LanceDBStore` provides:
 
 The `add_processed_documents()` method bridges `ProcessedDocument` objects from the modular pipeline directly into LanceDB storage.
 
-#### Annotations Storage (LanceDB)
+#### Annotations Storage (LanceDB, unified)
 
-Annotations (highlights, notes from Calibre's E-book Viewer) are stored in a dedicated LanceDB database (`src/storage/annotation_store.py`) using BGE-M3 embeddings (1024 dimensions) — the same embedding model as book content chunks. This unifies the entire system on a single embedding model and vector database backend.
+Annotations (highlights, notes from Calibre's E-book Viewer and PDF readers) are stored directly in the main LanceDB `chunks` table using `chunk_type='annotation'`. Calibre book comments use `chunk_type='calibre_comment'`. Both use the same BGE-M3 embeddings (1024 dimensions) as book content chunks, enabling cross-type hybrid search without model incompatibility.
 
-The `AnnotationStore` provides vector search, hybrid search (FTS + vector with RRF reranking), per-book upsert semantics, and SQL-like metadata filtering. The `AnnotationsIndexer` (`src/calibre_mcp/annotations_indexer.py`) handles the indexing pipeline: annotation extraction → text preparation → BGE-M3 embedding → LanceDB storage. It includes comprehensive hash-to-book matching (100+ path variants) and fuzzy fallback matching via difflib.
+The `search_annotations` MCP tool queries both types via the `'annotations_and_comments'` composite filter in `LanceDBStore._build_filter()`. Annotation indexing happens automatically as Phase 2 of the regular `index_book()` pipeline — no separate indexing step required.
 
 **Annotation infrastructure:**
-- `src/storage/annotation_store.py` — LanceDB-backed annotation store with vector/hybrid search
-- `src/calibre_mcp/annotations_indexer.py` — Indexing pipeline with BGE-M3 embeddings
-- `src/calibre_mcp/annotations.py` — File-based annotation extraction, hash-to-book mapping, text/keyword search
+- `src/calibre_mcp/annotations.py` — File-based annotation extraction, hash-to-book mapping (100+ path variants), text/keyword search (text-only fallback when LanceDB unavailable)
 - `src/calibre_mcp/calibre_analyzer.py` — Calibre metadata analysis and statistics
 
 
@@ -250,20 +247,18 @@ The service handles lazy initialization (RAG loading deferred to first use), std
 
 The primary interface. Implements the Model Context Protocol for integration with Claude Desktop and other MCP-compatible AI assistants. Communication uses JSON-RPC 2.0 over stdio, with the entry point `mcp_server.py` in the project root.
 
-**Exposed tools** (12 tools via `create_mcp_tools()`):
+**Exposed tools** (10 tools via `create_mcp_tools()`):
 
 | Tool | Description |
 | --- | --- |
 | `search_books_with_citations` | Hybrid search over book content with citation-ready output |
-| `search_annotations` | Semantic + text search across highlights and notes |
+| `search_annotations` | Hybrid search in LanceDB across highlights, notes, and Calibre comments |
 | `list_annotated_books` | Lists all books with indexed annotations |
 | `get_book_annotations` | Get annotations for a specific book by path |
 | `get_book_details` | Full metadata for a specific Calibre book ID |
-| `get_index_stats` | Indexing statistics (chunks, books, sizes) |
 | `export_bibliography` | Bibliography in BibTeX, RIS, EndNote, JSON, CSV |
 | `detect_duplicates` | Find duplicate books by title+author, ISBN, or exact title |
 | `list_tags` | All Calibre tags with book counts |
-| `index_annotations` | Trigger annotation indexing (with optional force reindex) |
 | `compute_annotation_hash` | Compute Calibre annotation hash for a book path |
 | `get_doublette_tag_instruction` | Helper for Calibre duplicate tagging workflow |
 
@@ -277,7 +272,7 @@ Streamlit-based interface for users without Claude Desktop. Provides search with
 
 `rag_demo.py` provides the `archillesRAG` class (the core RAG implementation) and a CLI for single-book indexing, search queries, and result export.
 
-`batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), and checkpoint-based resume for long-running operations.
+`batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), checkpoint-based resume for long-running operations, format preference (`--prefer-format pdf|epub|mobi|azw3`), and orphan cleanup (`--cleanup-orphans` removes index entries for books deleted from Calibre).
 
 * * *
 
@@ -369,7 +364,7 @@ ArchillesService.search()
 | Component | Implementation | Notes |
 | --- | --- | --- |
 | Vector database | LanceDB | Native hybrid search, IVF-PQ, Arrow-based |
-| Annotations DB | LanceDB | Separate DB, same engine as book chunks |
+| Annotations | LanceDB (same table) | chunk_type='annotation'/'calibre_comment' in chunks table |
 | Embeddings (all) | BGE-M3 (BAAI) | 1024 dimensions, multilingual, GPU |
 | Reranker | bge-reranker-v2-m3 | Optional cross-encoder, CPU default |
 | PDF extraction | PyMuPDF (fitz) | Primary; pdfplumber as fallback |
@@ -428,8 +423,7 @@ archilles/
 │   │   └── exceptions.py          # ExtractionError hierarchy
 │   │
 │   ├── storage/
-│   │   ├── lancedb_store.py        # LanceDBStore (book chunks)
-│   │   └── annotation_store.py     # AnnotationStore (annotation embeddings)
+│   │   └── lancedb_store.py        # LanceDBStore (all chunks: content + annotations)
 │   │
 │   ├── retriever/
 │   │   └── reranker.py            # CrossEncoderReranker (optional)
@@ -439,8 +433,7 @@ archilles/
 │   │
 │   ├── calibre_mcp/               # MCP server + annotation infrastructure
 │   │   ├── server.py              # CalibreMCPServer + create_mcp_tools()
-│   │   ├── annotations.py         # Annotation extraction, hash mapping, search
-│   │   ├── annotations_indexer.py # LanceDB semantic search with BGE-M3
+│   │   ├── annotations.py         # Annotation extraction, hash mapping, text search
 │   │   └── calibre_analyzer.py    # Library statistics and analysis
 │   │
 │   └── calibre_db.py              # Read-only Calibre metadata.db access
@@ -452,8 +445,7 @@ archilles/
 │
 ├── .archilles/                    # Per-library data (inside Calibre folder)
 │   ├── config.json                # User configuration
-│   ├── rag_db/                    # LanceDB database (book chunks)
-│   └── annotations_db/            # LanceDB database (annotation embeddings)
+│   └── rag_db/                    # LanceDB database (all chunks: content + annotations)
 │
 └── docs/
     ├── DECISIONS.md               # Strategic + technical decision log
@@ -472,9 +464,7 @@ All configuration is stored in `.archilles/config.json` inside the user's Calibr
 | `enable_reranking` | `false` | Enable cross-encoder reranking (Stage 2) |
 | `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
-| `annotations_db_path` | `.archilles/annotations_db` | Path for annotation LanceDB |
 | `calibre_library_path` | (env var) | Override for CALIBRE_LIBRARY_PATH |
-| `embedding_model` | `"BAAI/bge-m3"` | Annotation embedding model |
 
 Environment variables:
 

@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 21. Februar 2026 (ADR-003 ergänzt: Markdown als Extraktionsziel; Neue ADRs: Citation Style Module, EPUB-Originalzitat-Regel; CSL-Forschungsergebnisse dokumentiert)
+**Letzte Überarbeitung:** 28. Februar 2026 (ADR-016–018: ChromaDB vollständig entfernt, --cleanup-orphans, --prefer-format)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -146,7 +146,7 @@ Die semantische Unterscheidung zwischen Buchinhalt und Nutzernotizen bleibt übe
 Vorteile der Konsolidierung:
 - **Ein Embedding-Modell statt zwei:** BGE-M3 für alles eliminiert die semantische Inkompatibilität zwischen `all-mpnet-base-v2` (384 Dim.) und BGE-M3 (1024 Dim.), die Cross-Suchen zwischen Buchtext und Annotationen erschwerte.
 - **Annotationen profitieren von Hybrid-Search:** LanceDBs native Fusion aus Vektor- und Keyword-Matching (ADR-006) steht jetzt auch für Annotationen zur Verfügung.
-- **Eine Dependency weniger:** ChromaDB ist für die Annotation-Suche nicht mehr erforderlich. Der bestehende ChromaDB-Index (`annotations_indexer.py`) bleibt als Fallback erhalten, wird aber nicht mehr aktiv gefüllt.
+- **Eine Dependency weniger:** ChromaDB ist für die Annotation-Suche nicht mehr erforderlich. Der ChromaDB-Index (`annotations_indexer.py`) wurde am 28. Februar 2026 vollständig entfernt (siehe ADR-016).
 - **Einheitliche Änderungserkennung:** Annotationen werden über denselben Hash-Mechanismus wie Metadaten auf Änderungen geprüft (siehe ADR-011).
 
 Die konzeptionelle Zwei-Datenbanken-Architektur ist damit technisch als Filterung innerhalb einer einzigen LanceDB-Tabelle realisiert – einfacher, performanter und wartungsärmer als zwei physisch getrennte Datenbanken.
@@ -186,13 +186,12 @@ src/
 │   ├── models.py                  # Gemeinsame Dataclasses
 │   └── exceptions.py              # Fehlertypen-Hierarchie
 ├── storage/
-│   └── lancedb_store.py           # LanceDBStore (Vektor-DB-Backend)
+│   └── lancedb_store.py           # LanceDBStore (alle Chunks: Buchtext + Annotationen)
 ├── retriever/
 │   └── reranker.py                # Cross-Encoder Reranking (optional)
 ├── calibre_mcp/
-│   ├── server.py                  # CalibreMCPServer (12 MCP-Tools)
-│   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping
-│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Legacy; LanceDB-Integration in ADR-012)
+│   ├── server.py                  # CalibreMCPServer (10 MCP-Tools)
+│   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping, Text-Suche
 │   └── calibre_analyzer.py        # Bibliotheks-Statistiken
 └── calibre_db.py                  # Read-only Calibre-Metadaten-Zugriff
 ```
@@ -341,6 +340,53 @@ Für den aktuellen Use Case – Claude formatiert die Bibliografie im Rahmen ein
 - **Maximum 2:** Das vorletzte Backup dient als Fallback, falls das letzte Backup selbst korrupt sein sollte (z.B. bei Abbruch während des Backup-Vorgangs). Mehr als 2 Generationen bringen keinen zusätzlichen Schutz.
 
 **Konsequenz:** Der `SafeIndexer` bleibt als Sicherheitsnetz erhalten, ist aber kein Engpass mehr. Für die Zukunft wäre ein inkrementelles Backup-Konzept denkbar (nur geänderte Lance-Fragmente kopieren), aber bei der aktuellen Datenbankgröße ist die einfache Kopie-Strategie ausreichend.
+
+### ADR-016: ChromaDB vollständig entfernt (28. Februar 2026)
+
+**Kontext:** ChromaDB war nach der LanceDB-Migration (ADR-001) und der Annotation-Konsolidierung (ADR-012) nur noch als leere Hülle vorhanden: `annotations_indexer.py` (850+ Zeilen) existierte im Code, wurde aber seit dem 18. Februar 2026 nicht mehr gefüllt. `search_annotations` routete weiterhin gegen ChromaDB – also gegen einen leeren Index.
+
+**Entscheidung:** Vollständige Entfernung von ChromaDB aus dem Projekt.
+
+**Änderungen:**
+- `src/calibre_mcp/annotations_indexer.py` gelöscht (850+ Zeilen ChromaDB-Logik)
+- `chromadb==0.4.22` aus `requirements.txt` entfernt
+- `rank-bm25==0.2.2` aus `requirements.txt` entfernt (LanceDB hat native FTS)
+- `search_annotations`-Tool auf LanceDB umgestellt: sucht jetzt in `chunk_type='annotation'` und `chunk_type='calibre_comment'` via neuem Kombinationsfilter `'annotations_and_comments'` in `LanceDBStore._build_filter()`
+- `index_annotations`-Tool aus MCP-Server entfernt (Annotationen werden im regulären Indexierungslauf automatisch gespeichert)
+- `get_index_stats`-Tool aus MCP-Server entfernt (war ChromaDB-spezifisch; LanceDB-Stats über `get_index_status` verfügbar)
+- `chroma_db/` aus `.gitignore` entfernt
+- ChromaDB-Kompatibilitäts-Shim (`ChromaDBCorruptionError = LanceDBError`) aus `rag_demo.py` entfernt
+
+**Begründung:** Eine tote Dependency mit 850 Zeilen totem Code ist ein aktives Wartungsproblem. Der ChromaDB-Index war nie in die LanceDB-Architektur integriert – das war eine Schuld, die seit ADR-012 angewachsen war. Die Entfernung schließt die Migration ab und reduziert die Installationsgröße und Komplexität erheblich.
+
+**Konsequenz:** `search_annotations` nutzt jetzt denselben Hybrid-Search-Pfad wie `search_books_with_citations` – mit BGE-M3-Embeddings, BM25-Keyword-Matching und RRF-Fusion. Annotationen, die vor dem 18. Februar 2026 in ChromaDB gespeichert waren, sind verloren, sofern sie nicht im LanceDB-Lauf vom 18. Februar erfasst wurden. Eine Neu-Indexierung mit `--reindex-before 2026-02-19` stellt sie wieder her.
+
+### ADR-017: `--cleanup-orphans` – Stale-Index-Einträge entfernen (28. Februar 2026)
+
+**Kontext:** Wenn ein Buch aus Calibre gelöscht wird, verbleiben seine Chunks in LanceDB – der Index wächst mit toten Einträgen. Es fehlte ein Mechanismus, um diese Orphans zu bereinigen.
+
+**Entscheidung:** Neues CLI-Flag `--cleanup-orphans` in `batch_index.py`.
+
+**Implementierung:** `get_all_calibre_ids()` liest alle Book-IDs direkt aus Calibres `metadata.db` (ohne Tag/Autor-Filter, um nicht Bücher aus anderen Tags fälschlicherweise als Orphans zu werten). `cleanup_orphans()` vergleicht die LanceDB-IDs gegen die Calibre-IDs und löscht Chunks zu nicht mehr vorhandenen Büchern. Das Flag kann standalone verwendet werden, ohne `--tag`/`--author`/`--all` anzugeben.
+
+**Begründung:** Ein wachsender Index mit toten Einträgen schadet der Suchqualität (False Positives) und verschwendet Speicher. Der Dry-Run-Modus erlaubt sichere Inspektion vor dem Löschen.
+
+### ADR-018: `--prefer-format` – Dateiformat-Präferenz bei Batch-Indexierung (28. Februar 2026)
+
+**Kontext:** Viele Bücher in Calibre liegen in mehreren Formaten vor (z.B. PDF + EPUB). Die bisherige Strategie (PDF-Vorrang hardcodiert) bevorzugte Seitenzahlen, ignorierte aber die erheblichen Vorteile strukturierter EPUB-Extraktion.
+
+**Entscheidung:** Neues CLI-Flag `--prefer-format` mit Optionen `pdf`, `epub`, `mobi`, `azw3` (Standard: `pdf`). Ist das bevorzugte Format nicht vorhanden, greift automatisch das nächste verfügbare Format.
+
+**Abwägung:**
+
+| Format | Vorteil | Nachteil |
+|--------|---------|----------|
+| PDF | Exakte Seitenzahlen, wissenschaftliche Zitierbarkeit | OCR-Rauschen bei gescannten PDFs; Headers/Footers in Chunks |
+| EPUB | Saubere Chunks (HTML-Struktur), schnellere Indexierung | Keine Seitenzahlen; Kapitel-Zitate statt Seiten-Zitate |
+
+**Begründung:** Die Format-Wahl ist ein echtes Qualitäts-Trade-off, der vom Nutzer je nach Primärzweck (wissenschaftliches Zitieren vs. thematische Recherche) getroffen werden soll. EPUBs sind aufgrund der HTML-basierten Struktur schneller zu indexieren und produzieren semantisch kohärentere Chunks, was die Suchqualität bei konzeptuellen Fragen verbessert. PDFs bleiben für akademische Arbeit mit Seitenreferenzen vorzuziehen.
+
+**Umstellen bereits indexierter Bücher:** Die Format-Präferenz wird nicht automatisch auf bereits indexierte Bücher angewendet. Für einen vollständigen Wechsel: `--prefer-format epub --reindex-before 2099-01-01`.
 
 ---
 
@@ -491,8 +537,6 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 - *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
 - *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
 - *CLI-Erfahrung verbessern: Die lokale Kommandozeilen-Abfrage (rag_demo.py) liefert unbefriedigende Ergebnisse im Vergleich zur MCP-Integration, wo Claude den Kontext intelligent interpretiert. Mögliche Ansätze: bessere Prompt-Templates, automatische Query-Expansion, oder ein lokales LLM als Interpretation-Layer.*
-- *ChromaDB-Dependency bereinigen: annotations_indexer.py wird nicht mehr aktiv befüllt; Entscheidung über vollständige Entfernung oder Beibehaltung als Legacy-Fallback.*
-- *Annotation-Suche im MCP-Server: search_annotations-Tool auf LanceDB umstellen (aktuell noch ChromaDB-Backend).*
 - *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
 - *Citation-Modul in Service-Layer und MCP-Server integrieren: CitationConfig aus config.json laden und format_bibliography_instruction() in den System-Prompt einspeisen.*
 - *citeproc-py als optionale Dependency: formatter.py für Offline-Rendering und Zotero-Export, wenn citeproc-py installiert ist.*
