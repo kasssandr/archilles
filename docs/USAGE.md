@@ -68,6 +68,29 @@ python scripts/batch_index.py --author "Arendt"
 python scripts/batch_index.py --author "Foucault" --dry-run
 ```
 
+#### Dateiformat-Präferenz (`--prefer-format`)
+
+Hat ein Buch mehrere Formate (z.B. PDF + EPUB), bestimmt `--prefer-format`, welches indexiert wird. Standard ist `pdf`.
+
+```bash
+# PDF bevorzugen (Standard) — exakte Seitenzahlen, wissenschaftliche Zitierbarkeit
+python scripts/batch_index.py --tag "Leit-Literatur"
+
+# EPUB bevorzugen — schnellere Indexierung, sauberere Chunks
+python scripts/batch_index.py --tag "Leit-Literatur" --prefer-format epub
+```
+
+**PDF** liefert exakte Seitenzahlen für wissenschaftliche Zitationen (`S. 47`) und entspricht der gedruckten Ausgabe. Nachteil: Gescannte PDFs erzeugen OCR-Rauschen; mehrspaltige Layouts und Kopf-/Fußzeilen werden oft in die Chunks gemischt, was die Suchqualität mindert.
+
+**EPUB** liefert sauberere Chunks, da der Text als semantisches HTML vorliegt — Absätze bleiben Absätze, Kapitelgrenzen werden erkannt, und die Extraktion ist deutlich schneller. Nachteil: Seitenzahlen sind nicht verfügbar; Zitate verweisen auf Kapitel statt auf Seiten.
+
+Ist das bevorzugte Format nicht vorhanden, greift automatisch das nächste verfügbare Format.
+
+**Umstellen bereits indexierter Bücher:** Die Format-Präferenz wird beim nächsten Lauf nicht automatisch angewendet — bereits indexierte Bücher werden übersprungen. Für einen vollständigen Wechsel auf EPUB:
+```bash
+python scripts/batch_index.py --tag "Leit-Literatur" --prefer-format epub --reindex-before 2099-01-01
+```
+
 #### Index-Statistiken
 ```bash
 python scripts/rag_demo.py stats
@@ -223,7 +246,7 @@ In Claude Desktop:
 
 ### Indexierung
 
-- **PDFs bevorzugen**: Bessere Textextraktion als EPUBs mit komplexem Layout
+- **Format wählen**: PDF für präzise Seitenzitate, EPUB für schnellere Indexierung und sauberere Chunks (siehe `--prefer-format`)
 - **Über Nacht laufen lassen**: ~10 Min pro Buch, 67 Bücher ≈ 11 Stunden
 - **`--skip-existing` nutzen**: Bei Unterbrechung einfach fortsetzen
 - **Tags strategisch nutzen**: Indexiere thematische Sammlungen statt alles
