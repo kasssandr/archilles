@@ -392,6 +392,8 @@ def add_to_calibre(html_path: Path, conv: Conversation,
            '--title', conv.display_title,
            '--author', conv.platform,
            '--tags', ','.join(tags)]
+    if conv.created_at:
+        cmd += ['--field', f'pubdate:{conv.created_at.strftime("%Y-%m-%dT%H:%M:%S")}']
     if library_path:
         cmd += ['--library-path', library_path]
 
