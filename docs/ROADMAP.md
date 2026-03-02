@@ -37,15 +37,15 @@ Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche m
 
 ---
 
-## v1.0 — Stabilisierung und Dokumentation (Ziel: Q1 2026)
+## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
 
-**Fokus:** Das Fundament für den Community-Release legen.
+**Fokus:** Das Fundament für den Community-Release legen und Archilles LLM-agnostisch machen.
 
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
 
-Konkret geplant: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks. Windows-Installer und macOS-Bundle als mittelfristiges Ziel.
+**HTTP/SSE-Transport für den MCP-Server (höchste Priorität):** Archilles spricht derzeit nur stdio-MCP — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT, OpenAI Codex und andere Cloud-basierte AI-Clients erwarten dagegen einen remote-erreichbaren HTTP/SSE-Endpunkt. Die Lösung: ein optionaler HTTP/SSE-Modus, der lokal auf dem eigenen Rechner läuft (localhost) und von MCP-kompatiblen Desktop-Clients direkt angesprochen werden kann. Das macht Archilles LLM-agnostisch — nutzbar mit Claude, ChatGPT, Codex und jedem zukünftigen MCP-kompatiblen Client. Die Implementierung ist mit FastMCP oder ähnlichen Python-Libraries überschaubar und erfordert keine Änderung an der Kernarchitektur.
 
-**In Arbeit:** Die Re-Indexierung des Core-Bestands (Leit-Literatur) mit vollständigen Section-Metadaten und Page-Labels steht bei 259 von 267 Titeln kurz vor dem Abschluss. Danach folgt eine umfassende Testrunde — sowohl für die Suchqualität über den erweiterten Index als auch für die MCP-Integration mit Claude Desktop.
+Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
 
 ---
 
