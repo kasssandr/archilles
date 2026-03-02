@@ -1,0 +1,83 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please fill in as much detail as you can — it helps a lot.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Archilles is affected?
+      options:
+        - Indexing (batch_index.py / rag_demo.py index)
+        - Search / CLI (rag_demo.py query)
+        - MCP server (Claude Desktop integration)
+        - Web UI
+        - Installation / dependencies
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run ...
+        2. ...
+        3. Error appears
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message / traceback
+      description: Paste the full error message or traceback if applicable.
+      render: shell
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Windows 11, macOS 14.4 (Apple M2 Pro), Ubuntu 22.04"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "e.g. 3.12.1"
+    validations:
+      required: true
+
+  - type: input
+    id: hardware
+    attributes:
+      label: Hardware
+      placeholder: "e.g. NVIDIA RTX 3060 (12 GB VRAM), Apple M3 Pro, CPU only"
+
+  - type: input
+    id: version
+    attributes:
+      label: Archilles version or git commit
+      placeholder: "e.g. v0.9 Beta, or paste git commit hash"
