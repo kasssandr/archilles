@@ -75,7 +75,7 @@ from src.archilles.hardware import detect_hardware, print_hardware_detection, se
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
 
 # Preferred book formats in order of priority
-PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3']
+PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 
 # Tags excluded by default — books carrying these tags are skipped unless
 # --include-excluded is passed explicitly.
