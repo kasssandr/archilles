@@ -1,307 +1,329 @@
-# Archilles Nutzungsanleitung
+# Archilles Usage Guide
 
-Praktische Anleitung für den täglichen Gebrauch von Archilles.
-
----
-
-## Inhaltsverzeichnis
-
-1. [Übersicht: Zwei Suchsysteme](#übersicht-zwei-suchsysteme)
-2. [CLI-Befehle](#cli-befehle)
-3. [MCP-Tools für Claude Desktop](#mcp-tools-für-claude-desktop)
-4. [Typische Workflows](#typische-workflows)
-5. [Tipps & Best Practices](#tipps--best-practices)
+A practical guide to using Archilles day-to-day.
 
 ---
 
-## Übersicht: Zwei Suchsysteme
+## Table of Contents
 
-Archilles bietet zwei komplementäre Suchsysteme:
-
-| System | Durchsucht | Tool | Anwendung |
-|--------|-----------|------|-----------|
-| **Volltext-Suche** | PDF/EPUB-Inhalte (Chunks) | `search_books_with_citations` | "Was steht in meinen Büchern über X?" |
-| **Annotations-Suche** | Calibre Highlights/Notizen | `search_annotations` | "Was habe ich zu X markiert/notiert?" |
-
-Beide Systeme nutzen:
-- **Semantische Suche**: Findet konzeptuell ähnliche Inhalte
-- **Keyword-Suche**: Findet exakte Wortübereinstimmungen
-- **Hybrid-Modus**: Kombiniert beide (empfohlen)
+1. [Overview: Two Search Systems](#overview-two-search-systems)
+2. [CLI Commands](#cli-commands)
+3. [MCP Tools in Claude Desktop](#mcp-tools-in-claude-desktop)
+4. [Typical Workflows](#typical-workflows)
+5. [Tips & Best Practices](#tips--best-practices)
 
 ---
 
-## CLI-Befehle
+## Overview: Two Search Systems
 
-### Indexierung
+Archilles provides two complementary search systems:
 
-#### Einzelnes Buch indexieren
+| System | Searches | Tool | When to use |
+|--------|----------|------|-------------|
+| **Full-text search** | PDF/EPUB content (chunks) | `search_books_with_citations` | "What do my books say about X?" |
+| **Annotation search** | Calibre highlights and notes | `search_annotations` | "What did I mark or note about X?" |
+
+Both systems use:
+- **Semantic search**: Finds conceptually similar content
+- **Keyword search**: Finds exact word matches
+- **Hybrid mode**: Combines both (recommended)
+
+---
+
+## CLI Commands
+
+### Indexing
+
+#### Index a single book
 ```bash
-python scripts/rag_demo.py index "D:\Calibre-Bibliothek\Autor\Buch (ID)\datei.pdf"
+python scripts/rag_demo.py index "D:\Calibre Library\Author\Book (ID)\file.pdf"
 ```
 
-Mit benutzerdefinierter ID:
+With a custom ID:
 ```bash
-python scripts/rag_demo.py index "pfad/zum/buch.pdf" --book-id "Arendt_VitaActiva"
+python scripts/rag_demo.py index "path/to/book.pdf" --book-id "Arendt_VitaActiva"
 ```
 
-#### Batch-Indexierung nach Tag
+#### Batch indexing by tag
 ```bash
-# Vorschau (was würde indexiert?)
-python scripts/batch_index.py --tag "Leit-Literatur" --dry-run
+# Preview (what would be indexed?)
+python scripts/batch_index.py --tag "Key-Literature" --dry-run
 
-# Tatsächlich indexieren
-python scripts/batch_index.py --tag "Leit-Literatur"
+# Actually index
+python scripts/batch_index.py --tag "Key-Literature"
 
-# Mit Logging
-python scripts/batch_index.py --tag "Geschichte" --log indexing_log.json
+# With logging
+python scripts/batch_index.py --tag "History" --log indexing_log.json
 
-# Nur erste N Bücher (zum Testen)
-python scripts/batch_index.py --tag "Philosophie" --limit 5
+# First N books only (for testing)
+python scripts/batch_index.py --tag "Philosophy" --limit 5
 
-# Fortsetzen nach Unterbrechung
-python scripts/batch_index.py --tag "Leit-Literatur" --skip-existing
+# Resume after interruption
+python scripts/batch_index.py --tag "Key-Literature" --skip-existing
 ```
 
-#### Batch-Indexierung nach Autor
+#### Batch indexing by author
 ```bash
 python scripts/batch_index.py --author "Arendt"
 python scripts/batch_index.py --author "Foucault" --dry-run
 ```
 
-#### Dateiformat-Präferenz (`--prefer-format`)
+#### Format preference (`--prefer-format`)
 
-Hat ein Buch mehrere Formate (z.B. PDF + EPUB), bestimmt `--prefer-format`, welches indexiert wird. Standard ist `pdf`.
+If a book has multiple formats (e.g. PDF + EPUB), `--prefer-format` determines which gets indexed. Default is `pdf`.
 
 ```bash
-# PDF bevorzugen (Standard) — exakte Seitenzahlen, wissenschaftliche Zitierbarkeit
-python scripts/batch_index.py --tag "Leit-Literatur"
+# Prefer PDF (default) — exact page numbers, scientific citability
+python scripts/batch_index.py --tag "Key-Literature"
 
-# EPUB bevorzugen — schnellere Indexierung, sauberere Chunks
-python scripts/batch_index.py --tag "Leit-Literatur" --prefer-format epub
+# Prefer EPUB — faster indexing, cleaner chunks
+python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub
 ```
 
-**PDF** liefert exakte Seitenzahlen für wissenschaftliche Zitationen (`S. 47`) und entspricht der gedruckten Ausgabe. Nachteil: Gescannte PDFs erzeugen OCR-Rauschen; mehrspaltige Layouts und Kopf-/Fußzeilen werden oft in die Chunks gemischt, was die Suchqualität mindert.
+**PDF** provides exact page numbers for citations (`p. 47`) and matches the printed edition. Downside: scanned PDFs produce OCR noise; multi-column layouts and headers/footers often mix into chunks, reducing search quality.
 
-**EPUB** liefert sauberere Chunks, da der Text als semantisches HTML vorliegt — Absätze bleiben Absätze, Kapitelgrenzen werden erkannt, und die Extraktion ist deutlich schneller. Nachteil: Seitenzahlen sind nicht verfügbar; Zitate verweisen auf Kapitel statt auf Seiten.
+**EPUB** produces cleaner chunks because the text is structured HTML — paragraphs stay paragraphs, chapter boundaries are recognized, and extraction is significantly faster. Downside: no page numbers; citations reference chapters rather than pages.
 
-Ist das bevorzugte Format nicht vorhanden, greift automatisch das nächste verfügbare Format.
+If the preferred format is not available, the next available format is used automatically.
 
-**Umstellen bereits indexierter Bücher:** Die Format-Präferenz wird beim nächsten Lauf nicht automatisch angewendet — bereits indexierte Bücher werden übersprungen. Für einen vollständigen Wechsel auf EPUB:
+**Switching already-indexed books:** The format preference is not applied automatically to already-indexed books — they are skipped on the next run. For a complete switch to EPUB:
 ```bash
-python scripts/batch_index.py --tag "Leit-Literatur" --prefer-format epub --reindex-before 2099-01-01
+python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub --reindex-before 2099-01-01
 ```
 
-#### Index-Statistiken
+#### Remove orphan entries
+
+When books are deleted from Calibre, their chunks remain in the index. Use `--cleanup-orphans` to remove them:
+
+```bash
+# Preview what would be removed
+python scripts/batch_index.py --cleanup-orphans --dry-run
+
+# Actually remove
+python scripts/batch_index.py --cleanup-orphans
+```
+
+#### Index statistics
 ```bash
 python scripts/rag_demo.py stats
 ```
 
 ---
 
-### Suche
+### Search
 
-#### Grundlegende Suche
+#### Basic search
 ```bash
-# Hybrid (Standard, empfohlen)
-python scripts/rag_demo.py query "politische Legitimation im Mittelalter"
+# Hybrid (default, recommended)
+python scripts/rag_demo.py query "political legitimacy in the Middle Ages"
 
-# Nur semantisch (konzeptbasiert)
-python scripts/rag_demo.py query "Herrschaft und Macht" --mode semantic
+# Semantic only (concept-based)
+python scripts/rag_demo.py query "power and authority" --mode semantic
 
-# Nur Keyword (exakte Wörter)
+# Keyword only (exact words)
 python scripts/rag_demo.py query "Herrschaftslegitimation" --mode keyword
 ```
 
-#### Exakte Phrasensuche
-Besonders wichtig für Latein, Zitate, Fachbegriffe:
+#### Exact phrase search
+Especially useful for Latin, quotes, and technical terms:
 ```bash
 python scripts/rag_demo.py query "evangelista et a presbyteris" --exact
 ```
 
-#### Sprachfilter
+#### Language filter
 ```bash
-# Nur deutsche Texte
+# German texts only
 python scripts/rag_demo.py query "König" --language de
 
-# Nur lateinische Texte
+# Latin texts only
 python scripts/rag_demo.py query "Rex" --language la
 
-# Mehrere Sprachen
+# Multiple languages
 python scripts/rag_demo.py query "king" --language de,en,la
 ```
 
-#### Tag-Filter
+#### Tag filter
 ```bash
-python scripts/rag_demo.py query "Bewusstsein" --tag-filter Philosophie
-python scripts/rag_demo.py query "Handel" --tag-filter Geschichte Wirtschaft
+python scripts/rag_demo.py query "consciousness" --tag-filter Philosophy
+python scripts/rag_demo.py query "trade" --tag-filter History Economics
 ```
 
-#### Mehr Ergebnisse
+#### More results
 ```bash
 python scripts/rag_demo.py query "Reformation" --top-k 20
 ```
 
-#### Export nach Markdown
-Für Joplin, Obsidian oder andere Markdown-Apps:
+#### Export to Markdown
+For Joplin, Obsidian, or other Markdown apps:
 ```bash
-python scripts/rag_demo.py query "Spätantike Senatoren" --export recherche.md
+python scripts/rag_demo.py query "Late Antique senators" --export research.md
 ```
 
 ---
 
-## MCP-Tools für Claude Desktop
+## MCP Tools in Claude Desktop
 
-Nach korrekter Konfiguration stehen folgende Tools in Claude Desktop zur Verfügung:
+After correct configuration, the following tools are available in Claude Desktop:
 
-### Volltext-Suche: `search_books_with_citations`
+### Full-text search: `search_books_with_citations`
 
-Durchsucht die indexierten PDF/EPUB-Inhalte.
+Searches indexed PDF/EPUB content.
 
-**Beispiel-Prompts:**
-- *"Suche in meinen Büchern nach Diskussionen über politische Legitimation"*
-- *"search_books_with_citations query='Konstantin Senat' mode='hybrid'"*
-- *"Finde Passagen über mittelalterlichen Handel, nur auf Deutsch"*
+**Example prompts:**
+- *"Search my books for discussions of political legitimacy"*
+- *"Find passages about medieval trade, in German only"*
+- *"What do my sources say about the Council of Nicaea?"*
 
-**Parameter:**
-- `query`: Suchbegriff (Pflicht)
-- `top_k`: Anzahl Ergebnisse (Standard: 5)
-- `mode`: 'hybrid', 'semantic', oder 'keyword'
-- `language`: Sprachfilter ('de', 'en', 'la', etc.)
+**Parameters:**
+- `query`: Search term (required)
+- `top_k`: Number of results (default: 10)
+- `mode`: 'hybrid', 'semantic', or 'keyword'
+- `language`: Language filter ('de', 'en', 'la', etc.)
 
-### Annotations-Suche: `search_annotations`
+### Annotation search: `search_annotations`
 
-Durchsucht deine Calibre-Highlights und Notizen.
+Searches your Calibre highlights, notes, and book comments.
 
-**Beispiel-Prompts:**
-- *"Suche in meinen Annotationen nach 'Bewusstsein'"*
-- *"Was habe ich zum Thema Freiheit markiert?"*
-- *"search_annotations query='aristocracy' use_semantic=true"*
+**Example prompts:**
+- *"Search my annotations for 'consciousness'"*
+- *"What did I highlight about freedom?"*
+- *"Search my notes for anything about Hannah Arendt"*
 
-**Parameter:**
-- `query`: Suchbegriff (Pflicht)
-- `use_semantic`: true für semantische Suche, false für Text-Match
-- `max_results`: Maximale Ergebnisse (Standard: 10)
-- `max_per_book`: Max. Treffer pro Buch (verhindert Dominanz eines Buchs)
+**Parameters:**
+- `query`: Search term (required)
+- `max_results`: Maximum results (default: 30)
+- `max_per_book`: Max results per book (prevents one book dominating)
 
-### Weitere MCP-Tools
+### Other MCP tools
 
-| Tool | Funktion |
+| Tool | Function |
 |------|----------|
-| `list_annotated_books` | Zeigt alle Bücher mit Annotationen |
-| `get_index_stats` | Statistiken zum Annotations-Index |
-| `index_annotations` | Indexiert/reindexiert Annotationen |
-| `get_book_annotations` | Annotationen eines spezifischen Buchs |
-| `detect_duplicates` | Findet Buch-Dubletten in der Bibliothek |
+| `list_annotated_books` | Shows all books with annotations |
+| `get_book_annotations` | Annotations for a specific book |
+| `get_book_details` | Full metadata for a Calibre book ID |
+| `list_tags` | All Calibre tags with book counts |
+| `detect_duplicates` | Finds duplicate books in the library |
+| `export_bibliography` | Exports citations in BibTeX, RIS, Chicago, APA |
 
 ---
 
-## Typische Workflows
+## Typical Workflows
 
-### Workflow 1: Neue Buchsammlung erschließen
+### Workflow 1: Open up a new book collection
 
 ```bash
-# 1. Bücher mit relevantem Tag identifizieren (Dry-Run)
-python scripts/batch_index.py --tag "Projekt-Dissertation" --dry-run
+# 1. Identify books with the relevant tag (dry run)
+python scripts/batch_index.py --tag "Dissertation-Project" --dry-run
 
-# 2. Indexierung starten (ggf. über Nacht)
-python scripts/batch_index.py --tag "Projekt-Dissertation" --log diss_index.json
+# 2. Start indexing (possibly overnight)
+python scripts/batch_index.py --tag "Dissertation-Project" --log diss_index.json
 
-# 3. Nach Abschluss: Claude Desktop neu starten
+# 3. After completion: restart Claude Desktop
 
-# 4. In Claude Desktop recherchieren
-# "Suche in meinen Büchern nach [Forschungsfrage]"
+# 4. Research in Claude Desktop:
+# "Search my books for [research question]"
 ```
 
-### Workflow 2: Thematische Recherche
+### Workflow 2: Thematic research
 
 In Claude Desktop:
 ```
-1. "Suche in meinen Büchern nach 'Verhältnis von Kirche und Staat im Mittelalter'"
-2. "Zeige mir auch, was ich dazu annotiert habe"
-3. "Exportiere die relevantesten Passagen als Markdown"
+1. "Search my books for 'the relationship between church and state in the Middle Ages'"
+2. "Also show me what I've annotated on this topic"
+3. "Export the most relevant passages as Markdown"
 ```
 
-### Workflow 3: Zitat finden
+### Workflow 3: Find a quote
 
 ```bash
-# Exakte Phrase suchen (z.B. lateinisches Zitat)
+# Search for an exact phrase (e.g. a Latin quote)
 python scripts/rag_demo.py query "in necessariis unitas" --exact
 
-# Oder in Claude Desktop:
-# "Finde das genaue Zitat 'in necessariis unitas' in meinen Büchern"
+# Or in Claude Desktop:
+# "Find the exact quote 'in necessariis unitas' in my books"
 ```
 
-### Workflow 4: Vergleichende Analyse
+### Workflow 4: Comparative analysis
 
 In Claude Desktop:
 ```
-1. "Was schreibt Arendt über Macht?" (mit --book-id Filter wenn indexiert)
-2. "Und was schreibt Foucault dazu?"
-3. "Vergleiche die beiden Positionen basierend auf den gefundenen Passagen"
+1. "What does Arendt write about power?"
+2. "And what does Foucault say about it?"
+3. "Compare the two positions based on the passages you found"
+```
+
+### Workflow 5: Annotation-driven research
+
+In Claude Desktop:
+```
+1. "What did I highlight about the concept of sovereignty?"
+2. "Are there any notes I made about Schmitt in relation to this?"
+3. "Combine my annotations with relevant passages from the books themselves"
 ```
 
 ---
 
-## Tipps & Best Practices
+## Tips & Best Practices
 
-### Indexierung
+### Indexing
 
-- **Format wählen**: PDF für präzise Seitenzitate, EPUB für schnellere Indexierung und sauberere Chunks (siehe `--prefer-format`)
-- **Über Nacht laufen lassen**: ~10 Min pro Buch, 67 Bücher ≈ 11 Stunden
-- **`--skip-existing` nutzen**: Bei Unterbrechung einfach fortsetzen
-- **Tags strategisch nutzen**: Indexiere thematische Sammlungen statt alles
+- **Choose your format:** PDF for precise page citations, EPUB for faster indexing and cleaner chunks (see `--prefer-format`)
+- **Run overnight:** ~10 min per book (CPU), ~2 min per book (GPU); 50 books ≈ 1–8 hours
+- **Use `--skip-existing`:** Resume after interruptions
+- **Use tags strategically:** Index thematic collections rather than everything at once
+- **Clean up after deleting books:** Run `--cleanup-orphans` periodically
 
-### Suche
+### Search
 
-- **Hybrid-Modus für allgemeine Fragen**: Kombiniert Konzepte + exakte Wörter
-- **Keyword-Modus für Fachbegriffe**: "Herrschaftslegitimation", "Prosopographie"
-- **Exakt-Modus für Zitate**: Lateinische Phrasen, wörtliche Zitate
-- **Sprachfilter bei mehrsprachiger Bibliothek**: Reduziert Rauschen
+- **Hybrid mode for general questions:** Combines concepts + exact words
+- **Keyword mode for technical terms:** "Herrschaftslegitimation", "prosopography"
+- **Exact mode for quotes:** Latin phrases, verbatim quotations
+- **Language filter in multilingual libraries:** Reduces noise significantly
 
 ### Claude Desktop
 
-- **Nach Indexierung neu starten**: MCP-Server lädt DB beim Start
-- **Klare Anweisungen geben**: "Suche in meinen Büchern" vs. "Suche in Annotationen"
-- **Ergebnisse validieren**: Seitenzahlen prüfen, besonders bei alten PDFs
+- **Restart after indexing:** The MCP server loads the database at startup
+- **Give clear instructions:** "Search my *books*" vs. "Search my *annotations*"
+- **Validate results:** Check page numbers, especially in older PDFs
 
-### Datenorganisation
+### Data organization
 
 ```
-D:\Calibre-Bibliothek\
+D:\Calibre Library\
 ├── .archilles\
-│   ├── rag_db\          # LanceDB-Index (Volltexte + Annotationen)
-│   └── config.json      # Optionale Konfiguration
-├── Autor 1\
-│   └── Buch (ID)\
-└── Autor 2\
-    └── Buch (ID)\
+│   ├── rag_db\          # LanceDB index (all content + annotations)
+│   └── config.json      # Optional configuration
+├── Author 1\
+│   └── Book (ID)\
+└── Author 2\
+    └── Book (ID)\
 ```
 
 ---
 
-## Fehlerbehebung
+## Troubleshooting
 
 ### "Tool ran without output"
-→ MCP Response-Format-Problem. Stelle sicher, dass du die aktuelle Version hast.
+→ MCP response format issue. Make sure you have the current version.
 
-### Suche liefert keine Ergebnisse
-→ Prüfe mit `python scripts/rag_demo.py stats`, ob Bücher indexiert sind.
-→ Prüfe den DB-Pfad (sollte in `.archilles/rag_db` sein).
+### Search returns no results
+→ Check with `python scripts/rag_demo.py stats` whether books are indexed.
+→ Check the DB path (should be in `.archilles/rag_db`).
 
-### Claude Desktop findet Tools nicht
-→ Prüfe `claude_desktop_config.json` Syntax.
-→ Starte Claude Desktop komplett neu.
-→ Prüfe Log: `~/.archilles/mcp_server.log`
+### Claude Desktop doesn't find tools
+→ Check `claude_desktop_config.json` syntax.
+→ Restart Claude Desktop completely.
+→ Check log: `~/.archilles/mcp_server.log`
 
-### Indexierung bricht ab
-→ Mit `--skip-existing` fortsetzen.
-→ Prüfe Speicherplatz und RAM.
+### Indexing aborts
+→ Resume with `--skip-existing`.
+→ Check disk space and RAM.
 
 ---
 
-## Weiterführende Dokumentation
+## Further Documentation
 
-- [README.md](../README.md) - Projektübersicht
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Technische Details
-- [MCP_GUIDE.md](MCP_GUIDE.md) - Claude Desktop Konfiguration
-- [FAQ.md](FAQ.md) - Häufige Fragen
+- [README.md](../README.md) — Project overview
+- [ARCHITECTURE.md](ARCHITECTURE.md) — Technical details
+- [MCP_GUIDE.md](MCP_GUIDE.md) — Claude Desktop configuration
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues
