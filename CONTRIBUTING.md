@@ -1,189 +1,118 @@
 # Contributing to Archilles
 
-Thank you for your interest in contributing to Archilles! This document provides guidelines for contributing to the project.
-
-## Code of Conduct
-
-Please read and follow our [Code of Conduct](CODE_OF_CONDUCT.md). We're committed to providing a welcoming and inclusive community.
+Thank you for your interest in contributing to Archilles!
 
 ## How to Contribute
 
 ### Reporting Bugs
 
 **Before submitting a bug report:**
-- Check the [FAQ](docs/FAQ.md) and [Troubleshooting](docs/TROUBLESHOOTING.md) guides
-- Search [existing issues](https://github.com/archilles/archilles/issues) to avoid duplicates
+- Check [FAQ.md](docs/FAQ.md) and [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
+- Search [existing issues](https://github.com/kasssandr/archilles/issues) to avoid duplicates
 
 **When reporting a bug, include:**
-- Clear, descriptive title
 - Steps to reproduce
-- Expected vs actual behavior
-- Environment details (OS, Python version, Archilles version)
-- Error messages (full traceback if applicable)
-- Sample data if relevant (anonymized)
+- Expected vs. actual behavior
+- OS, Python version, and hardware (CPU/GPU)
+- Full error traceback if applicable
 
 ### Suggesting Features
 
-Feature requests are welcome! Open an issue with:
-- Clear use case description
-- Why this feature would be valuable
-- Any alternative solutions you've considered
-- Your willingness to contribute implementation
+Feature requests are welcome. Open an issue with:
+- A clear use case description
+- Why the feature would be valuable to other researchers
+- Any alternative approaches you've considered
 
 ### Pull Requests
 
-We welcome pull requests! Here's the process:
-
-1. **Fork the repository**
-   ```bash
-   git clone https://github.com/archilles/archilles.git
-   cd archilles
-   ```
-
-2. **Create a feature branch**
+1. Fork the repository and create a feature branch:
    ```bash
    git checkout -b feature/your-feature-name
    ```
 
-3. **Make your changes**
-   - Follow existing code style
-   - Add tests if applicable
-   - Update documentation
+2. Make your changes, following the code style guidelines below.
 
-4. **Commit with clear messages**
-   ```bash
-   git commit -m "Feature: Add support for X"
-   ```
+3. Open a pull request with a clear description of what changes and why.
 
-5. **Push and create PR**
-   ```bash
-   git push origin feature/your-feature-name
-   ```
+**For significant changes**, please open an issue first to discuss the approach before investing time in implementation.
+
+---
 
 ## Development Setup
 
 ```bash
-# Clone repository
-git clone https://github.com/archilles/archilles.git
+# Clone
+git clone https://github.com/kasssandr/archilles.git
 cd archilles
 
 # Create virtual environment
 python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
+source venv/bin/activate   # Windows: venv\Scripts\activate
 
-# Install in development mode
-pip install -e .
+# Install dependencies
+pip install -r requirements.txt
 
-# Install development dependencies
-pip install pytest black flake8
+# Install dev tools
+pip install black flake8
 ```
+
+---
 
 ## Code Style
 
-- **Python**: Follow PEP 8
-- **Formatting**: Use `black` for code formatting
-- **Linting**: Run `flake8` before committing
-- **Type hints**: Encouraged but not required
-- **Docstrings**: Use for public APIs
+- **Formatting**: `black src/ scripts/`
+- **Linting**: `flake8 src/ scripts/`
+- **Type hints**: Encouraged for new code
+- **Docstrings**: Required for public functions and classes
 
-```bash
-# Format code
-black src/ scripts/
+There is currently no automated test suite. If you are adding a significant feature, a manual test description in your PR is appreciated.
 
-# Lint
-flake8 src/ scripts/
-```
-
-## Testing
-
-```bash
-# Run tests
-pytest
-
-# Run specific test
-pytest tests/test_calibre_db.py
-
-# With coverage
-pytest --cov=src tests/
-```
-
-## Documentation
-
-- Update relevant documentation in `docs/`
-- Update README.md if adding user-facing features
-- Add docstrings for new functions/classes
-- Include usage examples where helpful
+---
 
 ## Areas for Contribution
 
-### High Priority
+**High priority:**
+- Bug reports and fixes — especially on macOS and Linux (untested platforms)
+- Documentation improvements and corrections
+- Test coverage — writing `pytest` tests for core components would be a valuable contribution
 
-- **Test coverage**: Unit tests for core components
-- **Documentation**: Expand user guides, add examples
-- **Bug fixes**: See [issues labeled "bug"](https://github.com/archilles/archilles/issues?q=is%3Aissue+is%3Aopen+label%3Abug)
-- **Performance**: Profile and optimize slow operations
+**Medium priority:**
+- Additional e-book format support
+- Chunking strategy improvements
+- CLI usability improvements
 
-### Medium Priority
+**Future features** (see [ROADMAP.md](docs/ROADMAP.md)):
+- Domain-specific embedding models
+- VLM-based OCR
+- Graph RAG
 
-- **Format support**: Additional e-book formats
-- **Language detection**: Improve accuracy
-- **Chunking strategies**: Alternative approaches
-- **UI/UX**: Command-line interface improvements
-
-### Future Features
-
-- **Annotations extraction**: PDF/EPUB highlights
-- **Incremental indexing**: Update only changed books
-- **Graph RAG**: Entity relationships
-- **Web UI**: Browser-based interface
+---
 
 ## Project Structure
 
 ```
 archilles/
-├── docs/              # Documentation
-├── scripts/           # CLI scripts
-│   └── rag_demo.py   # Main entry point
+├── docs/                   # Documentation
+├── scripts/
+│   ├── rag_demo.py         # Main CLI (index, query, stats)
+│   └── batch_index.py      # Batch indexing by Calibre tag
 ├── src/
-│   ├── calibre_db.py      # Calibre integration
-│   └── extractors/        # Text extraction
-├── tests/             # Test suite
-├── requirements.txt   # Dependencies
-└── README.md         # Main documentation
+│   ├── archilles/          # Core pipeline (embedder, retriever, profiles)
+│   ├── calibre_db.py       # Read-only Calibre integration
+│   ├── calibre_mcp/        # MCP server and tools
+│   ├── extractors/         # Format-specific text extractors
+│   ├── service/            # ArchillesService facade
+│   └── storage/            # LanceDB backend
+├── mcp_server.py           # Entry point for Claude Desktop
+└── requirements.txt
 ```
-
-## Commit Message Guidelines
-
-Use clear, descriptive commit messages:
-
-```
-Feature: Add support for MOBI format
-Fix: Correct page number extraction in PDFs
-Docs: Update installation guide for Windows
-Refactor: Simplify metadata extraction logic
-Test: Add unit tests for BM25 indexing
-```
-
-## Release Process
-
-(For maintainers)
-
-1. Update version in `setup.py`
-2. Update `CHANGELOG.md`
-3. Tag release: `git tag -a v1.0.0 -m "Release v1.0.0"`
-4. Push tag: `git push origin v1.0.0`
-5. Create GitHub release with notes
-
-## Questions?
-
-- **General questions**: [GitHub Discussions](https://github.com/archilles/archilles/discussions)
-- **Bugs/Features**: [GitHub Issues](https://github.com/archilles/archilles/issues)
-- **Security**: [hello@archilles.org](mailto:hello@archilles.org)
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the MIT License.
 
 ---
 
-**Thank you for contributing to Archilles!** 🚀
+## Questions?
+
+- **Bugs / features**: [GitHub Issues](https://github.com/kasssandr/archilles/issues)
+- **Questions / discussion**: [GitHub Discussions](https://github.com/kasssandr/archilles/discussions)
+- **Security issues**: [hello@archilles.org](mailto:hello@archilles.org)
+
+By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
