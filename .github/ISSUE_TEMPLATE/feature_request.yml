@@ -1,0 +1,58 @@
+name: Feature Request
+description: Suggest an idea or improvement for Archilles
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to suggest an improvement. Feature requests are very welcome — please be as specific as you can.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Which part of Archilles does this relate to?
+      options:
+        - Indexing (batch_index.py / rag_demo.py index)
+        - Search / CLI (rag_demo.py query)
+        - MCP server (Claude Desktop integration)
+        - Web UI
+        - Installation / setup
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the use case or pain point. What can you not do today that you'd like to be able to do?
+      placeholder: "e.g. I'm working with Arabic/Hebrew collections and right-to-left text renders incorrectly in search results..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How would you like this to work? A rough description is fine — no need for full specs.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Have you found any workarounds or other tools that partially address this?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this to your workflow?
+      options:
+        - Nice to have
+        - Would use regularly
+        - Blocking my use of Archilles
+    validations:
+      required: true
