@@ -474,7 +474,7 @@ def cleanup_orphans(
         return {'orphans_found': 0, 'orphans_removed': 0}
 
     print(f"\n   ⚠️  Found {len(orphan_ids)} orphaned book(s):")
-    for book_id in sorted(orphan_ids, key=lambda x: int(x) if x.isdigit() else x):
+    for book_id in sorted(orphan_ids, key=lambda x: x.zfill(20)):
         chunks = rag.store.get_by_book_id(book_id, limit=1)
         title = chunks[0].get('book_title', '?') if chunks else '?'
         author = chunks[0].get('author', '?') if chunks else '?'
@@ -485,7 +485,7 @@ def cleanup_orphans(
         return {'orphans_found': len(orphan_ids), 'orphans_removed': 0}
 
     removed = 0
-    for book_id in sorted(orphan_ids, key=lambda x: int(x) if x.isdigit() else x):
+    for book_id in sorted(orphan_ids, key=lambda x: x.zfill(20)):
         deleted = rag.store.delete_by_book_id(book_id)
         print(f"   🗑️  Deleted {deleted} chunks for book_id={book_id}")
         removed += 1
