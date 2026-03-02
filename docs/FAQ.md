@@ -49,15 +49,20 @@ Yes. The command-line interface (`scripts/rag_demo.py`) works completely standal
 
 ### How long does indexing take?
 
-It depends on your hardware and book length:
+It depends heavily on the format, length, and content of each book. Times on a 4 GB NVIDIA GPU (minimal profile):
 
-| Hardware | Typical speed |
-|----------|--------------|
-| NVIDIA GPU (≥4 GB VRAM) | ~2 min/book |
-| Apple Silicon (MPS) | ~3–5 min/book |
-| CPU only | ~15 min/book |
+| Book type | Typical range |
+|-----------|--------------|
+| EPUB / MOBI (any length) | 1–5 minutes |
+| PDF, standard text (200–400 pages) | 5–15 minutes |
+| PDF, dense academic content (400–600 pages) | 15–30 minutes |
+| CPU only (no GPU) | roughly 3–5× slower than GPU |
+
+Apple Silicon (MPS) is significantly faster than CPU-only. Modern chips (M2 Pro, M3, M3 Max) are broadly comparable to a modest NVIDIA GPU. Older Apple Silicon (M1, M2 Air) falls between GPU and CPU speed.
 
 The first run also downloads the BGE-M3 model (~2.2 GB). After that, only the book processing time applies.
+
+For a large library, batch indexing runs unattended in the background over days or weeks. Use `--skip-existing` to resume after any interruption.
 
 ### Does indexing modify my Calibre library?
 
@@ -120,8 +125,8 @@ BGE-M3 (`BAAI/bge-m3`) — state-of-the-art multilingual embeddings with 1024 di
 
 Yes, automatically:
 - **NVIDIA CUDA**: detected and used automatically if PyTorch with CUDA is installed
-- **Apple Silicon MPS**: detected and used automatically on M1/M2/M3/M4 Macs
-- **CPU fallback**: always available if no GPU is detected
+- **Apple Silicon MPS**: detected and used automatically on M1/M2/M3/M4 Macs — faster than CPU, roughly comparable to a modest NVIDIA GPU on modern chips (M2 Pro, M3 and above)
+- **CPU fallback**: always available if no GPU is detected; indexing is slower but search quality is identical
 
 ### Where is the vector database stored?
 
@@ -129,6 +134,16 @@ By default in `.archilles/rag_db/` inside your Calibre library folder. The path 
 ```json
 { "rag_db_path": "/custom/path/to/rag_db" }
 ```
+
+### Does Archilles write anything into my Calibre library folder?
+
+Yes — one subfolder. Archilles creates `.archilles/` inside your Calibre library directory and stores the vector database there (`rag_db/`). Your Calibre library files and `metadata.db` are never modified.
+
+**Backup and sync implications:** The `.archilles/rag_db/` folder can grow to several gigabytes for large libraries. If you back up or sync your Calibre library (Dropbox, OneDrive, NAS mirror, Time Machine), this folder will be included. You may want to:
+- **Exclude it from sync** if you don't need the index on other devices — it can always be rebuilt by re-indexing
+- **Include it in backups** if re-indexing thousands of books would be costly in time
+
+The index is fully reproducible from your books at any time. If it is lost or deleted, simply run `batch_index.py` again with `--skip-existing` to rebuild.
 
 ### Does it support cross-encoder reranking?
 
