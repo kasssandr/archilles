@@ -7,21 +7,23 @@ ALL profiles use BGE-M3 (best multilingual model) - only batch_size differs!
 
 Profile Overview:
 -----------------
-| Profile   | VRAM       | Model  | Batch | Speed      | Use Case               |
-|-----------|------------|--------|-------|------------|------------------------|
-| minimal   | 4-6 GB     | bge-m3 | 8     | ~2 min/book| Quadro T1000, GTX 1650 |
-| balanced  | 8-12 GB    | bge-m3 | 32    | ~30s/book  | RTX 3060, RTX 2070     |
-| maximal   | 16+ GB     | bge-m3 | 64    | ~15s/book  | RTX 3090, RTX 4080     |
+| Profile   | Hardware           | Batch | Speed       |
+|-----------|--------------------|-------|-------------|
+| minimal   | <8 GB VRAM / MPS   | 8     | ~2 min/book |
+| balanced  | 8-16 GB VRAM       | 32    | ~30s/book   |
+| maximal   | 16+ GB VRAM        | 64    | ~15s/book   |
 
 Quality is IDENTICAL across all profiles - only indexing speed differs.
 
-Reference: Tom's ThinkPad P15 (Quadro T1000, 4GB VRAM) -> "minimal" profile
+The embedding device (cuda/mps/cpu) is detected automatically at startup.
 """
 
 from dataclasses import dataclass, field, asdict
 from typing import Literal, Dict, Any
 from datetime import datetime
 import json
+
+from .hardware import get_best_device
 
 ProfileName = Literal["minimal", "balanced", "maximal"]
 
@@ -59,9 +61,10 @@ class IndexingProfile:
 
 
 # Shared settings for all profiles (all use BGE-M3 for consistent quality)
+# Device is detected automatically: CUDA > MPS (Apple Silicon) > CPU
 _COMMON = dict(
     embedding_model="BAAI/bge-m3",
-    embedding_device="cuda",
+    embedding_device=get_best_device(),
     chunk_size=512,
     chunk_overlap=128,
     embedding_dimension=1024,
@@ -73,7 +76,7 @@ PROFILES: Dict[ProfileName, IndexingProfile] = {
         name="minimal",
         batch_size=8,
         max_parallel_docs=2,
-        description="For 4-6GB GPUs (Quadro T1000, GTX 1650). Full quality, ~2 min/book.",
+        description="For 4-6 GB GPUs, Apple Silicon (MPS), or CPU-only. Full quality, ~2–15 min/book.",
         **_COMMON,
     ),
     "balanced": IndexingProfile(

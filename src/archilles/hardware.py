@@ -4,11 +4,10 @@ ARCHILLES Hardware Detection
 Automatically detects system hardware capabilities to recommend
 appropriate indexing profiles.
 
-Reference hardware (ThinkPad P15 Gen 1):
-- CPU: Intel Core i7-10750H (6 cores)
-- RAM: 64 GB
-- GPU: NVIDIA Quadro T1000 (4 GB VRAM)
-- Recommended profile: "minimal" (due to limited VRAM)
+Supported accelerators:
+- NVIDIA CUDA (Windows/Linux): full support, all profiles available
+- Apple MPS / Metal (macOS Apple Silicon): supported, "minimal" profile recommended
+- CPU fallback: always available, "minimal" profile
 """
 
 from dataclasses import dataclass
@@ -30,6 +29,7 @@ class HardwareProfile:
     gpu_name: Optional[str]
     vram_gb: Optional[float]
     cuda_available: bool
+    mps_available: bool = False  # Apple Silicon Metal Performance Shaders
 
     def recommend_profile(self) -> ProfileName:
         """
@@ -39,12 +39,17 @@ class HardwareProfile:
         - < 8 GB VRAM -> "minimal" (batch_size=8, ~2 min/book)
         - 8-16 GB VRAM -> "balanced" (batch_size=32, ~30s/book)
         - > 16 GB VRAM -> "maximal" (batch_size=64, ~15s/book)
+        - Apple MPS   -> "minimal" (unified memory, conservative batch)
+        - CPU only    -> "minimal" (batch_size=8, ~15 min/book)
 
         Returns:
             Recommended profile name
         """
         if not self.cuda_available:
-            logger.info("No CUDA available - recommending 'minimal' profile (will use CPU)")
+            if self.mps_available:
+                logger.info("Apple MPS detected - recommending 'minimal' profile")
+            else:
+                logger.info("No GPU acceleration available - recommending 'minimal' profile (CPU)")
             return "minimal"
 
         if self.vram_gb is None or self.vram_gb < 8:
@@ -71,12 +76,14 @@ class HardwareProfile:
             f"RAM: {self.ram_gb:.1f} GB",
         ]
 
-        if self.gpu_available and self.gpu_name:
+        if self.mps_available:
+            lines.append("GPU: Apple MPS (Metal Performance Shaders)")
+        elif self.gpu_available and self.gpu_name:
             vram_str = f"{self.vram_gb:.1f} GB" if self.vram_gb else "unknown"
             lines.append(f"GPU: {self.gpu_name} ({vram_str} VRAM)")
             lines.append(f"CUDA: {'available' if self.cuda_available else 'not available'}")
         else:
-            lines.append("GPU: not detected")
+            lines.append("GPU: not detected (CPU-only mode)")
 
         return "\n".join(lines)
 
@@ -91,6 +98,12 @@ def detect_hardware() -> HardwareProfile:
     cpu_cores = _get_cpu_cores()
     ram_gb = _get_ram_gb()
     gpu_available, gpu_name, vram_gb, cuda_available = _get_gpu_info()
+    mps_available = _is_mps_available()
+
+    # If MPS is available but CUDA isn't, fill in GPU info from MPS
+    if mps_available and not gpu_available:
+        gpu_available = True
+        gpu_name = "Apple MPS"
 
     profile = HardwareProfile(
         cpu_cores=cpu_cores,
@@ -99,6 +112,7 @@ def detect_hardware() -> HardwareProfile:
         gpu_name=gpu_name,
         vram_gb=vram_gb,
         cuda_available=cuda_available,
+        mps_available=mps_available,
     )
 
     logger.info(f"Detected hardware:\n{profile.summary()}")
@@ -156,6 +170,35 @@ def _get_gpu_info() -> tuple[bool, Optional[str], Optional[float], bool]:
         return False, None, None, False
 
 
+def _is_mps_available() -> bool:
+    """Check if Apple MPS (Metal Performance Shaders) is available."""
+    try:
+        import torch
+        return torch.backends.mps.is_available()
+    except (ImportError, AttributeError):
+        return False
+
+
+def get_best_device() -> str:
+    """
+    Return the best available compute device string for sentence-transformers.
+
+    Priority: CUDA (NVIDIA) > MPS (Apple Silicon) > CPU
+
+    Returns:
+        "cuda", "mps", or "cpu"
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except (ImportError, AttributeError):
+        pass
+    return "cpu"
+
+
 def _print_hardware_header(profile: HardwareProfile, recommended: ProfileName) -> None:
     """Print the common hardware-detection banner used by display functions."""
     print()
@@ -167,12 +210,14 @@ def _print_hardware_header(profile: HardwareProfile, recommended: ProfileName) -
     print(f"    CPU: {profile.cpu_cores} cores")
     print(f"    RAM: {profile.ram_gb:.1f} GB")
 
-    if profile.gpu_available and profile.gpu_name:
+    if profile.mps_available:
+        print("    GPU: Apple MPS (Metal Performance Shaders)")
+    elif profile.gpu_available and profile.gpu_name:
         vram_str = f"{profile.vram_gb:.1f} GB" if profile.vram_gb else "unknown"
         print(f"    GPU: {profile.gpu_name} ({vram_str})")
         print(f"    CUDA: {'available' if profile.cuda_available else 'not available'}")
     else:
-        print("    GPU: not detected")
+        print("    GPU: not detected (CPU-only mode)")
 
     print()
     print(f"  Recommended Profile: {recommended.upper()}")

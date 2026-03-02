@@ -31,7 +31,8 @@ A step-by-step guide to setting up Archilles on your machine.
 | Component | Why it matters |
 |-----------|----------------|
 | **NVIDIA GPU (4 GB+ VRAM)** | Indexing speed: ~2 min/book with GPU vs. ~15 min/book CPU-only |
-| **CUDA Toolkit** | Required to use the GPU for indexing |
+| **CUDA Toolkit** | Required for NVIDIA GPU acceleration |
+| **Apple Silicon (M1/M2/M3/M4)** | MPS acceleration enabled automatically — no extra setup |
 | **Claude Desktop** | The primary way to use Archilles (MCP integration) |
 
 > **No GPU?** Archilles works fine on CPU — it just takes longer to build the initial index. Once indexed, search is fast regardless.
@@ -148,7 +149,9 @@ python scripts/rag_demo.py index "/path/to/Calibre Library/Author/Book/book.epub
 python scripts/rag_demo.py stats
 ```
 
-**macOS note:** If you see errors related to `fitz` or `PyMuPDF`, try:
+**macOS note (Apple Silicon):** Archilles automatically detects and uses **MPS acceleration** (Metal Performance Shaders) on M1/M2/M3/M4 chips — no configuration needed. Indexing speed will be significantly faster than CPU-only.
+
+**macOS note (PyMuPDF):** If you see errors related to `fitz` or `PyMuPDF`, try:
 ```bash
 pip install --upgrade pymupdf
 ```
