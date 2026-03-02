@@ -1,31 +1,30 @@
-# ARCHILLES_USER.md — Nutzerprofil
+# ARCHILLES_USER.md — User Profile
 
-> **Zweck dieses Dokuments:** Persönliche Ergänzungen zum generischen ARCHILLES_SKILL.md.  
-> Es beschreibt die Forschungsinteressen, Bibliotheksroutinen und Besonderheiten dieses Nutzers.  
-> Dieses Dokument ist ein lebendiges Dokument und wird laufend ergänzt.  
-> Es ist nicht öffentlich und gehört nicht in die generische ARCHILLES-Distribution.
-
----
-
-## 1. Wer ist der Nutzer?
+> **Purpose:** Personal additions to the generic ARCHILLES_SKILL.md.
+> This document describes your research interests, library routines, and personal working style.
+> It is a living document — fill it in and update it as your workflow evolves.
+> Place this file in your Calibre library root so that AI assistants connected via MCP can read it.
 
 ---
 
-## 2. Interessenschwerpunkte
+## 1. Who are you?
 
 ---
 
-## 3. Besonderheiten der Bibliothek
+## 2. Research interests and focus areas
 
 ---
 
-## 4. Arbeitsweise und Präferenzen
+## 3. Library characteristics
 
 ---
 
-## 5. Offene Punkte und künftige Entscheidungen
+## 4. Working style and preferences
 
 ---
 
-*ARCHILLES_USER.md — persönliches Nutzerprofil, laufend aktualisiert*  
-*Nicht für die generische ARCHILLES-Distribution bestimmt*
+## 5. Open questions and future decisions
+
+---
+
+*ARCHILLES_USER.md — personal user profile, update as needed*

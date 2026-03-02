@@ -2,7 +2,7 @@
 
 **Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring, ChromaDB removed)
 
-This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/app.asar/DECISIONS.md "DECISIONS.md").
+This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
 * * *
 
@@ -512,5 +512,5 @@ All file paths use `pathlib.Path`, never string concatenation. All file I/O defa
 
 * * *
 
-*For the rationale behind these architectural decisions, see [DECISIONS.md](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/app.asar/DECISIONS.md "DECISIONS.md").*  
-*For user-facing documentation, see the [README](/C:/Users/tomra/AppData/Local/Programs/Joplin/resources/README.md "../README.md").*
+*For the rationale behind these architectural decisions, see [DECISIONS.md](DECISIONS.md).*
+*For user-facing documentation, see the [README](../README.md).*
