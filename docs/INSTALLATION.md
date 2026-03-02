@@ -97,7 +97,7 @@ $env:CALIBRE_LIBRARY_PATH = "D:\My Calibre Library"
 3. Name: `CALIBRE_LIBRARY_PATH`
 4. Value: your library path (e.g. `D:\My Calibre Library`)
 
-> **Default:** If you don't set this, Archilles looks for `D:\Calibre-Bibliothek`. You must set it if your library is elsewhere.
+> **Default:** If you don't set this, Archilles looks for `C:\Calibre Library`. You must set it if your library is elsewhere.
 
 ### Step 6: Index Your First Book
 

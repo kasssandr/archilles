@@ -95,7 +95,7 @@ cd archilles
 # Install dependencies
 pip install -r requirements.txt
 
-# Set your Calibre library path (optional - defaults to D:/Calibre-Bibliothek)
+# Set your Calibre library path (optional - defaults to C:/Calibre Library)
 # Windows PowerShell:
 $env:CALIBRE_LIBRARY_PATH = "D:\Your-Calibre-Library"
 # Linux/Mac:

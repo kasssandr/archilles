@@ -97,7 +97,7 @@ Runtime config at `.archilles/config.json` inside the Calibre library:
 }
 ```
 
-Environment variable: `CALIBRE_LIBRARY_PATH` (defaults to `D:/Calibre-Bibliothek` on Windows).
+Environment variable: `CALIBRE_LIBRARY_PATH` (defaults to `C:/Calibre Library` on Windows).
 
 ## Registry Pattern
 

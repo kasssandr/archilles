@@ -2182,7 +2182,7 @@ def main():
         epilog="""
 Examples:
   # Index a book
-  python scripts/rag_demo.py index "D:/Calibre Library/Author Name/Book Title (1)/book.pdf"
+  python scripts/rag_demo.py index "C:/Calibre Library/Author Name/Book Title (1)/book.pdf"
 
   # Recover from corrupted database (after CTRL+C during indexing)
   python scripts/rag_demo.py index "book.pdf" --reset-db

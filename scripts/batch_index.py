@@ -68,7 +68,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.rag_demo import archillesRAG, LanceDBError
 from scripts.safe_indexer import SafeIndexer
-from scripts.import_calibre_annotations import import_annotations, find_latest_export
 from scripts.find_books_missing_labels import find_books_missing_labels
 
 # Hardware-adaptive profile system
