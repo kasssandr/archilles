@@ -5,7 +5,7 @@
 A privacy-first RAG system that brings semantic search to your personal research library. Built for scholars, researchers, and anyone with a serious book collection.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 ---
@@ -81,7 +81,7 @@ Archilles gives you the semantic search capabilities of modern RAG systems while
 ## Quick Start
 
 ### Prerequisites
-- Python 3.8 or higher
+- Python 3.11 or higher
 - [Calibre](https://calibre-ebook.com/) with your book library
 - (Optional) [Claude Desktop](https://claude.ai/download) for MCP integration
 
@@ -119,7 +119,7 @@ python scripts/rag_demo.py stats
 python scripts/batch_index.py --tag "Your-Tag" --dry-run
 
 # Index all books with a specific Calibre tag
-python scripts/batch_index.py --tag "Leit-Literatur"
+python scripts/batch_index.py --tag "History"
 
 # Index with progress logging
 python scripts/batch_index.py --tag "History" --log indexing.json
@@ -275,7 +275,7 @@ Search through your collection of primary sources and secondary literature simul
 
 ## Product Roadmap
 
-### Current Release: v0.9 Gamma (February 2026)
+### Current Release: v0.9 Beta (March 2026)
 
 ✅ **Core functionality complete:**
 - Full-text indexing (30+ formats, PyMuPDF primary for PDFs)
@@ -287,7 +287,7 @@ Search through your collection of primary sources and secondary literature simul
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
 - Hardware-adaptive indexing profiles
-- Streamlit Web UI
+- Streamlit Web UI *(experimental)*
 - Section-type filtering (exclude bibliography/index noise)
 - Context expansion (Small-to-Big retrieval with `window_text`)
 - Parent-child chunk hierarchy
@@ -376,7 +376,6 @@ Archilles is **local-first software**. We collect no telemetry, no analytics, no
 ### User Responsibility
 You are responsible for ensuring your use of Archilles complies with copyright law in your jurisdiction. Archilles is a tool for searching *your own* legally acquired library.
 
-**📜 [Full Legal Details →](docs/LEGAL.md)**
 
 ---
 
@@ -391,8 +390,6 @@ Archilles is built on the shoulders of giants:
 - **[Anthropic Claude](https://www.anthropic.com/claude)** – AI assistant that respects user privacy
 
 Inspired by NotebookLM, Zotero, and decades of digital humanities research.
-
-Thanks to our beta testing community (you know who you are!).
 
 ---
 
