@@ -2181,8 +2181,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Index Josephus Antiquitates
-  python scripts/rag_demo.py index "D:/Calibre-Bibliothek/Flavius Josephus/Judische Altertumer_...pdf"
+  # Index a book
+  python scripts/rag_demo.py index "D:/Calibre Library/Author Name/Book Title (1)/book.pdf"
 
   # Recover from corrupted database (after CTRL+C during indexing)
   python scripts/rag_demo.py index "book.pdf" --reset-db
@@ -2201,7 +2201,7 @@ Examples:
   python scripts/rag_demo.py query "kings" --language de,en
 
   # Filter by book
-  python scripts/rag_demo.py query "Marcion" --book-id "von_Harnack"
+  python scripts/rag_demo.py query "political theory" --book-id "Arendt_VitaActiva"
 
   # More results
   python scripts/rag_demo.py query "Jewish kings" --top-k 10

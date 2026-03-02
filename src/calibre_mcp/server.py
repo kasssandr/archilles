@@ -883,7 +883,7 @@ if __name__ == '__main__':
     server = CalibreMCPServer()
 
     # Test with example book path
-    test_path = r"D:\Calibre-Bibliothek\Henri Pirenne\Mohammed and Charlemagne (6700)\Mohammed and Charlemagne - Henri Pirenne.epub"
+    test_path = r"D:\Calibre Library\Author Name\Book Title (1)\book.epub"
 
     result = server.compute_hash_tool(test_path)
     print(json.dumps(result, indent=2))
