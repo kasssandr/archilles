@@ -1,5 +1,6 @@
 """Plain text extractor."""
 
+import zipfile
 from pathlib import Path
 import chardet
 
@@ -9,9 +10,13 @@ from .exceptions import ExtractionError
 
 
 class TXTExtractor(BaseExtractor):
-    """Extract text from plain text files with robust encoding detection."""
+    """Extract text from plain text files with robust encoding detection.
 
-    SUPPORTED_EXTENSIONS = {'.txt', '.text', '.log', '.md', '.markdown', '.rst'}
+    Also handles TXTZ (Calibre's zipped text format): a ZIP archive
+    containing a single .txt file.
+    """
+
+    SUPPORTED_EXTENSIONS = {'.txt', '.text', '.log', '.md', '.markdown', '.rst', '.txtz'}
 
     def supports(self, file_path: Path) -> bool:
         """Check if file is a text file."""
@@ -19,9 +24,10 @@ class TXTExtractor(BaseExtractor):
 
     def extract(self, file_path: Path) -> ExtractedText:
         """
-        Extract text from plain text file.
+        Extract text from plain text file or TXTZ archive.
 
         Handles:
+        - TXTZ (Calibre zipped text): reads inner .txt from ZIP
         - Automatic encoding detection (UTF-8, Latin-1, Windows-1252, etc.)
         - BOM removal
         - Line ending normalization
@@ -36,8 +42,17 @@ class TXTExtractor(BaseExtractor):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         try:
-            with open(file_path, 'rb') as f:
-                raw_data = f.read()
+            if file_path.suffix.lower() == '.txtz':
+                with zipfile.ZipFile(file_path) as zf:
+                    txt_names = [n for n in zf.namelist()
+                                 if n.endswith('.txt') or n.endswith('.md')]
+                    if not txt_names:
+                        raise ExtractionError("No text file found inside TXTZ archive")
+                    with zf.open(txt_names[0]) as f:
+                        raw_data = f.read()
+            else:
+                with open(file_path, 'rb') as f:
+                    raw_data = f.read()
 
             detected = chardet.detect(raw_data)
             encoding = detected.get('encoding', 'utf-8')

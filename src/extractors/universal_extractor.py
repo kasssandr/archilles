@@ -250,6 +250,7 @@ class UniversalExtractor:
         'md': 'txt_extractor',
         'markdown': 'txt_extractor',
         'rst': 'txt_extractor',
+        'txtz': 'txt_extractor',
         'html': 'html_extractor',
         'htm': 'html_extractor',
         'xhtml': 'html_extractor',
