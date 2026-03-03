@@ -63,6 +63,12 @@ class FormatDetector:
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
+        # Extension takes priority for formats that share magic bytes with others.
+        # TXTZ is a ZIP file (same magic bytes as EPUB) but must stay as 'txtz'.
+        ext = file_path.suffix.lower()[1:]
+        if ext in ('txtz',):
+            return ext, 'extension'
+
         # Try magic bytes first
         try:
             detected = cls._detect_by_magic(file_path)
