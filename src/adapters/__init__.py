@@ -23,16 +23,14 @@ def detect_adapter_type(library_path: Path) -> str:
       2. ``.obsidian/`` present   → ``folder`` (Obsidian vault = folder adapter)
       3. Everything else          → ``folder``
 
-    Zotero (``zotero.sqlite``) is reserved for a future adapter.
     """
     library_path = Path(library_path)
 
     if (library_path / "metadata.db").exists():
         return "calibre"
 
-    # Zotero detection (reserved — not yet implemented)
-    # if (library_path / "zotero.sqlite").exists():
-    #     return "zotero"
+    if (library_path / "zotero.sqlite").exists():
+        return "zotero"
 
     return "folder"
 
@@ -48,7 +46,7 @@ def create_adapter(
     library_path:
         Root directory of the library.
     adapter_type:
-        ``"calibre"``, ``"folder"``, or ``None`` for auto-detection.
+        ``"calibre"``, ``"zotero"``, ``"folder"``, or ``None`` for auto-detection.
     """
     library_path = Path(library_path)
 
@@ -60,6 +58,11 @@ def create_adapter(
 
         return CalibreAdapter(library_path)
 
+    if adapter_type == "zotero":
+        from src.adapters.zotero_adapter import ZoteroAdapter
+
+        return ZoteroAdapter(library_path)
+
     if adapter_type == "folder":
         from src.adapters.folder_adapter import FolderAdapter
 
@@ -67,5 +70,5 @@ def create_adapter(
 
     raise ValueError(
         f"Unknown adapter type: {adapter_type!r}. "
-        f"Supported: 'calibre', 'folder'."
+        f"Supported: 'calibre', 'zotero', 'folder'."
     )
