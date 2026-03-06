@@ -50,20 +50,26 @@ class CalibreMCPServer:
         enable_reranking: bool = False,
         reranker_device: Optional[str] = 'cpu',
         citation_config: Optional[Any] = None,
+        adapter=None,
+        instance_name: str = "archilles",
     ):
         """
-        Initialize the Calibre MCP Server.
+        Initialize the MCP Server.
 
         Args:
-            library_path: Path to the Calibre library
+            library_path: Path to the library (Calibre, Zotero, or folder)
             annotations_dir: Custom path to annotations directory
             rag_db_path: Path to RAG database (default: ./archilles_rag_db)
             enable_reranking: Enable cross-encoder reranking for search results
             reranker_device: Device for reranker model ('cpu' to avoid GPU OOM)
             citation_config: CitationConfig instance for bibliography formatting
+            adapter: Optional SourceAdapter for metadata access
+            instance_name: MCP server instance name (e.g. 'archilles-bib')
         """
         self.library_path = Path(library_path) if library_path else None
         self.annotations_dir = annotations_dir
+        self.adapter = adapter
+        self.instance_name = instance_name
 
         self.db_path = self._resolve_db_path(library_path)
 
@@ -77,6 +83,7 @@ class CalibreMCPServer:
             reranker_device=reranker_device,
             citation_config=citation_config,
             archilles_dir=str(self._archilles_dir) if self._archilles_dir else None,
+            adapter=adapter,
         ) if SERVICE_AVAILABLE else None
 
     @staticmethod
@@ -93,12 +100,22 @@ class CalibreMCPServer:
         return None
 
     def _require_db(self) -> Optional[dict[str, Any]]:
-        """Return an error dict if the library database is unavailable, else None."""
+        """Return an error dict if the Calibre metadata database is unavailable, else None.
+
+        Tools backed by CalibreAnalyzer require a metadata.db.  For non-Calibre
+        adapters these tools are not available.
+        """
         if self.db_path:
             return None
+        adapter_hint = ""
+        if self.adapter and self.adapter.adapter_type != "calibre":
+            adapter_hint = (
+                f" (adapter type is '{self.adapter.adapter_type}' — "
+                f"this tool requires a Calibre library)"
+            )
         return {
-            'error': 'Library database not available',
-            'help': 'Initialize server with library_path pointing to Calibre library or metadata.db'
+            'error': f'Calibre metadata database not available{adapter_hint}',
+            'help': 'This tool requires a Calibre library with metadata.db'
         }
 
     def _ensure_rag_initialized(self) -> bool:

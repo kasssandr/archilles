@@ -119,7 +119,7 @@ async def stdio_server(server: CalibreMCPServer):
                     'result': {
                         'protocolVersion': '2024-11-05',
                         'capabilities': {'tools': {}},
-                        'serverInfo': {'name': 'archilles', 'version': '1.0.0'}
+                        'serverInfo': {'name': server.instance_name, 'version': '1.0.0'}
                     }
                 }
             elif method == 'tools/list':
@@ -170,21 +170,22 @@ def main():
     """Main entry point."""
     import os
 
-    # Check for CALIBRE_LIBRARY_PATH - required for portable installation
-    library_path = os.getenv('CALIBRE_LIBRARY_PATH')
+    # Accept both generic and Calibre-specific env vars
+    library_path = os.getenv('ARCHILLES_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY_PATH')
 
     if not library_path:
-        logger.error("CALIBRE_LIBRARY_PATH environment variable not set")
+        logger.error("Library path not set (ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH)")
         sys.stderr.write("\n" + "="*60 + "\n")
-        sys.stderr.write("ERROR: CALIBRE_LIBRARY_PATH not set\n")
+        sys.stderr.write("ERROR: Library path not set\n")
         sys.stderr.write("="*60 + "\n\n")
-        sys.stderr.write("Please set the environment variable to your Calibre library:\n\n")
+        sys.stderr.write("Please set one of these environment variables:\n\n")
         sys.stderr.write("  Windows (PowerShell):\n")
-        sys.stderr.write('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n\n')
+        sys.stderr.write('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n\n')
         sys.stderr.write("  Linux/macOS:\n")
-        sys.stderr.write('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n\n')
+        sys.stderr.write('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n\n')
         sys.stderr.write("  Claude Desktop (claude_desktop_config.json):\n")
-        sys.stderr.write('    "env": {"CALIBRE_LIBRARY_PATH": "/path/to/Calibre-Library"}\n\n')
+        sys.stderr.write('    "env": {"ARCHILLES_LIBRARY_PATH": "/path/to/Library"}\n\n')
+        sys.stderr.write("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n\n")
         sys.stderr.flush()
         sys.exit(1)
 
@@ -198,12 +199,25 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    library_path = config.get('calibre_library_path', library_path)
+    # Config can override library path (legacy key or new key)
+    library_path = config.get('library_path', config.get('calibre_library_path', library_path))
     archilles_dir = Path(library_path) / ".archilles"
+    instance_name = config.get('instance_name', 'archilles')
 
     rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', str(archilles_dir / "rag_db"))
 
+    # Create SourceAdapter
+    adapter_type = config.get('adapter', None)  # None = auto-detect
+    try:
+        from src.adapters import create_adapter
+        adapter = create_adapter(Path(library_path), adapter_type)
+        logger.info(f"Adapter: {adapter.adapter_type} (instance: {instance_name})")
+    except Exception as e:
+        logger.warning(f"Could not create adapter: {e} — continuing without adapter")
+        adapter = None
+
     logger.info(f"Library path: {library_path}")
+    logger.info(f"Instance: {instance_name}")
     logger.info(f"RAG database path: {rag_db_path}")
 
     enable_reranking = config.get('enable_reranking', False)
@@ -222,9 +236,11 @@ def main():
         enable_reranking=enable_reranking,
         reranker_device=reranker_device,
         citation_config=citation_config,
+        adapter=adapter,
+        instance_name=instance_name,
     )
 
-    logger.info(f"Server initialized with library: {library_path}")
+    logger.info(f"Server initialized: {instance_name} ({adapter.adapter_type if adapter else 'no adapter'})")
     asyncio.run(stdio_server(server))
 
 
