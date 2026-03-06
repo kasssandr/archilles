@@ -97,11 +97,11 @@ cd archilles
 # Install dependencies
 pip install -r requirements.txt
 
-# Set your Calibre library path (optional - defaults to C:/Calibre Library)
+# Set your library path
 # Windows PowerShell:
-$env:CALIBRE_LIBRARY_PATH = "D:\Your-Calibre-Library"
+$env:ARCHILLES_LIBRARY_PATH = "D:\Your-Library"
 # Linux/Mac:
-export CALIBRE_LIBRARY_PATH="/path/to/your/Calibre Library"
+export ARCHILLES_LIBRARY_PATH="/path/to/your/Library"
 ```
 
 ### Index Your First Book
@@ -157,7 +157,7 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
       "command": "python",
       "args": ["C:/Users/YOU/archilles/mcp_server.py"],
       "env": {
-        "CALIBRE_LIBRARY_PATH": "D:/Your-Calibre-Library"
+        "ARCHILLES_LIBRARY_PATH": "D:/Your-Library"
       }
     }
   }

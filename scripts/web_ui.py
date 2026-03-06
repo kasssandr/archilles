@@ -6,7 +6,7 @@ Usage:
     streamlit run scripts/web_ui.py
 
 Environment:
-    CALIBRE_LIBRARY_PATH: Path to Calibre library (required)
+    ARCHILLES_LIBRARY_PATH: Path to library (required; legacy: CALIBRE_LIBRARY_PATH)
 """
 
 import os
@@ -34,10 +34,10 @@ def load_service():
     """Load ARCHILLES service (cached for performance)."""
     from src.service import ArchillesService
 
-    library_path = os.getenv('CALIBRE_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY')
+    library_path = os.getenv('ARCHILLES_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY')
     if not library_path:
-        st.error("CALIBRE_LIBRARY_PATH nicht gesetzt!")
-        st.info('PowerShell: `$env:CALIBRE_LIBRARY_PATH = "C:\\Pfad\\zur\\Calibre-Library"`')
+        st.error("ARCHILLES_LIBRARY_PATH nicht gesetzt!")
+        st.info('PowerShell: `$env:ARCHILLES_LIBRARY_PATH = "C:\\Pfad\\zur\\Library"`')
         st.stop()
 
     db_path = str(Path(library_path) / ".archilles" / "rag_db")

@@ -2327,21 +2327,21 @@ Examples:
         return
 
     # Determine default database path if not specified
-    # Requires CALIBRE_LIBRARY_PATH env var for portable installation
     if args.db_path is None:
-        calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH')
-        if not calibre_library:
+        library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
+        if not library_path:
             print("\n" + "="*60)
-            print("ERROR: CALIBRE_LIBRARY_PATH not set")
+            print("ERROR: Library path not set")
             print("="*60 + "\n")
-            print("Please set the environment variable to your Calibre library:\n")
+            print("Please set one of these environment variables:\n")
             print("  Windows (PowerShell):")
-            print('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n')
+            print('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n')
             print("  Linux/macOS:")
-            print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
+            print('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n')
+            print("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n")
             print("Or specify the database path directly with --db-path\n")
             sys.exit(1)
-        args.db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
+        args.db_path = str(Path(library_path) / ".archilles" / "rag_db")
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:

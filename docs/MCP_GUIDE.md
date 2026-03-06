@@ -43,7 +43,7 @@ Open the file and add the `archilles` entry under `mcpServers`:
       "command": "C:\\Users\\YourName\\archilles\\venv\\Scripts\\python.exe",
       "args": ["C:\\Users\\YourName\\archilles\\mcp_server.py"],
       "env": {
-        "CALIBRE_LIBRARY_PATH": "D:\\My Calibre Library"
+        "ARCHILLES_LIBRARY_PATH": "D:\\My Calibre Library"
       }
     }
   }
@@ -58,7 +58,7 @@ Open the file and add the `archilles` entry under `mcpServers`:
       "command": "/Users/yourname/archilles/venv/bin/python",
       "args": ["/Users/yourname/archilles/mcp_server.py"],
       "env": {
-        "CALIBRE_LIBRARY_PATH": "/Users/yourname/Calibre Library"
+        "ARCHILLES_LIBRARY_PATH": "/Users/yourname/Calibre Library"
       }
     }
   }
@@ -195,7 +195,7 @@ Check this file if something isn't working — it captures all startup errors, s
 
 ## Other MCP Clients
 
-Archilles should work with any MCP-compatible client (e.g., Cursor, VS Code with MCP extension). The configuration format may vary slightly. The key elements are always the same: point `command` to your Python executable, `args` to `mcp_server.py`, and set `CALIBRE_LIBRARY_PATH`.
+Archilles should work with any MCP-compatible client (e.g., Cursor, VS Code with MCP extension). The configuration format may vary slightly. The key elements are always the same: point `command` to your Python executable, `args` to `mcp_server.py`, and set `ARCHILLES_LIBRARY_PATH`.
 
 ---
 

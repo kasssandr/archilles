@@ -464,14 +464,15 @@ All configuration is stored in `.archilles/config.json` inside the user's Calibr
 | `enable_reranking` | `false` | Enable cross-encoder reranking (Stage 2) |
 | `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
-| `calibre_library_path` | (env var) | Override for CALIBRE_LIBRARY_PATH |
+| `library_path` | (env var) | Override for ARCHILLES_LIBRARY_PATH |
 
 Environment variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `CALIBRE_LIBRARY_PATH` | (required) | Path to Calibre library root |
-| `RAG_DB_PATH` | `$CALIBRE_LIBRARY_PATH/.archilles/rag_db` | Override LanceDB location |
+| `ARCHILLES_LIBRARY_PATH` | (required) | Path to library root (Calibre, Zotero, or folder) |
+| `CALIBRE_LIBRARY_PATH` | — | Legacy alias for ARCHILLES_LIBRARY_PATH |
+| `RAG_DB_PATH` | `$ARCHILLES_LIBRARY_PATH/.archilles/rag_db` | Override LanceDB location |
 | `CUDA_VISIBLE_DEVICES` | —   | GPU selection for embeddings/reranking |
 
 * * *

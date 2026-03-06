@@ -84,19 +84,19 @@ The model is cached in `~/.cache/huggingface/` after a successful download and n
 
 ## Indexing Problems
 
-### "CALIBRE_LIBRARY_PATH not set" or library not found
+### "Library path not set" or library not found
 
-Archilles cannot find your Calibre library.
+Archilles cannot find your library.
 
-1. **Confirm the path contains `metadata.db`:**
+1. **Confirm the path exists** (for Calibre it should contain `metadata.db`, for Zotero `zotero.sqlite`):
    ```powershell
-   Test-Path "D:\My Calibre Library\metadata.db"
+   Test-Path "D:\My Library"
    # Should print: True
    ```
 
 2. **Set the environment variable for your current session:**
    ```powershell
-   $env:CALIBRE_LIBRARY_PATH = "D:\My Calibre Library"
+   $env:ARCHILLES_LIBRARY_PATH = "D:\My Library"
    ```
 
 3. **For permanent use**, add it as a Windows user environment variable:
@@ -194,8 +194,8 @@ C:\Users\YourName\.archilles\mcp_server.log
 
 The MCP server returned an empty response. Common causes:
 
-- **Missing library path:** Add `CALIBRE_LIBRARY_PATH` to the `env` section of your config.
-- **Wrong path:** The `CALIBRE_LIBRARY_PATH` in the MCP config must point to the same library where `.archilles/rag_db/` lives.
+- **Missing library path:** Add `ARCHILLES_LIBRARY_PATH` to the `env` section of your config.
+- **Wrong path:** The `ARCHILLES_LIBRARY_PATH` in the MCP config must point to the same library where `.archilles/rag_db/` lives.
 - **Outdated version:** Pull the latest version from GitHub and restart.
 
 ---
@@ -205,7 +205,7 @@ The MCP server returned an empty response. Common causes:
 The server starts but searches return nothing:
 
 1. Confirm books are indexed: `python scripts/rag_demo.py stats`
-2. Make sure the `CALIBRE_LIBRARY_PATH` in `claude_desktop_config.json` matches exactly where your index is stored. The index lives inside your Calibre library at `.archilles/rag_db/`.
+2. Make sure the `ARCHILLES_LIBRARY_PATH` in `claude_desktop_config.json` matches exactly where your index is stored. The index lives inside your library at `.archilles/rag_db/`.
 
 ---
 
@@ -227,7 +227,7 @@ Common causes:
 | Error | Solution |
 |-------|----------|
 | `ModuleNotFoundError` | Wrong Python path in config — use the venv Python |
-| `CALIBRE_LIBRARY_PATH not set` | Add it to the `env` section in your config |
+| `Library path not set` | Add `ARCHILLES_LIBRARY_PATH` to the `env` section in your config |
 | `LanceDBError` on startup | Database issue — check `rag_demo.py stats` |
 
 ---
