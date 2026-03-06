@@ -45,6 +45,7 @@ class LanceDBStore:
         "publisher": str,
         "year": int,
         "calibre_id": int,
+        "source_id": str,       # Adapter-agnostic document ID (replaces calibre_id)
         "tags": str,
         "language": str,
 
@@ -107,6 +108,7 @@ class LanceDBStore:
         "annotation_type": "''",
         "annotation_source": "''",
         "annotation_hash": "''",
+        "source_id": "''",
     }
 
     def _ensure_table(self):
@@ -222,6 +224,7 @@ class LanceDBStore:
                 "publisher": chunk.get("publisher") or "",
                 "year": chunk.get("year") or 0,
                 "calibre_id": chunk.get("calibre_id") or 0,
+                "source_id": chunk.get("source_id") or str(chunk.get("calibre_id") or ""),
                 "tags": chunk.get("tags") or "",
                 "language": chunk.get("language") or "",
 
@@ -273,6 +276,7 @@ class LanceDBStore:
         processed_docs,
         book_metadata: Optional[Dict[str, Any]] = None,
         calibre_id: Optional[int] = None,
+        source_id: Optional[str] = None,
     ) -> int:
         """
         Add documents processed by the ModularPipeline to the database.
@@ -322,6 +326,7 @@ class LanceDBStore:
                     "publisher": book_meta.get("publisher", ""),
                     "year": book_meta.get("year", 0),
                     "calibre_id": calibre_id or book_meta.get("calibre_id", 0),
+                    "source_id": source_id or str(calibre_id or book_meta.get("calibre_id", "") or ""),
                     "tags": book_meta.get("tags", ""),
                     "language": book_meta.get("language", ""),
 
@@ -376,6 +381,7 @@ class LanceDBStore:
         section_type: Optional[str] = None,
         chunk_type: Optional[str] = None,
         language: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Hybrid search combining vector similarity and full-text search.
@@ -404,7 +410,8 @@ class LanceDBStore:
             calibre_id=calibre_id,
             section_type=section_type,
             chunk_type=chunk_type,
-            language=language
+            language=language,
+            source_id=source_id,
         )
 
         try:
@@ -431,7 +438,8 @@ class LanceDBStore:
                 calibre_id=calibre_id,
                 section_type=section_type,
                 chunk_type=chunk_type,
-                language=language
+                language=language,
+                source_id=source_id,
             )
             return results
 
@@ -446,6 +454,7 @@ class LanceDBStore:
         section_type: Optional[str] = None,
         chunk_type: Optional[str] = None,
         language: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Pure vector similarity search.
@@ -458,6 +467,7 @@ class LanceDBStore:
             section_type: Filter by section type
             chunk_type: Filter by chunk type
             language: Filter by language code
+            source_id: Filter by adapter-agnostic source ID
 
         Returns:
             List of result dictionaries with metadata and scores
@@ -470,7 +480,8 @@ class LanceDBStore:
             calibre_id=calibre_id,
             section_type=section_type,
             chunk_type=chunk_type,
-            language=language
+            language=language,
+            source_id=source_id,
         )
 
         search = self.table.search(query_vector.tolist())
@@ -490,6 +501,7 @@ class LanceDBStore:
         section_type: Optional[str] = None,
         chunk_type: Optional[str] = None,
         language: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Pure full-text search (good for proper nouns, dates, exact phrases).
@@ -502,6 +514,7 @@ class LanceDBStore:
             section_type: Filter by section type
             chunk_type: Filter by chunk type
             language: Filter by language code
+            source_id: Filter by adapter-agnostic source ID
 
         Returns:
             List of result dictionaries with metadata and scores
@@ -514,7 +527,8 @@ class LanceDBStore:
             calibre_id=calibre_id,
             section_type=section_type,
             chunk_type=chunk_type,
-            language=language
+            language=language,
+            source_id=source_id,
         )
 
         search = self.table.search(query_text, query_type="fts")
@@ -532,6 +546,7 @@ class LanceDBStore:
         section_type: Optional[str] = None,
         chunk_type: Optional[str] = None,
         language: Optional[str] = None,
+        source_id: Optional[str] = None,
     ) -> Optional[str]:
         """Build SQL-like filter string for LanceDB queries."""
         conditions = []
@@ -539,7 +554,14 @@ class LanceDBStore:
         if book_id:
             conditions.append(f"book_id = '{book_id}'")
 
-        if calibre_id:
+        if source_id:
+            # Prefer source_id; fall back to calibre_id for old data
+            conditions.append(
+                f"(source_id = '{source_id}' OR calibre_id = {source_id})"
+                if source_id.isdigit()
+                else f"source_id = '{source_id}'"
+            )
+        elif calibre_id:
             conditions.append(f"calibre_id = {calibre_id}")
 
         if section_type:
@@ -669,6 +691,22 @@ class LanceDBStore:
         """Get all chunks for a specific Calibre ID."""
         return self._query_where(f"calibre_id = {calibre_id}", limit)
 
+    def get_by_source_id(self, source_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get all chunks for a source ID (with calibre_id fallback)."""
+        if source_id.isdigit():
+            return self._query_where(
+                f"(source_id = '{source_id}' OR calibre_id = {source_id})", limit
+            )
+        return self._query_where(f"source_id = '{source_id}'", limit)
+
+    def delete_by_source_id(self, source_id: str) -> int:
+        """Delete all chunks for a source ID (with calibre_id fallback)."""
+        if source_id.isdigit():
+            return self._delete_where(
+                f"(source_id = '{source_id}' OR calibre_id = {source_id})"
+            )
+        return self._delete_where(f"source_id = '{source_id}'")
+
     def get_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Get a single chunk by its ID (used for parent lookup)."""
         results = self._query_where(f"id = '{chunk_id}'", limit=1)
@@ -754,7 +792,7 @@ class LanceDBStore:
         df = self.table.to_pandas()
 
         # Group by book_id and aggregate
-        books = df.groupby("book_id").agg({
+        agg_dict = {
             "book_title": "first",
             "author": "first",
             "calibre_id": "first",
@@ -762,13 +800,18 @@ class LanceDBStore:
             "format": "first",
             "tags": "first",
             "id": "count",  # Count chunks
-            "indexed_at": "max"  # Latest indexing time
-        }).reset_index()
-
-        books.columns = [
+            "indexed_at": "max",  # Latest indexing time
+        }
+        col_names = [
             "book_id", "title", "author", "calibre_id",
-            "year", "format", "tags", "chunks", "indexed_at"
+            "year", "format", "tags", "chunks", "indexed_at",
         ]
+        if "source_id" in df.columns:
+            agg_dict["source_id"] = "first"
+            col_names.insert(4, "source_id")  # after calibre_id
+
+        books = df.groupby("book_id").agg(agg_dict).reset_index()
+        books.columns = col_names
 
         return books.to_dict(orient="records")
 

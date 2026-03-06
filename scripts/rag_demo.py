@@ -127,12 +127,14 @@ class archillesRAG:
     @staticmethod
     def _resolve_book_id(book_id: str):
         """
-        Resolve book_id to (resolved_book_id, calibre_id) tuple.
-        If book_id is numeric, treat it as a calibre_id instead.
+        Resolve book_id to (resolved_book_id, calibre_id, source_id) tuple.
+
+        If book_id is numeric, treat it as a calibre_id *and* source_id
+        (backward compat).  Otherwise it's a plain book_id string.
         """
         if book_id and str(book_id).isdigit():
-            return None, int(book_id)
-        return book_id, None
+            return None, int(book_id), str(book_id)
+        return book_id, None, None
 
     @staticmethod
     def _format_section_citation(metadata: Dict[str, Any]) -> str:
@@ -218,6 +220,8 @@ class archillesRAG:
             chunk_data['publisher'] = book_metadata['publisher']
         if book_metadata.get('calibre_id'):
             chunk_data['calibre_id'] = book_metadata['calibre_id']
+        if book_metadata.get('source_id'):
+            chunk_data['source_id'] = book_metadata['source_id']
         if book_metadata.get('tags'):
             chunk_data['tags'] = self._format_tags(book_metadata['tags'])
 
@@ -249,7 +253,8 @@ class archillesRAG:
         ocr_language: str = "deu+eng",
         profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
         use_modular_pipeline: bool = False,  # Future: use modular architecture
-        hierarchical: bool = False  # Enable parent-child chunking
+        hierarchical: bool = False,  # Enable parent-child chunking
+        adapter=None,  # Optional SourceAdapter for metadata lookup
     ):
         """
         Initialize RAG system.
@@ -269,6 +274,7 @@ class archillesRAG:
         self.hierarchical = hierarchical
         self.use_modular_pipeline = use_modular_pipeline
         self.profile_name = profile
+        self._adapter = adapter  # SourceAdapter (or None for legacy CalibreDB path)
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
@@ -567,23 +573,58 @@ class archillesRAG:
 
     def _extract_calibre_metadata(self, file_path: Path) -> Dict[str, Any]:
         """
-        Extract metadata from Calibre database (read-only).
+        Extract metadata from source adapter or Calibre database (read-only).
+
+        Uses the SourceAdapter if available; falls back to direct CalibreDB
+        access for backward compatibility.
 
         Args:
             file_path: Path to book file
 
         Returns:
-            Dictionary with Calibre metadata (empty if not in Calibre library)
+            Dictionary with metadata (empty if not in any known library)
         """
-        metadata = {}
+        # ── New path: use SourceAdapter ─────────────────────────
+        if self._adapter is not None:
+            try:
+                doc_meta = self._adapter.get_metadata_by_path(file_path)
+                if doc_meta is None:
+                    return {}
+                metadata = {}
+                # Map DocumentMetadata fields to the dict format the rest
+                # of rag_demo.py expects (matching _CALIBRE_FIELDS keys).
+                if doc_meta.authors:
+                    metadata['author'] = ' & '.join(doc_meta.authors)
+                if doc_meta.title:
+                    metadata['title'] = doc_meta.title
+                if doc_meta.publisher:
+                    metadata['publisher'] = doc_meta.publisher
+                if doc_meta.language:
+                    metadata['language'] = doc_meta.language
+                if doc_meta.identifiers.get('isbn'):
+                    metadata['isbn'] = doc_meta.identifiers['isbn']
+                if doc_meta.tags:
+                    metadata['tags'] = doc_meta.tags
+                if doc_meta.comments:
+                    metadata['comments'] = doc_meta.comments
+                if doc_meta.custom_fields:
+                    metadata['custom_fields'] = doc_meta.custom_fields
+                # Adapter-agnostic ID  →  both source_id and calibre_id
+                metadata['source_id'] = doc_meta.doc_id
+                if doc_meta.doc_id.isdigit():
+                    metadata['calibre_id'] = int(doc_meta.doc_id)
+                return metadata
+            except Exception:
+                pass
+            return {}
 
+        # ── Legacy path: direct CalibreDB access ───────────────
+        metadata = {}
         try:
-            # Find Calibre library
             library_path = CalibreDB.find_library_path(file_path)
             if not library_path:
                 return metadata
 
-            # Query Calibre DB
             with CalibreDB(library_path) as calibre:
                 book_data = calibre.get_book_by_path(file_path)
 
@@ -591,9 +632,10 @@ class archillesRAG:
                     for field in self._CALIBRE_FIELDS:
                         if book_data.get(field):
                             metadata[field] = book_data[field]
-
-        except Exception as e:
-            # Silently fail if Calibre DB not available
+                    # Backfill source_id from calibre_id for consistency
+                    if book_data.get('calibre_id'):
+                        metadata['source_id'] = str(book_data['calibre_id'])
+        except Exception:
             pass
 
         return metadata
@@ -628,6 +670,7 @@ class archillesRAG:
 
             # Store via the LanceDB adapter
             calibre_id = book_metadata.get('calibre_id', 0)
+            source_id = book_metadata.get('source_id') or (str(calibre_id) if calibre_id else None)
             chunks_added = self.store.add_processed_documents(
                 processed,
                 book_metadata={
@@ -639,6 +682,7 @@ class archillesRAG:
                     "language": book_metadata.get('language', ''),
                 },
                 calibre_id=calibre_id if calibre_id else None,
+                source_id=source_id,
             )
 
             # Unload model to free GPU memory
@@ -1431,13 +1475,14 @@ class archillesRAG:
             convert_to_numpy=True
         )
 
-        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
+        resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
         results = self.store.vector_search(
             query_vector=query_embedding,
             top_k=top_k,
             book_id=resolved_book_id,
             calibre_id=calibre_id,
+            source_id=source_id,
             chunk_type=chunk_type_filter,
             language=language,
             section_type=section_type
@@ -1460,13 +1505,14 @@ class archillesRAG:
         if exact_phrase:
             return self._exact_phrase_search(query_text, top_k, language, book_id, chunk_type_filter)
 
-        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
+        resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
         results = self.store.fts_search(
             query_text=query_text,
             top_k=top_k,
             book_id=resolved_book_id,
             calibre_id=calibre_id,
+            source_id=source_id,
             chunk_type=chunk_type_filter,
             language=language,
             section_type=section_type
@@ -1491,7 +1537,7 @@ class archillesRAG:
 
         IMPORTANT: Normalizes whitespace to handle line breaks!
         """
-        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
+        resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
         # Fetch chunks to search through
         all_chunks = self.store.get_all(limit=10000)
@@ -1511,7 +1557,9 @@ class archillesRAG:
             if resolved_book_id and chunk.get('book_id') != resolved_book_id:
                 continue
 
-            if calibre_id and chunk.get('calibre_id') != calibre_id:
+            if source_id and str(chunk.get('source_id', '')) != source_id and chunk.get('calibre_id') != calibre_id:
+                continue
+            elif calibre_id and not source_id and chunk.get('calibre_id') != calibre_id:
                 continue
 
             if chunk_type_filter and chunk.get('chunk_type') != chunk_type_filter:
@@ -1565,7 +1613,7 @@ class archillesRAG:
             convert_to_numpy=True
         )
 
-        resolved_book_id, calibre_id = self._resolve_book_id(book_id)
+        resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
         results = self.store.hybrid_search(
             query_text=query_text,
@@ -1573,6 +1621,7 @@ class archillesRAG:
             top_k=top_k,
             book_id=resolved_book_id,
             calibre_id=calibre_id,
+            source_id=source_id,
             chunk_type=chunk_type_filter,
             language=language,
             section_type=section_type
