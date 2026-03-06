@@ -501,6 +501,59 @@ def cleanup_orphans(
     return {'orphans_found': len(orphan_ids), 'orphans_removed': removed}
 
 
+def _adapter_list_books(
+    adapter,
+    tag_filter: Optional[str] = None,
+    exclude_tags: Optional[List[str]] = None,
+    author_filter: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """List books via a SourceAdapter, returning dicts compatible with batch_index().
+
+    This replaces the Calibre-specific get_all_books/get_books_by_tag/get_books_by_author
+    for non-Calibre adapters.
+    """
+    docs = adapter.list_documents(tag_filter=tag_filter)
+
+    # Apply exclude_tags (adapter only supports single exclude_tag)
+    if exclude_tags:
+        for etag in exclude_tags:
+            docs = [d for d in docs if etag not in d.tags]
+
+    # Apply author filter (partial, case-insensitive)
+    if author_filter:
+        def _author_matches(doc):
+            for af in author_filter:
+                af_lower = af.lower()
+                for a in doc.authors:
+                    if af_lower in a.lower():
+                        return True
+            return False
+        docs = [d for d in docs if _author_matches(d)]
+
+    books = []
+    for doc in docs:
+        # Skip documents without a file
+        if not doc.file_path or not str(doc.file_path) or str(doc.file_path) == '.':
+            continue
+        if not doc.file_path.is_file():
+            continue
+
+        fmt = doc.file_format.upper() if doc.file_format else ""
+        if not fmt:
+            continue
+
+        books.append({
+            'id': doc.doc_id,
+            'title': doc.title,
+            'author': ' & '.join(doc.authors) if doc.authors else 'Unknown',
+            'path': str(doc.file_path.parent),
+            'formats': [{'format': fmt, 'path': str(doc.file_path)}],
+            'best_format': {'format': fmt, 'path': str(doc.file_path)},
+        })
+
+    return books
+
+
 def create_book_id(book: Dict[str, Any]) -> str:
     """
     Create a unique book ID for indexing.
@@ -1063,9 +1116,31 @@ Profiles:
             sys.exit(1)
 
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
+    use_adapter = adapter is not None and adapter.adapter_type != "calibre"
     stats = {'indexed': 0, 'failed': 0}
     if args.all or args.tag or args.author:
-        if args.all:
+        if use_adapter:
+            # Non-Calibre adapter: use adapter for book discovery
+            tag = args.tag if args.tag else None
+            print(f"📚 Listing documents via {adapter.adapter_type} adapter")
+            if tag:
+                print(f"  Tag filter: {tag}")
+            if filter_authors:
+                print(f"  Author filter: {', '.join(filter_authors)}")
+            books = _adapter_list_books(
+                adapter,
+                tag_filter=tag,
+                exclude_tags=effective_excludes or None,
+                author_filter=filter_authors if (filter_authors or args.author) else None,
+            )
+            # --author mode: filter by author name
+            if args.author and not filter_authors:
+                books = _adapter_list_books(
+                    adapter,
+                    exclude_tags=effective_excludes or None,
+                    author_filter=[args.author],
+                )
+        elif args.all:
             print(f"📚 Indexing ALL books in the library")
             if filter_authors:
                 print(f"  Author filter: {', '.join(filter_authors)}")
