@@ -82,24 +82,31 @@ PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 DEFAULT_EXCLUDED_TAGS = ['exclude', 'Übersetzung']
 
 
-def get_calibre_library_path() -> Path:
-    """Get Calibre library path from environment variable.
+def get_library_path() -> Path:
+    """Get library path from environment variable.
+
+    Accepts ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH (legacy).
 
     Raises:
-        SystemExit: If CALIBRE_LIBRARY_PATH is not set
+        SystemExit: If neither variable is set
     """
-    library_path = os.environ.get('CALIBRE_LIBRARY_PATH')
+    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
     if not library_path:
         print("\n" + "="*60)
-        print("ERROR: CALIBRE_LIBRARY_PATH not set")
+        print("ERROR: Library path not set")
         print("="*60 + "\n")
-        print("Please set the environment variable to your Calibre library:\n")
+        print("Please set one of these environment variables:\n")
         print("  Windows (PowerShell):")
-        print('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n')
+        print('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n')
         print("  Linux/macOS:")
-        print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
+        print('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n')
+        print("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n")
         sys.exit(1)
     return Path(library_path)
+
+
+# Backward-compatible alias
+get_calibre_library_path = get_library_path
 
 
 def _discover_formats(book_path: Path) -> List[Dict[str, str]]:
@@ -976,9 +983,15 @@ Profiles:
             print("   Use YYYY-MM-DD format (e.g., 2024-12-01)")
             sys.exit(1)
 
-    # Get library path
-    library_path = get_calibre_library_path()
-    print(f"📚 Calibre library: {library_path}")
+    # Get library path and create adapter
+    library_path = get_library_path()
+    adapter = None
+    try:
+        from src.adapters import create_adapter
+        adapter = create_adapter(library_path)
+        print(f"📚 Library: {library_path} (adapter: {adapter.adapter_type})")
+    except Exception:
+        print(f"📚 Library: {library_path} (no adapter — legacy mode)")
 
     # Determine hardware profile
     if args.profile:
@@ -1038,7 +1051,8 @@ Profiles:
                 force_ocr=args.force_ocr,
                 profile=profile_name,
                 hierarchical=args.hierarchical,
-                use_modular_pipeline=args.use_modular_pipeline
+                use_modular_pipeline=args.use_modular_pipeline,
+                adapter=adapter,
             )
         except LanceDBError as e:
             print(f"\n{'='*60}")

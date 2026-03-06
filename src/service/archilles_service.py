@@ -48,6 +48,7 @@ class ArchillesService:
         reranker_device: Optional[str] = None,
         citation_config: Optional[Any] = None,
         archilles_dir: Optional[str] = None,
+        adapter=None,
     ):
         """
         Initialize service (RAG loading is deferred to first use).
@@ -76,6 +77,7 @@ class ArchillesService:
             "ocr_backend": ocr_backend,
             "ocr_language": ocr_language,
             "hierarchical": hierarchical,
+            "adapter": adapter,
         }
         self._rag = None
         self._init_attempted = False
@@ -85,6 +87,7 @@ class ArchillesService:
         self._reranker_device = reranker_device
         self._citation_config = citation_config
         self._archilles_dir = Path(archilles_dir) if archilles_dir else None
+        self._adapter = adapter  # Optional SourceAdapter for metadata lookup
 
     def _ensure_initialized(self) -> bool:
         """
