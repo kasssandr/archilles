@@ -254,11 +254,29 @@ class MarkdownParser(BaseParser):
     def can_parse(self, path: Path) -> bool:
         if path.is_dir():
             return any(path.glob('*.md'))
-        return path.suffix == '.md'
+        if path.suffix == '.md':
+            return True
+        if path.suffix == '.zip':
+            with zipfile.ZipFile(path) as zf:
+                return any(n.endswith('.md') for n in zf.namelist())
+        return False
 
     def parse(self, path: Path) -> list:
+        if path.suffix == '.zip':
+            return self._parse_zip(path)
         files = sorted(path.glob('*.md')) if path.is_dir() else [path]
         return [c for c in (self._parse_file(f) for f in files) if c and c.messages]
+
+    def _parse_zip(self, path: Path) -> list:
+        import tempfile, shutil
+        tmp = Path(tempfile.mkdtemp())
+        try:
+            with zipfile.ZipFile(path) as zf:
+                zf.extractall(tmp)
+            md_files = sorted(tmp.rglob('*.md'))
+            return [c for c in (self._parse_file(f) for f in md_files) if c and c.messages]
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def _parse_file(self, path: Path) -> Optional[Conversation]:
         lines = path.read_text(encoding='utf-8').splitlines()

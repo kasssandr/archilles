@@ -429,6 +429,60 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
     return books
 
 
+def get_books_by_ids(library_path: Path, calibre_ids: List[int]) -> List[Dict[str, Any]]:
+    """
+    Get specific books by their Calibre numeric IDs.
+
+    Args:
+        library_path: Path to Calibre library
+        calibre_ids: List of Calibre book IDs (the 4-digit numbers shown in Calibre)
+
+    Returns:
+        List of book dictionaries with metadata and file paths
+    """
+    db_path = library_path / "metadata.db"
+
+    if not db_path.exists():
+        raise FileNotFoundError(f"Calibre database not found: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    placeholders = ', '.join(['?' for _ in calibre_ids])
+    query = f"""
+    SELECT
+        books.id,
+        books.title,
+        books.path,
+        GROUP_CONCAT(authors.name, ' & ') as author
+    FROM books
+    LEFT JOIN books_authors_link ON books.id = books_authors_link.book
+    LEFT JOIN authors ON books_authors_link.author = authors.id
+    WHERE books.id IN ({placeholders})
+    GROUP BY books.id
+    ORDER BY books.id
+    """
+
+    cursor = conn.execute(query, calibre_ids)
+    rows = cursor.fetchall()
+    conn.close()
+
+    found_ids = {row['id'] for row in rows}
+    missing = set(calibre_ids) - found_ids
+    if missing:
+        print(f"⚠️  IDs not found in Calibre: {', '.join(str(i) for i in sorted(missing))}")
+
+    books = []
+    for row in rows:
+        entry = _build_book_entry(row, library_path)
+        if entry:
+            books.append(entry)
+        else:
+            print(f"⚠️  No supported format found for ID {row['id']}: {row['title']}")
+
+    return books
+
+
 def get_all_calibre_ids(library_path: Path) -> set:
     """
     Return the set of ALL Calibre book IDs (as strings, no filters).
@@ -640,6 +694,146 @@ def get_indexed_book_ids(
     except Exception as e:
         print(f"⚠️  Could not read existing index: {e}")
         return set()
+
+
+def batch_reindex_comments(
+    books: List[Dict[str, Any]],
+    rag: archillesRAG,
+    dry_run: bool = False,
+    log_file: Optional[Path] = None,
+    checkpoint_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """
+    Re-index only calibre_comment chunks for the given books.
+
+    Fast: reads Calibre metadata (no PDF/EPUB extraction, no new embeddings
+    for content chunks). Deletes existing comment chunks and rebuilds them
+    using the structured HTML parser (H1/H2 split, bold/H3/H4 as key_passages).
+
+    Use after editing Calibre comments or after upgrading the comment indexing logic.
+
+    Supports resuming an interrupted run via checkpoint_path. Already-processed
+    book_ids are written to the checkpoint file after each success; the file is
+    deleted automatically when the run completes without errors.
+    """
+    import gc
+    import numpy as np
+
+    # ── Checkpoint setup ──────────────────────────────────────────
+    if checkpoint_path is None:
+        checkpoint_path = Path('.archilles_reindex_checkpoint.json')
+
+    done_ids: set = set()
+    if checkpoint_path.exists():
+        try:
+            with open(checkpoint_path, encoding='utf-8') as f:
+                done_ids = set(json.load(f))
+            print(f"  ↩  Resuming — {len(done_ids)} books already done (checkpoint: {checkpoint_path})")
+        except Exception:
+            done_ids = set()
+
+    stats = {'updated': 0, 'skipped': 0, 'failed': 0, 'errors': []}
+
+    remaining = [b for b in books if create_book_id(b) not in done_ids]
+    total = len(books)
+
+    print(f"\n{'='*60}")
+    print(f"  Re-indexing comment chunks only (no full-text re-extraction)")
+    print(f"  Books total: {total}  |  Remaining: {len(remaining)}")
+    if dry_run:
+        print(f"  Mode: DRY RUN")
+    print(f"{'='*60}\n")
+
+    offset = total - len(remaining)  # for display numbering
+
+    for i, book in enumerate(remaining, 1):
+        book_id = create_book_id(book)
+        file_info = book.get('best_format', {})
+        book_path = Path(file_info.get('path', ''))
+        print(f"[{offset + i}/{total}] {book['author']}: {book['title']}")
+
+        if dry_run:
+            print(f"         [dry-run] would rebuild comment chunks")
+            stats['updated'] += 1
+            continue
+
+        if not book_path.exists():
+            print(f"         ⚠️  File not found: {book_path}")
+            stats['skipped'] += 1
+            done_ids.add(book_id)
+            continue
+
+        try:
+            # Only read Calibre DB — skip PDF/EPUB file extraction entirely
+            book_metadata = rag._extract_calibre_metadata(book_path)
+            has_comments = bool(
+                book_metadata.get('comments') or book_metadata.get('comments_html')
+            )
+            if not has_comments:
+                print(f"         — No comments, skipping")
+                stats['skipped'] += 1
+                done_ids.add(book_id)
+                continue
+
+            deleted = rag.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
+            meta_hash = rag._compute_metadata_hash(book_metadata)
+            book_format = file_info.get('format', '').lower()
+
+            comment_chunks, comment_embeddings = rag._build_comment_chunks(
+                book_metadata=book_metadata,
+                book_id=book_id,
+                book_format=book_format,
+                metadata_hash=meta_hash,
+            )
+
+            if comment_chunks:
+                rag.store.add_chunks(comment_chunks, np.array(comment_embeddings))
+                print(f"         ✓ {deleted} old → {len(comment_chunks)} new chunk(s)")
+                stats['updated'] += 1
+            else:
+                print(f"         — No comment content after parsing")
+                stats['skipped'] += 1
+
+            done_ids.add(book_id)
+
+        except Exception as e:
+            print(f"         ❌ {e}")
+            stats['failed'] += 1
+            stats['errors'].append({'title': book['title'], 'error': str(e)})
+
+        if i % 20 == 0:
+            if not dry_run:
+                with open(checkpoint_path, 'w', encoding='utf-8') as f:
+                    json.dump(list(done_ids), f)
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+
+    # Final checkpoint flush
+    if not dry_run:
+        with open(checkpoint_path, 'w', encoding='utf-8') as f:
+            json.dump(list(done_ids), f)
+
+    print(f"\n{'='*60}")
+    print(f"  Updated: {stats['updated']}")
+    print(f"  Skipped: {stats['skipped']}")
+    print(f"  Failed:  {stats['failed']}")
+    print(f"{'='*60}\n")
+
+    if stats['failed'] == 0 and checkpoint_path.exists():
+        checkpoint_path.unlink()
+        print(f"  ✓ Checkpoint removed (run complete)")
+
+    if log_file:
+        with open(log_file, 'w', encoding='utf-8') as f:
+            json.dump(stats, f, indent=2, ensure_ascii=False)
+        print(f"📝 Log written to: {log_file}")
+
+    return stats
 
 
 def batch_index(
@@ -942,6 +1136,9 @@ Profiles:
                        help='Index ALL books in the library (no tag/author filter)')
     group.add_argument('--tag', help='Index books with this tag')
     group.add_argument('--author', help='Index books by this author (partial match)')
+    group.add_argument('--ids', metavar='ID[,ID,...]',
+                       help='Comma-separated Calibre book IDs (e.g. --ids 1234,5678,9012). '
+                            'Use --force to re-index already indexed books.')
 
     # Rating filters (mutually exclusive)
     rating_group = parser.add_mutually_exclusive_group()
@@ -981,6 +1178,14 @@ Profiles:
     parser.add_argument('--reindex-missing-labels', action='store_true',
                         help='Re-index books with missing page labels (indexed before '
                              'page label extraction was implemented)')
+    parser.add_argument('--reindex-comments', action='store_true',
+                        help='Re-index only calibre_comment chunks (no full-text re-extraction). '
+                             'Use after editing Calibre comments or upgrading comment indexing.')
+    parser.add_argument('--start-after', metavar='AUTHOR',
+                        help='Skip all books until an author matching this fragment is found '
+                             '(case-insensitive, last match wins across rating tiers). E.g. "Bauman".')
+    parser.add_argument('--skip', type=int, metavar='N',
+                        help='Skip the first N books (use displayed position minus 1 to resume).')
     parser.add_argument('--limit', type=int,
                         help='Limit number of books to index (for testing)')
     parser.add_argument('--log', metavar='FILE',
@@ -1022,8 +1227,8 @@ Profiles:
         list_profiles()
         sys.exit(0)
 
-    # Validate: require --all/--tag/--author unless --cleanup-orphans is the sole operation
-    if not args.all and not args.tag and not args.author and not args.cleanup_orphans:
+    # Validate: require --all/--tag/--author/--ids unless --cleanup-orphans is the sole operation
+    if not args.all and not args.tag and not args.author and not args.ids and not args.cleanup_orphans:
         parser.error("one of the arguments --all --tag --author --cleanup-orphans is required")
 
     # Parse reindex-before date if specified
@@ -1118,7 +1323,7 @@ Profiles:
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"
     stats = {'indexed': 0, 'failed': 0}
-    if args.all or args.tag or args.author:
+    if args.all or args.tag or args.author or args.ids:
         if use_adapter:
             # Non-Calibre adapter: use adapter for book discovery
             tag = args.tag if args.tag else None
@@ -1169,6 +1374,14 @@ Profiles:
             if filter_authors:
                 print(f"  Additional author filter: {', '.join(filter_authors)}")
             books = get_books_by_author(library_path, args.author, min_rating=min_rating, rating=rating, exclude_tags=effective_excludes or None)
+        elif args.ids:
+            try:
+                calibre_ids = [int(i.strip()) for i in args.ids.split(',') if i.strip()]
+            except ValueError:
+                print(f"❌ Invalid --ids value: '{args.ids}' — use comma-separated integers, e.g. --ids 1234,5678")
+                sys.exit(1)
+            print(f"  Indexing {len(calibre_ids)} specific book(s) by Calibre ID: {calibre_ids}")
+            books = get_books_by_ids(library_path, calibre_ids)
 
         if not books:
             print("❌ No books found matching criteria")
@@ -1181,6 +1394,36 @@ Profiles:
             if args.limit:
                 books = books[:args.limit]
                 print(f"📊 Limited to first {args.limit} books")
+
+            # --reindex-comments: fast path, no full-text extraction
+            if args.reindex_comments:
+                log_file = Path(args.log) if args.log else None
+                reindex_books = books
+                if getattr(args, 'skip', None):
+                    n = args.skip
+                    if n >= len(books):
+                        print(f"⚠️  --skip {n} exceeds total books ({len(books)}). Nothing to do.")
+                        return
+                    print(f"  ↩  Skipping {n} books, starting at [{n+1}] {books[n]['author']}: {books[n]['title']}")
+                    reindex_books = books[n:]
+                elif getattr(args, 'start_after', None):
+                    fragment = args.start_after.lower()
+                    # Use last match so the author is found in the correct rating tier
+                    matches = [i for i, b in enumerate(books)
+                               if fragment in b.get('author', '').lower()]
+                    if not matches:
+                        print(f"⚠️  --start-after: no author matching '{args.start_after}' found. Processing all books.")
+                    else:
+                        idx = matches[-1]
+                        print(f"  ↩  Skipping {idx} books, starting at [{idx+1}] {books[idx]['author']}: {books[idx]['title']}")
+                        reindex_books = books[idx:]
+                batch_reindex_comments(
+                    books=reindex_books,
+                    rag=rag,
+                    dry_run=args.dry_run,
+                    log_file=log_file,
+                )
+                return
 
             # Initialize SafeIndexer for crash-safety
             safe_indexer = None

@@ -270,8 +270,10 @@ class CalibreAdapter(SourceAdapter):
             "SELECT text FROM comments WHERE book = ?", (book_id,)
         ).fetchone()
         comments = ""
+        comments_html = ""
         if comment_row and comment_row["text"]:
-            comments = CalibreDB.clean_html(comment_row["text"])
+            comments_html = comment_row["text"]
+            comments = CalibreDB.clean_html(comments_html)
 
         # Timestamps from Calibre
         ts_row = conn.execute(
@@ -293,6 +295,7 @@ class CalibreAdapter(SourceAdapter):
             file_format=file_path.suffix.lower().lstrip("."),
             tags=tags,
             comments=comments,
+            comments_html=comments_html,
             language=language,
             publisher=publisher,
             identifiers=identifiers,
@@ -319,6 +322,7 @@ class CalibreAdapter(SourceAdapter):
             file_format=file_path.suffix.lower().lstrip("."),
             tags=book_data.get("tags", []),
             comments=book_data.get("comments", "") or "",
+            comments_html=book_data.get("comments_html", "") or "",
             language=book_data.get("language", "") or "",
             publisher=book_data.get("publisher", "") or "",
             identifiers=identifiers,
