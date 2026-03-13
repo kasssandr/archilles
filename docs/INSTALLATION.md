@@ -83,20 +83,20 @@ This installs all required packages. Expect it to take a few minutes on first ru
 
 > **GPU users:** If you want CUDA-accelerated indexing, install the correct PyTorch version for your CUDA version *before* running the above. See [pytorch.org/get-started](https://pytorch.org/get-started/locally/) for the right command.
 
-### Step 5: Set Your Calibre Library Path
+### Step 5: Set Your Library Path
 
-Archilles needs to know where your Calibre library is. Your library folder contains a file called `metadata.db`.
+Archilles needs to know where your library is (Calibre, Zotero, or a plain folder).
 
 **Option A — Environment variable (temporary, for this session):**
 ```powershell
-$env:CALIBRE_LIBRARY_PATH = "D:\My Calibre Library"
+$env:ARCHILLES_LIBRARY_PATH = "D:\My Library"
 ```
 
 **Option B — System environment variable (permanent):**
 1. Open *Settings → System → About → Advanced system settings → Environment Variables*
 2. Under *User variables*, click *New*
-3. Name: `CALIBRE_LIBRARY_PATH`
-4. Value: your library path (e.g. `D:\My Calibre Library`)
+3. Name: `ARCHILLES_LIBRARY_PATH`
+4. Value: your library path (e.g. `D:\My Calibre Library` or `C:\Users\You\Zotero`)
 
 > **Default:** If you don't set this, Archilles looks for `C:\Calibre Library`. You must set it if your library is elsewhere.
 
@@ -139,7 +139,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Set library path
-export CALIBRE_LIBRARY_PATH="/Users/yourname/Calibre Library"
+export ARCHILLES_LIBRARY_PATH="/Users/yourname/Calibre Library"
 # Add this line to ~/.zshrc or ~/.bashrc to make it permanent
 
 # Index a book

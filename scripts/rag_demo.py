@@ -607,6 +607,8 @@ class archillesRAG:
                     metadata['tags'] = doc_meta.tags
                 if doc_meta.comments:
                     metadata['comments'] = doc_meta.comments
+                if doc_meta.comments_html:
+                    metadata['comments_html'] = doc_meta.comments_html
                 if doc_meta.custom_fields:
                     metadata['custom_fields'] = doc_meta.custom_fields
                 # Adapter-agnostic ID  →  both source_id and calibre_id
@@ -635,6 +637,8 @@ class archillesRAG:
                     # Backfill source_id from calibre_id for consistency
                     if book_data.get('calibre_id'):
                         metadata['source_id'] = str(book_data['calibre_id'])
+                    if book_data.get('comments_html'):
+                        metadata['comments_html'] = book_data['comments_html']
         except Exception:
             pass
 
@@ -1047,34 +1051,18 @@ class archillesRAG:
 
             chunks.append(chunk_data)
 
-        # Add Calibre comments as separate chunk (if available)
-        has_comment = bool(book_metadata and book_metadata.get('comments'))
+        # Add Calibre comments as structured chunk(s) (if available)
+        has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
         if has_comment:
-
-            comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
-
-            # Generate embedding for comment
-            comment_embedding = self.embedding_model.encode(
-                comment_text,
-                show_progress_bar=False,
-                convert_to_numpy=True
+            meta_hash = self._compute_metadata_hash(book_metadata)
+            comment_chunks, comment_embeddings = self._build_comment_chunks(
+                book_metadata=book_metadata,
+                book_id=book_id,
+                book_format=extracted.metadata.detected_format,
+                metadata_hash=meta_hash,
             )
-
-            comment_chunk = {
-                'id': f"{book_id}_comment",
-                'text': comment_text,
-                'book_id': book_id,
-                'book_title': book_metadata.get('title', extracted.metadata.file_path.stem),
-                'chunk_index': -1,
-                'chunk_type': 'calibre_comment',
-                'format': extracted.metadata.detected_format,
-                'indexed_at': datetime.now().isoformat(),
-                'metadata_hash': self._compute_metadata_hash(book_metadata),
-            }
-            self._apply_book_metadata_to_chunk(comment_chunk, book_metadata)
-
-            chunks.append(comment_chunk)
-            embeddings.append(comment_embedding.tolist())
+            chunks.extend(comment_chunks)
+            embeddings.extend(comment_embeddings)
 
         # Add user annotations (highlights, notes from Calibre Viewer + PDF)
         annot_count = 0
@@ -1152,6 +1140,119 @@ class archillesRAG:
             'needs_ocr': needs_ocr,
         }
 
+    def _build_comment_chunks(
+        self,
+        book_metadata: Dict[str, Any],
+        book_id: str,
+        book_format: str,
+        metadata_hash: str,
+    ) -> tuple:
+        """
+        Build calibre_comment chunk(s) with structure-aware text.
+
+        If comments_html is available, parses H2–H4 headlines into separate
+        chunks and prepends bold/<strong>/!!!...!!! passages as "Kernaussagen:"
+        so they carry extra weight in the embedding.
+
+        Returns:
+            (chunks, embeddings) — parallel lists ready for store.add_chunks()
+        """
+        from src.calibre_db import CalibreDB
+
+        comments_html = book_metadata.get('comments_html', '')
+        if comments_html:
+            sections = CalibreDB.parse_html_comment(comments_html)
+        else:
+            plain = book_metadata.get('comments', '')
+            sections = [{'headline': None, 'headline_level': None,
+                         'text': plain, 'key_passages': []}] if plain else []
+
+        if not sections:
+            return [], []
+
+        # Split sections that are too long for a useful single embedding.
+        # BGE-M3 retrieval quality degrades significantly beyond ~500 words.
+        # Long headline-less sections (e.g. a 3500-word comment block) are
+        # split at word boundaries into sub-chunks of MAX_COMMENT_WORDS each.
+        MAX_COMMENT_WORDS = 400
+
+        def split_section(section: dict) -> list:
+            words = section['text'].split()
+            if len(words) <= MAX_COMMENT_WORDS:
+                return [section]
+            # Split at sentence boundaries (. ! ?) — never mid-sentence
+            sentences = re.split(r'(?<=[.!?])\s+', section['text'])
+            sub_sections = []
+            current_words = 0
+            current_sents: list[str] = []
+            first = True
+            for sent in sentences:
+                sent_words = len(sent.split())
+                if current_sents and current_words + sent_words > MAX_COMMENT_WORDS:
+                    sub_sections.append({
+                        'headline': section['headline'],
+                        'headline_level': section['headline_level'],
+                        'text': ' '.join(current_sents),
+                        'key_passages': section['key_passages'] if first else [],
+                    })
+                    first = False
+                    current_sents = [sent]
+                    current_words = sent_words
+                else:
+                    current_sents.append(sent)
+                    current_words += sent_words
+            if current_sents:
+                sub_sections.append({
+                    'headline': section['headline'],
+                    'headline_level': section['headline_level'],
+                    'text': ' '.join(current_sents),
+                    'key_passages': section['key_passages'] if first else [],
+                })
+            return sub_sections
+
+        flat_sections = []
+        for section in sections:
+            flat_sections.extend(split_section(section))
+
+        chunks, embeddings = [], []
+        title = book_metadata.get('title', book_id)
+
+        for i, section in enumerate(flat_sections):
+            parts = []
+            if section['headline']:
+                parts.append(f"## {section['headline']} ##")
+            if section['key_passages']:
+                kp = ' | '.join(section['key_passages'])
+                parts.append(f"Kernaussagen: {kp}")
+            if section['text']:
+                parts.append(section['text'])
+
+            chunk_text = f"[CALIBRE_COMMENT] {' '.join(parts)}"
+
+            embedding = self.embedding_model.encode(
+                chunk_text, show_progress_bar=False, convert_to_numpy=True
+            )
+
+            chunk = {
+                'id': f"{book_id}_comment_{i}",
+                'text': chunk_text,
+                'book_id': book_id,
+                'book_title': title,
+                'chunk_index': -(i + 1),
+                'chunk_type': 'calibre_comment',
+                'format': book_format,
+                'indexed_at': datetime.now().isoformat(),
+                'metadata_hash': metadata_hash,
+            }
+            if section['headline']:
+                chunk['section_title'] = section['headline']
+            self._apply_book_metadata_to_chunk(chunk, book_metadata)
+
+            chunks.append(chunk)
+            embeddings.append(embedding.tolist())
+
+        return chunks, embeddings
+
     def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
                                new_hash: str, existing_chunks: list,
                                annotations: Optional[List[Dict[str, Any]]] = None,
@@ -1198,28 +1299,19 @@ class archillesRAG:
                 deleted = self.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
                 print(f"    Deleted {deleted} old comment chunk(s)")
 
-            if book_metadata.get('comments'):
-                comment_text = f"[CALIBRE_COMMENT] {book_metadata['comments']}"
-                comment_embedding = self.embedding_model.encode(
-                    comment_text, show_progress_bar=False, convert_to_numpy=True
+            if book_metadata.get('comments') or book_metadata.get('comments_html'):
+                book_format = existing_chunks[0].get('format', '') if existing_chunks else ''
+                comment_chunks, comment_embeddings = self._build_comment_chunks(
+                    book_metadata=book_metadata,
+                    book_id=book_id,
+                    book_format=book_format,
+                    metadata_hash=new_hash,
                 )
-                comment_chunk = {
-                    'id': f"{book_id}_comment",
-                    'text': comment_text,
-                    'book_id': book_id,
-                    'book_title': book_metadata.get('title', book_id),
-                    'chunk_index': -1,
-                    'chunk_type': 'calibre_comment',
-                    'format': existing_chunks[0].get('format', ''),
-                    'indexed_at': datetime.now().isoformat(),
-                    'metadata_hash': new_hash,
-                }
-                self._apply_book_metadata_to_chunk(comment_chunk, book_metadata)
-
-                embeddings_array = np.array([comment_embedding.tolist()])
-                self.store.add_chunks([comment_chunk], embeddings_array)
-                comment_added = True
-                print(f"    Added new comment chunk")
+                if comment_chunks:
+                    embeddings_array = np.array(comment_embeddings)
+                    self.store.add_chunks(comment_chunks, embeddings_array)
+                    comment_added = True
+                    print(f"    Added {len(comment_chunks)} comment chunk(s)")
 
         # 3. Replace annotation chunks if annotations changed
         annot_updated = False
@@ -2327,21 +2419,21 @@ Examples:
         return
 
     # Determine default database path if not specified
-    # Requires CALIBRE_LIBRARY_PATH env var for portable installation
     if args.db_path is None:
-        calibre_library = os.environ.get('CALIBRE_LIBRARY_PATH')
-        if not calibre_library:
+        library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
+        if not library_path:
             print("\n" + "="*60)
-            print("ERROR: CALIBRE_LIBRARY_PATH not set")
+            print("ERROR: Library path not set")
             print("="*60 + "\n")
-            print("Please set the environment variable to your Calibre library:\n")
+            print("Please set one of these environment variables:\n")
             print("  Windows (PowerShell):")
-            print('    $env:CALIBRE_LIBRARY_PATH = "C:\\path\\to\\Calibre-Library"\n')
+            print('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n')
             print("  Linux/macOS:")
-            print('    export CALIBRE_LIBRARY_PATH="/path/to/Calibre-Library"\n')
+            print('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n')
+            print("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n")
             print("Or specify the database path directly with --db-path\n")
             sys.exit(1)
-        args.db_path = str(Path(calibre_library) / ".archilles" / "rag_db")
+        args.db_path = str(Path(library_path) / ".archilles" / "rag_db")
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:

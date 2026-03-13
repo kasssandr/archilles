@@ -64,6 +64,12 @@ Combines semantic understanding (BGE-M3 embeddings) with keyword precision (BM25
 ### 🎯 **Cross-Encoder Reranking** *(optional)*
 Enable a second-stage reranker (BAAI/bge-reranker-v2-m3) that scores each query-document pair for significantly improved relevance ranking. Graceful fallback if your system has limited memory.
 
+### 🔖 **Research Interest Boosting**
+Register project-specific keywords once and they automatically receive a score boost in every subsequent search—without re-indexing. Switch focus between projects in seconds. Managed via the `set_research_interests` MCP tool.
+
+### 📤 **Academic Bibliography Export**
+Export your library (or any filtered subset) as BibTeX, RIS, EndNote, JSON, or CSV. Filter by author, tag, or publication year. One tool call from Claude Desktop is all it takes.
+
 ---
 
 ## Why Archilles?
@@ -97,11 +103,11 @@ cd archilles
 # Install dependencies
 pip install -r requirements.txt
 
-# Set your Calibre library path (optional - defaults to C:/Calibre Library)
+# Set your library path
 # Windows PowerShell:
-$env:CALIBRE_LIBRARY_PATH = "D:\Your-Calibre-Library"
+$env:ARCHILLES_LIBRARY_PATH = "D:\Your-Library"
 # Linux/Mac:
-export CALIBRE_LIBRARY_PATH="/path/to/your/Calibre Library"
+export ARCHILLES_LIBRARY_PATH="/path/to/your/Library"
 ```
 
 ### Index Your First Book
@@ -157,17 +163,20 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
       "command": "python",
       "args": ["C:/Users/YOU/archilles/mcp_server.py"],
       "env": {
-        "CALIBRE_LIBRARY_PATH": "D:/Your-Calibre-Library"
+        "ARCHILLES_LIBRARY_PATH": "D:/Your-Library"
       }
     }
   }
 }
 ```
 
-Then in Claude Desktop, you can use natural language:
+Then in Claude Desktop, you can use natural language — all 12 MCP tools are available:
 - *"Search my books for discussions of political legitimacy"*
 - *"Find annotations about consciousness"*
 - *"What did I highlight about medieval trade?"*
+- *"List all books by Hannah Arendt in my library"*
+- *"Set my research interests to: prosopography, late antique senators, cursus honorum"*
+- *"Export my Philosophy books as BibTeX"*
 
 **📖 [Full Installation Guide →](docs/INSTALLATION.md)**
 
@@ -221,9 +230,11 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 - **BM25 keyword search**: Precision matching for exact terms (names, Latin phrases, technical terms)
 - **Reciprocal Rank Fusion (RRF)**: Intelligently combines semantic and keyword results (stage 1)
 - **Cross-encoder reranking** *(optional)*: BAAI/bge-reranker-v2-m3 rescores top candidates for more accurate ranking (stage 2, CPU)
+- **Stop-word removal**: Applied at indexing and query time for EN, DE, FR, ES, IT, PT, NL, LA, RU, EL, HE, AR—language-appropriate precision at scale
 - **Section filtering**: Exclude bibliography, index, and front matter noise from results
 - **Context expansion**: Small-to-Big retrieval shows surrounding text for better understanding
-- **Smart boosting**: Calibre comments and tag matches get priority in results
+- **Smart boosting**: Calibre comments (1.2×) and tag matches (1.15×) get priority in results
+- **Research interest boosting**: Additive keyword boost at query time—no re-indexing required
 
 ### Configuration
 
@@ -283,25 +294,30 @@ Search through your collection of primary sources and secondary literature simul
 - Full-text indexing (30+ formats, PyMuPDF primary for PDFs)
 - Semantic + keyword hybrid search (LanceDB native)
 - Two-stage retrieval: RRF fusion + optional cross-encoder reranking
-- Calibre metadata integration (tags, comments, custom fields)
-- MCP server for Claude Desktop integration (productive)
-- Multi-language support (75+ languages)
+- Calibre metadata integration (tags, comments, custom fields, annotation indexing)
+- MCP server — 12 tools for Claude Desktop (search, metadata, annotations, bibliography, utilities)
+- Multi-language support (75+ languages, stop-word removal for 12 languages)
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
-- Hardware-adaptive indexing profiles
+- Hardware-adaptive indexing profiles (minimal/balanced/maximal; CUDA, Apple Silicon MPS, CPU)
 - Streamlit Web UI *(experimental)*
 - Section-type filtering (exclude bibliography/index noise)
 - Context expansion (Small-to-Big retrieval with `window_text`)
-- Parent-child chunk hierarchy
 - Service layer architecture (decoupled MCP/Web-UI/CLI)
 - Page labels (printed page numbers) for citation accuracy
+- Research interest boosting (`set_research_interests`)
+- `list_books_by_author` — direct Calibre metadata query, reliable for articles and short texts
+- Bibliography export: BibTeX, RIS, EndNote, JSON, CSV
+- Crash-safe batch indexing with `progress.db` checkpoint system and backup rotation
+- Duplicate detection and `calibre://` URI links for direct book access
 
 ### Coming in v1.0
 
 🚧 **Planned improvements:**
-- Improved embedding models (domain-specific options)
+- HTTP/SSE transport (MCP over the network — ChatGPT, OpenAI Codex, and other HTTP-based clients)
+- Incremental indexing (index new books without full re-index of the collection)
+- Docling-based Markdown extraction (structured output from complex academic PDFs)
 - VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)
-- Graph RAG (entity relationships)
 
 ### Future Development
 
@@ -309,7 +325,6 @@ Search through your collection of primary sources and secondary literature simul
 - Graph RAG (entity relationships, timeline views)
 - Special Editions (discipline-specific extensions)
 - Multi-library support
-- Advanced citation export (BibTeX, Zotero)
 
 **📅 [Detailed Roadmap →](docs/ROADMAP.md)**
 
@@ -359,9 +374,10 @@ We're actively seeking beta testers from diverse research disciplines. If you ha
 ## Documentation
 
 📖 **[Installation Guide](docs/INSTALLATION.md)** – Detailed setup instructions
-📘 **[User Guide](docs/USER_GUIDE.md)** – How to use Archilles effectively
+📘 **[Usage Guide](docs/USAGE.md)** – All commands, MCP tools, and practical workflows
+🗂️ **[Feature Catalog](docs/FEATURES.md)** – Complete reference of all implemented features
 🏗️ **[Architecture](docs/ARCHITECTURE.md)** – Technical deep dive
-🔌 **[MCP Integration](docs/MCP_GUIDE.md)** – Connect Archilles to Claude
+🔌 **[MCP Integration](docs/MCP_GUIDE.md)** – Connect Archilles to Claude Desktop
 ❓ **[FAQ](docs/FAQ.md)** – Frequently asked questions
 🔧 **[Troubleshooting](docs/TROUBLESHOOTING.md)** – Common issues and solutions
 

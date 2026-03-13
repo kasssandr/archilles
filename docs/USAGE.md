@@ -44,28 +44,69 @@ With a custom ID:
 python scripts/rag_demo.py index "path/to/book.pdf" --book-id "Arendt_VitaActiva"
 ```
 
-#### Batch indexing by tag
+#### Batch indexing — selection modes
+
 ```bash
+# All books in the library
+python scripts/batch_index.py --all
+
+# All books with a specific Calibre tag
+python scripts/batch_index.py --tag "Key-Literature"
+
+# All books by an author (partial match)
+python scripts/batch_index.py --author "Arendt"
+
+# Specific books by Calibre ID
+python scripts/batch_index.py --ids 1234,5678,9012
+```
+
+#### Batch indexing — filtering
+
+```bash
+# Further filter by author within a tag selection
+python scripts/batch_index.py --tag "Key-Literature" --filter-author "Arendt"
+python scripts/batch_index.py --tag "Key-Literature" --filter-author "Arendt" --filter-author "Benjamin"
+
+# Only books rated 4 stars or higher
+python scripts/batch_index.py --tag "Key-Literature" --min-rating 4
+
+# Only books with exactly this rating (0 = unrated)
+python scripts/batch_index.py --tag "Key-Literature" --rating 0
+
+# Exclude books with a specific tag
+python scripts/batch_index.py --all --exclude-tag "DeepL" --exclude-tag "Übersetzung"
+
+# Include books normally excluded by default (exclude / Übersetzung tags)
+python scripts/batch_index.py --tag "Translations" --include-excluded
+
 # Preview (what would be indexed?)
 python scripts/batch_index.py --tag "Key-Literature" --dry-run
 
-# Actually index
-python scripts/batch_index.py --tag "Key-Literature"
-
-# With logging
-python scripts/batch_index.py --tag "History" --log indexing_log.json
-
 # First N books only (for testing)
 python scripts/batch_index.py --tag "Philosophy" --limit 5
-
-# Resume after interruption
-python scripts/batch_index.py --tag "Key-Literature" --skip-existing
 ```
 
-#### Batch indexing by author
+#### Batch indexing — resume and maintenance
+
 ```bash
-python scripts/batch_index.py --author "Arendt"
-python scripts/batch_index.py --author "Foucault" --dry-run
+# Resume after interruption (fast: pre-filters already-indexed books)
+python scripts/batch_index.py --tag "Key-Literature" --skip-existing
+
+# Force re-index (even already-indexed books)
+python scripts/batch_index.py --tag "Key-Literature" --force
+
+# Re-index books indexed before a date (e.g. after a major pipeline improvement)
+python scripts/batch_index.py --tag "Key-Literature" --reindex-before 2026-01-01
+
+# Re-index books where page label extraction was missing
+python scripts/batch_index.py --tag "Key-Literature" --reindex-missing-labels
+
+# Remove index entries for books deleted from Calibre (with dry-run preview)
+python scripts/batch_index.py --cleanup-orphans --dry-run
+python scripts/batch_index.py --cleanup-orphans
+
+# Reset the database entirely (caution — requires full re-index)
+python scripts/batch_index.py --tag "Key-Literature" --reset-db
 ```
 
 #### Format preference (`--prefer-format`)
@@ -86,21 +127,34 @@ python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub
 
 If the preferred format is not available, the next available format is used automatically.
 
-**Switching already-indexed books:** The format preference is not applied automatically to already-indexed books — they are skipped on the next run. For a complete switch to EPUB:
+**Switching already-indexed books:** The format preference is not applied automatically to already-indexed books — they are skipped on the next run. To switch to EPUB for all previously indexed books:
 ```bash
 python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub --reindex-before 2099-01-01
 ```
 
-#### Remove orphan entries
-
-When books are deleted from Calibre, their chunks remain in the index. Use `--cleanup-orphans` to remove them:
+#### Hardware profiles
 
 ```bash
-# Preview what would be removed
-python scripts/batch_index.py --cleanup-orphans --dry-run
+# Let Archilles detect hardware automatically (default)
+python scripts/batch_index.py --tag "Key-Literature"
 
-# Actually remove
-python scripts/batch_index.py --cleanup-orphans
+# Explicitly set a profile
+python scripts/batch_index.py --tag "Key-Literature" --profile minimal    # 4–6 GB VRAM
+python scripts/batch_index.py --tag "Key-Literature" --profile balanced   # 8–12 GB VRAM
+python scripts/batch_index.py --tag "Key-Literature" --profile maximal    # 16+ GB VRAM
+```
+
+#### Logging and automation
+
+```bash
+# Write indexing progress to a JSON log
+python scripts/batch_index.py --tag "History" --log indexing_log.json
+
+# Suppress confirmation prompts (for scripts)
+python scripts/batch_index.py --tag "History" --non-interactive
+
+# Enable OCR for scanned PDFs
+python scripts/batch_index.py --tag "Scanned" --enable-ocr
 ```
 
 #### Index statistics
@@ -163,47 +217,92 @@ python scripts/rag_demo.py query "Late Antique senators" --export research.md
 
 ## MCP Tools in Claude Desktop
 
-After correct configuration, the following tools are available in Claude Desktop:
+After correct configuration, the following **12 tools** are available in Claude Desktop.
 
-### Full-text search: `search_books_with_citations`
+### Search tools
 
-Searches indexed PDF/EPUB content.
+**`search_books_with_citations`** — Full-text hybrid search across all indexed book content.
 
-**Example prompts:**
+Example prompts:
 - *"Search my books for discussions of political legitimacy"*
 - *"Find passages about medieval trade, in German only"*
 - *"What do my sources say about the Council of Nicaea?"*
 
-**Parameters:**
+Parameters:
 - `query`: Search term (required)
-- `top_k`: Number of results (default: 10)
-- `mode`: 'hybrid', 'semantic', or 'keyword'
-- `language`: Language filter ('de', 'en', 'la', etc.)
+- `top_k`: Number of results (default: 5; 10–15 for broad research)
+- `mode`: `'hybrid'`, `'semantic'`, or `'keyword'`
+- `language`: Language filter (`'de'`, `'en'`, `'la'`, etc.)
+- `tags`: Array of Calibre tags to filter by
+- `expand_context`: Returns surrounding passage for each match (Small-to-Big)
 
-### Annotation search: `search_annotations`
+**`search_annotations`** — Semantic search across your Calibre highlights, notes, and book comments.
 
-Searches your Calibre highlights, notes, and book comments.
-
-**Example prompts:**
+Example prompts:
 - *"Search my annotations for 'consciousness'"*
 - *"What did I highlight about freedom?"*
 - *"Search my notes for anything about Hannah Arendt"*
 
-**Parameters:**
+Parameters:
 - `query`: Search term (required)
 - `max_results`: Maximum results (default: 30)
 - `max_per_book`: Max results per book (prevents one book dominating)
 
-### Other MCP tools
+**`set_research_interests`** — Register keywords that receive a score boost in all future searches, without re-indexing.
+
+Example prompts:
+- *"Set my research interests to: Josephus, Mithras, priestly elite"*
+- *"Show my current research interest keywords"*
+- *"Clear my research interests"*
+
+Parameters:
+- `action`: `'get'` (view current) or `'set'` (update)
+- `keywords`: List of keywords to boost
+- `boost_factor`: Additive score boost per matching keyword (default: 0.15)
+
+---
+
+### Metadata tools
+
+**`list_books_by_author`** — Direct query against Calibre metadata. Reliable for finding all books by an author, including short texts where the author name may not appear in indexed chunks.
+
+Example prompts:
+- *"List all books by Hannah Arendt in my library"*
+- *"Which articles by Mason do I have tagged 'Josephus'?"*
+
+Parameters:
+- `author`: Author name, partial match (e.g. `"Mason"` matches `"Steve Mason"`)
+- `tags`: Optional tag filter (AND logic)
+- `year_from` / `year_to`: Publication year range
+- `sort_by`: `'title'` (default) or `'year'`
+
+**`list_tags`** — All Calibre tags with book counts. Recommended before a tag-filtered search to verify the exact spelling of a tag.
+
+**`list_annotated_books`** — All books with indexed annotations. Quick overview of your actively-read corpus.
+
+**`get_book_annotations`** — All annotations for a specific book (file path required).
+
+**`get_book_details`** — Full Calibre metadata for a given book ID.
+
+---
+
+### Output tools
+
+**`export_bibliography`** — Bibliography export in BibTeX, RIS, EndNote, JSON, or CSV. Filterable by author (partial name), tag, and publication year.
+
+Example prompts:
+- *"Export all my Philosophy books as BibTeX"*
+- *"Give me a RIS bibliography of books by Foucault published after 1970"*
+
+---
+
+### Utility tools
 
 | Tool | Function |
 |------|----------|
-| `list_annotated_books` | Shows all books with annotations |
-| `get_book_annotations` | Annotations for a specific book |
-| `get_book_details` | Full metadata for a Calibre book ID |
-| `list_tags` | All Calibre tags with book counts |
-| `detect_duplicates` | Finds duplicate books in the library |
-| `export_bibliography` | Exports citations in BibTeX, RIS, Chicago, APA |
+| `detect_duplicates` | Find duplicate books by title+author, ISBN, or exact title |
+| `compute_annotation_hash` | Compute content hash for annotation deduplication |
+| `get_doublette_tag_instruction` | Helper for the Calibre duplicate-tagging workflow |
 
 ---
 
@@ -261,6 +360,24 @@ In Claude Desktop:
 3. "Combine my annotations with relevant passages from the books themselves"
 ```
 
+### Workflow 6: Metadata + bibliography
+
+In Claude Desktop:
+```
+1. "List all books by Agamben in my library"
+2. "Filter those to the ones tagged 'Core Literature'"
+3. "Export a BibTeX bibliography of those titles"
+```
+
+### Workflow 7: Tune search for an ongoing project
+
+In Claude Desktop:
+```
+1. "Set my research interests to: prosopography, late antique senators, cursus honorum"
+2. [Future searches now automatically boost results containing these terms]
+3. "Search my books for the role of the senatorial class in 5th century Rome"
+```
+
 ---
 
 ## Tips & Best Practices
@@ -269,9 +386,11 @@ In Claude Desktop:
 
 - **Choose your format:** PDF for precise page citations, EPUB for faster indexing and cleaner chunks (see `--prefer-format`)
 - **Run overnight:** ~10 min per book (CPU), ~2 min per book (GPU); 50 books ≈ 1–8 hours
-- **Use `--skip-existing`:** Resume after interruptions
+- **Use `--skip-existing`:** Resume after interruptions without re-indexing
 - **Use tags strategically:** Index thematic collections rather than everything at once
+- **Use `--dry-run` first:** Verify what will be indexed before starting a long run
 - **Clean up after deleting books:** Run `--cleanup-orphans` periodically
+- **Re-index after pipeline improvements:** Use `--reindex-before DATE` to refresh older entries
 
 ### Search
 
@@ -279,6 +398,21 @@ In Claude Desktop:
 - **Keyword mode for technical terms:** "Herrschaftslegitimation", "prosopography"
 - **Exact mode for quotes:** Latin phrases, verbatim quotations
 - **Language filter in multilingual libraries:** Reduces noise significantly
+- **Use `list_books_by_author` for author queries:** More reliable than full-text search for short texts (articles, book chapters)
+- **Check `list_tags` first:** Verify exact tag spelling before filtering
+
+### Research Interest Boosting
+
+- Register project-specific keywords at the start of a research session
+- Boosting is additive and non-destructive — general searches still work normally
+- Update keywords as your research focus shifts; no re-indexing required
+
+### Cross-Encoder Reranking
+
+- Enable in `.archilles/config.json` for more accurate result ordering
+- Downloads ~560 MB on first use
+- Runs on CPU by default (GPU is typically occupied by BGE-M3)
+- Most useful for broad queries where Stage 1 results have mixed relevance
 
 ### Claude Desktop
 
@@ -319,11 +453,19 @@ D:\Calibre Library\
 → Resume with `--skip-existing`.
 → Check disk space and RAM.
 
+### Missing page numbers in results
+→ Run `python scripts/batch_index.py --tag "YOUR-TAG" --reindex-missing-labels` to reprocess affected books.
+
+### Wrong format being indexed
+→ Use `--prefer-format epub` or `--prefer-format pdf` explicitly.
+→ To switch all previously indexed books: add `--reindex-before 2099-01-01` to force re-index.
+
 ---
 
 ## Further Documentation
 
 - [README.md](../README.md) — Project overview
+- [FEATURES.md](FEATURES.md) — Complete feature catalog
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Technical details
 - [MCP_GUIDE.md](MCP_GUIDE.md) — Claude Desktop configuration
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues

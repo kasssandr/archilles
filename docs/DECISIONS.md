@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 28. Februar 2026 (ADR-016–018: ChromaDB vollständig entfernt, --cleanup-orphans, --prefer-format)
+**Letzte Überarbeitung:** 11. März 2026 (ADR-019–024: Research Interest Boosting, list_books_by_author, Erweiterte Batch-Optionen, MPS-Support, Stop-Word-Removal, Progress-DB)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -388,6 +388,71 @@ Für den aktuellen Use Case – Claude formatiert die Bibliografie im Rahmen ein
 
 **Umstellen bereits indexierter Bücher:** Die Format-Präferenz wird nicht automatisch auf bereits indexierte Bücher angewendet. Für einen vollständigen Wechsel: `--prefer-format epub --reindex-before 2099-01-01`.
 
+### ADR-019: `set_research_interests` – Keyword-Boosting ohne Re-Indexierung (März 2026)
+
+**Kontext:** Nutzer arbeiten über Wochen oder Monate an spezifischen Forschungsprojekten. Innerhalb eines Projekts sind bestimmte Eigennamen, Konzepte und Fachbegriffe durchgehend relevant (z.B. "Josephus", "Mithras", "priestly elite"). Die Suchergebnisse sollten diese Prioritäten reflektieren, ohne dass der Nutzer bei jeder Anfrage explizite Filter setzt oder den Index neu aufbauen muss.
+
+**Entscheidung:** Einführung von `set_research_interests` als dediziertes MCP-Tool. Es registriert eine Liste von Boost-Keywords in einer JSON-Datei im Library-Ordner (`research_interests.json`). Bei jeder Suchanfrage werden Treffer, die mindestens eines dieser Keywords im Text oder in den Metadaten enthalten, mit einem konfigurierbaren additiven Faktor hochgestuft (Standard: +0,15 pro übereinstimmendem Keyword). Das Tool erlaubt `action: 'get'` (aktuelle Interessen anzeigen), `action: 'set'` (neue Keywords setzen) und `action: 'clear'` (zurücksetzen).
+
+**Begründung:** Die Alternative – explizite Tag-Filter bei jeder Anfrage – ist für Nutzer im aktiven Forschungsfluss unpraktisch. Fine-Tuning oder Re-Indexierung für dasselbe Ziel wäre unverhältnismäßig teuer. Das Boosting-Modell ist adressierbar ohne Architektureingriff: Die Gewichte werden am Abruf-Zeitpunkt angewendet, nicht beim Indexaufbau. Das unterscheidet es fundamental von einem Embedding-basierten Ansatz.
+
+**Abgrenzung zum Tag-Filter:** Tag-Filter sind explizit pro Anfrage und schließen nicht getaggte Ergebnisse aus. Research-Interest-Boosting ist implizit und dauerhaft für alle Anfragen aktiv – es unterdrückt keine Ergebnisse, sondern priorisiert sie. Beide Mechanismen sind kombinierbar.
+
+**Implementierungsstand:** `set_research_interests_tool()` in `src/calibre_mcp/server.py`. Keywords werden im Service-Layer geladen und bei der Ergebnisaufbereitung in `ArchillesService` angewendet.
+
+### ADR-020: `list_books_by_author` – Direkter Metadaten-Zugriff als eigenständiges Tool (März 2026)
+
+**Kontext:** `search_books_with_citations` ist ein Volltext- und Vektorsuchsystem, kein Metadaten-Abfragesystem. Autornamen tauchen in kurzen Texten (Artikel, Buchkapitel in Sammelbänden) oft nur auf der Titelseite auf – die entweder kein eigener Chunk im Index ist oder bei der Extraktion leer war. Ein Historiker, der alle Artikel eines bestimmten Autors in seiner Bibliothek finden will, bekommt über Vektorsuche unzuverlässige Ergebnisse.
+
+**Entscheidung:** Einführung von `list_books_by_author` als dediziertes MCP-Tool. Es fragt direkt gegen Calibres `metadata.db` ab (nicht gegen den LanceDB-Index) und gibt alle Titel eines Autors mit vollständigen Metadaten zurück. Unterstützt Partial-Match (case-insensitive), optionale Tag-Filter (AND-Logik), Jahresbereich-Filter und Sortierung nach Titel oder Jahr.
+
+**Begründung:** Der Unterschied zwischen "Suche nach Inhalten" und "Suche nach Titeln" ist für geisteswissenschaftliche Arbeit fundamental. Bibliographische Abfragen – wer hat was wann veröffentlicht – sind Metadaten-Aufgaben, keine Retrieval-Aufgaben. Die Trennung gehört in die Tool-Architektur des MCP-Servers, nicht nur in die Dokumentation. Das Tool ist auch die richtige Antwort auf eine häufige Nutzeranfrage: "Welche Artikel von Mason habe ich zu Josephus?" – eine Frage, die weder Vektorsuche noch Volltext-BM25 zuverlässig beantworten kann.
+
+**Implementierungsstand:** `list_books_by_author_tool()` in `src/calibre_mcp/server.py`. Direkter SQL-Zugriff auf `metadata.db` via `src/calibre_db.py`.
+
+### ADR-021: Erweiterte Batch-Indexierungsoptionen (März 2026)
+
+**Kontext:** Im Betrieb mit einer voll entwickelten Bibliothek von 8.000+ Titeln entstehen Szenarien, die über einfaches Tag-basiertes Batch-Indexieren hinausgehen: selektive Re-Indexierung einzelner Bücher via ID, Qualitätsfilterung nach Calibre-Rating, Autoren-Kreuzfilter innerhalb von Tag-Auswahlen, nicht-interaktiver Betrieb in gescripteten Workflows.
+
+**Entscheidungen:**
+
+- `--all`: Alle Bücher der Bibliothek indexieren (ohne Tag-Voraussetzung). Für den initialen Vollaufbau oder System-Migrationen.
+- `--ids 1234,5678`: Einzelne Bücher via Calibre-ID. Für gezielte Re-Indexierung nach Metadaten-Korrekturen oder Format-Wechseln.
+- `--filter-author NAME`: Sekundärfilter innerhalb einer `--tag`- oder `--all`-Auswahl. Erlaubt z.B. "alle Bücher der Leit-Literatur von Arendt oder Benjamin" ohne eine eigene Tag-Hierarchie.
+- `--min-rating N` / `--rating N`: Qualitätsfilter über Calibre-Sternebewertungen. Für selektives Indexieren des als besonders relevant bewerteten Bestands.
+- `--exclude-tag TAG` (wiederholbar): Gezielte Ausnahmen innerhalb einer Selektion. Die Default-Ausschlussliste (`exclude`, `Übersetzung`) ist hartcodiert; `--exclude-tag` ergänzt sie für den einzelnen Lauf.
+- `--include-excluded`: Hebt den Default-Ausschluss auf. Für Fälle, in denen Übersetzungen oder andersweitig markierte Bücher dennoch indexiert werden sollen.
+- `--non-interactive`: Unterdrückt Bestätigungsabfragen. Für Cronjobs, automatisierte Workflows und Remote-Ausführung.
+- `--reindex-missing-labels`: Selektive Re-Indexierung von Büchern, bei denen die Page-Label-Extraktion in einem früheren Lauf fehlschlug (z.B. weil der Extractor-Code verbessert wurde). Vermeidet teures Vollständig-Re-Indexieren.
+
+**Begründung:** Diese Flags sind keine Feature-Creep, sondern die logische Vervollständigung eines ernst gemeinten Batch-Systems. Jeder fortgeschrittene Nutzer mit einer großen Bibliothek braucht mindestens einen davon. Die Alternative – jedes Szenario manuell über Tag-Hierarchien abzubilden – verlegt die Komplexität in Calibre, wo sie nicht hingehört.
+
+### ADR-022: Apple Silicon MPS Support (März 2026)
+
+**Kontext:** BGE-M3 Embedding-Inferenz und der optionale Cross-Encoder Reranker profitieren erheblich von GPU-Beschleunigung. Während CUDA für Windows/Linux-Nutzer der Standardfall ist, haben macOS-Nutzer (Apple Silicon: M1–M4) keinen CUDA-Zugriff, aber Metal Performance Shaders (MPS) als GPU-Backend.
+
+**Entscheidung:** Automatische MPS-Erkennung in der Hardware-Detection-Schicht (`src/archilles/hardware.py`). Fallback-Kette: CUDA → MPS → CPU. Alle drei Profile (minimal/balanced/maximal) funktionieren auf MPS.
+
+**Begründung:** Apple Silicon Macs sind ein relevantes Segment der geisteswissenschaftlichen Nutzerbasis – Forschende an europäischen Universitäten arbeiten häufig mit MacBook Pro. MPS-Support ist keine große Implementierungsarbeit (PyTorch unterstützt MPS seit 1.12), aber ohne explizite Erkennung fällt das System auf CPU zurück und hinterlässt erhebliches Performance-Potenzial ungenutzt. Die Entscheidung, MPS als vollwertiges unterstütztes Backend zu dokumentieren und zu testen, ist eine Aussage über den Anspruch: ARCHILLES ist kein Windows-only-Tool.
+
+### ADR-023: Stop-Word-Removal für mehrere Sprachen (März 2026)
+
+**Kontext:** BM25 (Keyword-Suche) behandelt ohne Stop-Word-Filterung häufige Funktionswörter ("der", "die", "das", "the", "in", "de", "et") als relevante Terme und verschlechtert das Ranking. Für eine mehrsprachige Bibliothek mit Texten in Deutsch, Englisch, Latein, Altgriechisch und weiteren Sprachen ist eine rein englische Stop-Word-Liste unzureichend.
+
+**Entscheidung:** Multi-Language Stop-Word-Removal, angewendet bei der Indexierung (BM25-FTS-Aufbau) und bei der Query-Verarbeitung. Unterstützte Sprachen: EN, DE, FR, ES, IT, PT, NL, LA, RU, EL, HE, AR. Implementierung auf Basis von Lingua-erkannten Sprach-Codes pro Chunk.
+
+**Begründung:** Für eine historisch-geisteswissenschaftliche Bibliothek sind lateinische und griechische Funktionswörter ("in", "et", "de", "τῆς", "τοῦ") besonders problematisch: Sie erscheinen in fast jedem Chunk, erzeugen aber keine Relevanz-Information. Eine sprach-agnostische Stop-Word-Liste würde semantisch bedeutsame Terme in anderen Sprachen als Stop-Words misklassifizieren. Die pro-Chunk-Spracherkennung über Lingua ermöglicht sprachgerechtes Filtering ohne globalen Kompromiss.
+
+### ADR-024: Progress.db – Crash-sicheres Checkpoint-System für Batch-Indexierung (März 2026)
+
+**Kontext:** Lange Batch-Indexierungsläufe (50–500 Bücher, mehrere Stunden) können durch Systemabsturz, Stromausfall, Speichermangel oder manuelle Unterbrechung abgebrochen werden. Das `IndexingCheckpoint`-System in `src/archilles/indexer/checkpoint.py` verfolgt den Fortschritt auf Book-Level. Für noch feinkörnigere Crash-Sicherheit und zuverlässiges Resume wurde ein separates SQLite-Tracking eingeführt.
+
+**Entscheidung:** `progress.db` (SQLite) im `.archilles`-Ordner der Bibliothek als sekundäres Fortschritts-Log. Speichert pro Buch: Calibre-ID, Indexierungsstatus (pending/processing/done/failed), Timestamp, Chunk-Anzahl, ggf. Fehler-Trace. `--skip-existing` nutzt dieses Log für schnelles Pre-Filtering, ohne alle Bücher gegen die LanceDB abgleichen zu müssen.
+
+**Begründung:** LanceDB-Abfragen für jeden einzelnen Titel beim Startup wären bei 8.000+ Büchern inakzeptabel langsam. Eine SQLite-Tabelle mit dem Indexierungsstatus ist eine O(1)-Abfrage statt O(n)-Scan der Vektordatenbank. Das Checkpoint-System schützt außerdem gegen einen selten aber real auftretenden Datenverlust: Wird der LanceDB-Schreibvorgang mitten in einem Buch unterbrochen, kann der Eintrag inkonsistent sein. Progress.db ermöglicht das Erkennen und Bereinigen solcher Halbzustände.
+
+**Ergänzung: Backup-Rotation.** Parallel zu Progress.db wurde automatische Backup-Rotation implementiert: alle 50 Bücher wird ein LanceDB-Snapshot angelegt, 2 Backups werden aufbewahrt. Das begrenzt den maximalen Datenverlust bei Korruption auf 50 Bücher, ohne Disk-Space durch unbegrenzte Backup-Akkumulation zu verbrauchen.
+
 ---
 
 ## III. Produktstrategie und Geschäftsmodell
@@ -531,6 +596,10 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 ---
 
 *Nächste geplante Aktualisierungen:*
+- *ADR-025: HTTP/SSE-Transport für MCP-Server (LLM-Agnostizismus; geplant v1.0)*
+- *ADR-026: Inkrementelle Indexierung mit Index-Queue (geplant v1.0)*
+- *ADR-027: Markdown-Output via Docling als Extraktionsziel (nach Beta-Feedback)*
+- *ADR-028: VLM-basiertes OCR (LightOnOCR-2 / olmOCR-2; geplant v1.2)*
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*
 - *Entscheidung über MCPB-Implementation (nach Beta-Feedback)*
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*

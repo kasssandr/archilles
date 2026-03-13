@@ -75,6 +75,139 @@ class CalibreDB:
         return text
 
     @staticmethod
+    def parse_html_comment(html_text: str) -> list:
+        """
+        Parse Calibre comment HTML into structured sections for richer indexing.
+
+        H1/H2/H3 split the text into separate sections (each gets its own embedding).
+        H4 is treated like <b>/<strong>: its text becomes a key_passage,
+        prepended to the chunk text so it carries extra weight in the embedding.
+        H5/H6 are treated as normal paragraph text.
+
+        Key passages (bold, H3/H4, !!!text!!!) are prepended as
+        "Kernaussagen: A | B" before the section body, so they appear twice
+        in the chunk and influence the embedding more strongly.
+
+        Returns list of dicts:
+            headline       – H1/H2 heading text (None for preamble)
+            headline_level – int 1 or 2 (None for preamble)
+            text           – section body text, plain
+            key_passages   – bold / H3/H4 / !!!...!!! passages
+        """
+        if not html_text:
+            return []
+
+        _INTERNAL_TAG_RE = re.compile(r'!!!(.+?)!!!', re.DOTALL)
+
+        try:
+            from bs4 import BeautifulSoup, NavigableString, Tag
+
+            SPLIT_TAGS = {'h1', 'h2', 'h3'}  # start a new section
+            KEY_HEADING_TAGS = {'h4'}         # treated like bold: key_passage
+            BOLD_TAGS = {'b', 'strong', 'u'}
+
+            soup = BeautifulSoup(html_text, 'html.parser')
+            body = soup.body or soup
+
+            # Calibre wraps comment HTML in a single <div> — unwrap it so
+            # headings are visible at the iteration level
+            top = [c for c in body.children
+                   if getattr(c, 'name', None) or str(c).strip()]
+            if len(top) == 1 and getattr(top[0], 'name', None) == 'div':
+                body = top[0]
+
+            sections = []
+            current_headline = None
+            current_level = None
+            current_nodes = []
+
+            def flush():
+                if not current_nodes and current_headline is None:
+                    return
+                key_passages = []
+                plain_parts = []
+                for node in current_nodes:
+                    if isinstance(node, NavigableString):
+                        plain_parts.append(str(node).strip())
+                        continue
+                    node_tag = getattr(node, 'name', None)
+                    # H3/H4 headings: key_passage (like bold)
+                    if node_tag in KEY_HEADING_TAGS:
+                        t = node.get_text(' ', strip=True)
+                        if t and len(t) > 5:
+                            key_passages.append(t)
+                    # Bold/strong passages within any element
+                    for bold in node.find_all(BOLD_TAGS):
+                        t = bold.get_text(' ', strip=True)
+                        if t and len(t) > 5:
+                            key_passages.append(t)
+                    plain_parts.append(node.get_text(' ', strip=True))
+
+                full_text = ' '.join(p for p in plain_parts if p)
+                for m in _INTERNAL_TAG_RE.finditer(full_text):
+                    key_passages.append(m.group(1).strip())
+                full_text = _INTERNAL_TAG_RE.sub(r'\1', full_text)
+                full_text = re.sub(r'\s+', ' ', full_text).strip()
+
+                if full_text or current_headline:
+                    sections.append({
+                        'headline': current_headline,
+                        'headline_level': current_level,
+                        'text': full_text,
+                        'key_passages': key_passages,
+                    })
+
+            for element in body.children:
+                tag_name = getattr(element, 'name', None)
+                if tag_name in SPLIT_TAGS:
+                    flush()
+                    current_headline = element.get_text(' ', strip=True)
+                    current_level = int(tag_name[1])
+                    current_nodes = []
+                elif tag_name == 'hr':
+                    flush()
+                    current_headline = None
+                    current_level = None
+                    current_nodes = []
+                elif tag_name or (isinstance(element, NavigableString) and str(element).strip()):
+                    current_nodes.append(element)
+
+            flush()
+
+            # Merge short headerless sections (< 15 words) into the next section.
+            # Prevents mini-chunks from plain text that sits between <hr> and a headline.
+            MIN_MERGE_WORDS = 15
+            merged: list = []
+            for i, sec in enumerate(sections):
+                word_count = len(sec['text'].split()) if sec['text'] else 0
+                if (word_count < MIN_MERGE_WORDS and sec['headline'] is None
+                        and i + 1 < len(sections)):
+                    nxt = dict(sections[i + 1])
+                    if sec['text']:
+                        nxt['text'] = (sec['text'] + ' ' + nxt['text']).strip()
+                        nxt['key_passages'] = sec['key_passages'] + nxt['key_passages']
+                    sections[i + 1] = nxt
+                else:
+                    merged.append(sec)
+            sections = merged
+
+            if sections:
+                return sections
+
+        except Exception as e:
+            logger.debug(f"parse_html_comment failed, falling back to clean_html: {e}")
+
+        # Fallback: plain text with !!!...!!! extraction only
+        clean = CalibreDB.clean_html(html_text)
+        if not clean:
+            return []
+        key_passages = [m.group(1).strip() for m in _INTERNAL_TAG_RE.finditer(clean)]
+        clean = _INTERNAL_TAG_RE.sub(r'\1', clean)
+        return [{'headline': None, 'headline_level': None,
+                 'text': re.sub(r'\s+', ' ', clean).strip(),
+                 'key_passages': key_passages}]
+
+    @staticmethod
     def find_library_path(file_path: Path) -> Optional[Path]:
         """
         Find Calibre library path from a book file path.
@@ -246,7 +379,8 @@ class CalibreDB:
         tags = [r['name'] for r in cursor.fetchall()]
 
         # Clean comments (stored as HTML in Calibre)
-        comments_text = self.clean_html(row['comments']) if row['comments'] else None
+        comments_html = row['comments'] if row['comments'] else None
+        comments_text = self.clean_html(comments_html) if comments_html else None
 
         # Get custom fields
         custom_fields = {}
@@ -272,6 +406,7 @@ class CalibreDB:
             'path': row['path'],
             'tags': tags,
             'comments': comments_text,
+            'comments_html': comments_html,
         }
 
         if custom_fields:

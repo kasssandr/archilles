@@ -38,6 +38,7 @@ class DocumentMetadata:
     file_format: str
     tags: list[str] = field(default_factory=list)
     comments: str = ""
+    comments_html: str = ""  # Raw HTML from Calibre (for structured indexing)
     language: str = ""
     year: Optional[int] = None
     publisher: str = ""
