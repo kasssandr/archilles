@@ -322,6 +322,14 @@ class PDFExtractor(BaseExtractor):
             removed = original_lines - sum(len(p.split('\n')) for p in pages_text)
             print(f"  Removed {removed} header lines from {len(pages_text)} pages", flush=True)
 
+        # Detect and remove running footers (Verlagsnamen, URLs, etc.)
+        running_footers = self._detect_running_footers(pages_text)
+        if running_footers:
+            original_lines = sum(len(p.split('\n')) for p in pages_text)
+            pages_text = self._remove_running_footers(pages_text, running_footers)
+            removed = original_lines - sum(len(p.split('\n')) for p in pages_text)
+            print(f"  Removed {removed} footer lines from {len(pages_text)} pages", flush=True)
+
         full_text = '\n\n'.join(pages_text)
         chunks = self._create_chunks_with_pages(pages_text, pages_metadata, file_path, toc=toc)
 
@@ -363,6 +371,106 @@ class PDFExtractor(BaseExtractor):
     # Chunking
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # TOC-to-page mapping
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_page_toc_map(
+        toc: List[Dict[str, Any]],
+    ) -> Dict[int, Dict[str, str]]:
+        """
+        Build a mapping from physical page number to chapter/section info.
+
+        Returns {page_number: {chapter, section_title, toc_section_type}}
+        where toc_section_type is derived from TOC title keywords.
+        """
+        if not toc or len(toc) < 3:
+            return {}
+
+        # Filter out junk TOCs (scanner artifacts, all pointing to page 1, etc.)
+        pages_referenced = {e['page'] for e in toc}
+        if len(pages_referenced) <= 1:
+            return {}
+        junk_pattern = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)
+        junk_count = sum(1 for e in toc if junk_pattern.match(e['title'].strip()))
+        if junk_count > len(toc) * 0.5:
+            return {}
+
+        # Sort by page, preserving original order for same-page entries
+        sorted_toc = sorted(toc, key=lambda e: e['page'])
+
+        # Build page ranges: each entry covers from its page to next entry's page - 1
+        # Track current level-1 heading as "chapter", deeper levels as "section_title"
+        current_chapter = ''
+        entries_with_ranges = []
+        for i, entry in enumerate(sorted_toc):
+            end_page = sorted_toc[i + 1]['page'] - 1 if i + 1 < len(sorted_toc) else 999999
+            entries_with_ranges.append({
+                'level': entry['level'],
+                'title': entry['title'],
+                'start': entry['page'],
+                'end': end_page,
+            })
+
+        # Assign chapter/section_title per page
+        page_map: Dict[int, Dict[str, str]] = {}
+        current_chapter = ''
+        current_section = ''
+
+        for entry in entries_with_ranges:
+            if entry['level'] == 1:
+                current_chapter = entry['title']
+                current_section = ''
+            else:
+                current_section = entry['title']
+
+            for p in range(entry['start'], entry['end'] + 1):
+                # Only set if not already set by a more specific (deeper) entry
+                if p not in page_map:
+                    page_map[p] = {
+                        'chapter': current_chapter,
+                        'section_title': current_section,
+                    }
+                elif entry['level'] > 1:
+                    # Deeper entry overrides section_title but keeps chapter
+                    page_map[p]['section_title'] = current_section
+
+        return page_map
+
+    _FRONT_MATTER_TOC_KEYWORDS = frozenset([
+        'preface', 'vorwort', 'foreword', 'geleitwort',
+        'acknowledgments', 'acknowledgements', 'danksagung',
+        'table of contents', 'contents', 'inhaltsverzeichnis', 'inhalt',
+        'dedication', 'widmung', 'about the author', 'über den autor',
+        'prologue', 'prolog', 'copyright', 'isbn',
+        # NB: "introduction/einleitung" bewusst NICHT hier —
+        # Einleitungen sind inhaltlich relevant und gehören zu main_content.
+    ])
+
+    _BACK_MATTER_TOC_KEYWORDS = frozenset([
+        'index', 'register', 'sachregister', 'personenregister', 'namenregister',
+        'bibliography', 'bibliographie', 'literaturverzeichnis', 'literatur',
+        'references', 'quellenverzeichnis',
+        'glossary', 'glossar',
+        'appendix', 'anhang',
+        'notes', 'endnotes', 'anmerkungen', 'endnoten',
+        'epilogue', 'epilog', 'nachwort', 'afterword',
+        'abbreviations', 'abkürzungen', 'abkürzungsverzeichnis',
+    ])
+
+    @classmethod
+    def _section_type_from_toc_title(cls, title: str) -> Optional[str]:
+        """Derive section_type from a TOC entry title, or None if unclear."""
+        t = title.strip().lower()
+        for kw in cls._BACK_MATTER_TOC_KEYWORDS:
+            if kw in t:
+                return 'back_matter'
+        for kw in cls._FRONT_MATTER_TOC_KEYWORDS:
+            if kw in t:
+                return 'front_matter'
+        return None
+
     def _create_chunks_with_pages(
         self,
         pages_text: List[str],
@@ -373,15 +481,33 @@ class PDFExtractor(BaseExtractor):
         """Create chunks while preserving page information and section type."""
         chunks = []
         total_pages = len(pages_text)
+        page_toc_map = self._build_page_toc_map(toc or [])
 
         for page_num, (page_text, page_meta) in enumerate(zip(pages_text, pages_metadata), start=1):
-            section_type = self._detect_section_type(page_text, page_num, total_pages, toc)
+            phys_page = page_meta['page']
+            toc_info = page_toc_map.get(phys_page, {})
+
+            # section_type: prefer TOC-based, fall back to page heuristic
+            toc_section_type = None
+            chapter = toc_info.get('chapter', '')
+            section_title = toc_info.get('section_title', '')
+            if chapter:
+                toc_section_type = self._section_type_from_toc_title(chapter)
+            if toc_section_type is None and section_title:
+                toc_section_type = self._section_type_from_toc_title(section_title)
+
+            if toc_section_type is not None:
+                section_type = toc_section_type
+            else:
+                section_type = self._detect_section_type(page_text, page_num, total_pages, toc)
 
             base_metadata = ChunkMetadata(
                 source_file=str(file_path),
                 format='pdf',
                 page=page_meta['page'],
                 page_label=page_meta.get('page_label'),
+                chapter=chapter or None,
+                section_title=section_title or None,
                 section_type=section_type,
             )
 
@@ -489,6 +615,105 @@ class PDFExtractor(BaseExtractor):
                 if not is_header:
                     cleaned_lines.append(line)
 
+            cleaned_pages.append('\n'.join(cleaned_lines))
+
+        return cleaned_pages
+
+    # ------------------------------------------------------------------
+    # Running footer detection and removal
+    # ------------------------------------------------------------------
+
+    def _detect_running_footers(
+        self,
+        pages_text: List[str],
+        min_occurrences: Optional[int] = None,
+        similarity_threshold: float = 0.85,
+    ) -> List[str]:
+        """
+        Detect running footers that repeat across pages.
+
+        Mirrors _detect_running_headers but checks the last 3 non-empty
+        lines of each page. Uses a higher default threshold than headers
+        (5% of pages, minimum 10) to avoid false positives from repeated
+        footnotes.
+        """
+        if min_occurrences is None:
+            min_occurrences = max(10, len(pages_text) // 20)
+        if len(pages_text) < min_occurrences:
+            return []
+
+        last_lines = []
+        for page_text in pages_text:
+            lines = page_text.strip().split('\n')
+            lines_checked = 0
+            for line in reversed(lines):
+                if lines_checked >= 3:
+                    break
+                if not line.strip():
+                    continue
+                lines_checked += 1
+                normalized = _normalize_header_line(line)
+                if normalized and len(normalized) > 5:
+                    last_lines.append(normalized)
+
+        # Group similar footers
+        footer_groups: List[tuple] = []
+        for normalized in last_lines:
+            matched = False
+            for i, (canonical, count) in enumerate(footer_groups):
+                if _strings_are_similar(normalized, canonical, similarity_threshold):
+                    best = normalized if len(normalized) > len(canonical) else canonical
+                    footer_groups[i] = (best, count + 1)
+                    matched = True
+                    break
+            if not matched:
+                footer_groups.append((normalized, 1))
+
+        running_footers = [
+            footer for footer, count in footer_groups
+            if count >= min_occurrences
+        ]
+
+        if running_footers:
+            print(f"  Footer analysis: {len(running_footers)} running footer pattern(s) found", flush=True)
+            for f in running_footers[:5]:
+                f_display = f"{f[:50]}..." if len(f) > 50 else f
+                print(f"     \"{f_display}\"", flush=True)
+
+        return running_footers
+
+    def _remove_running_footers(
+        self,
+        pages_text: List[str],
+        running_footers: List[str],
+        similarity_threshold: float = 0.85,
+    ) -> List[str]:
+        """Remove detected running footers from the last 3 non-empty lines of each page."""
+        cleaned_pages = []
+
+        for page_text in pages_text:
+            lines = page_text.strip().split('\n')
+
+            # Identify footer lines by scanning from the end
+            footer_indices = set()
+            lines_checked = 0
+            for idx in range(len(lines) - 1, -1, -1):
+                if lines_checked >= 3:
+                    break
+                if not lines[idx].strip():
+                    continue
+                lines_checked += 1
+                normalized = _normalize_header_line(lines[idx])
+                if normalized:
+                    for footer in running_footers:
+                        if _strings_are_similar(normalized, footer, similarity_threshold):
+                            footer_indices.add(idx)
+                            break
+
+            cleaned_lines = [
+                line for idx, line in enumerate(lines)
+                if idx not in footer_indices
+            ]
             cleaned_pages.append('\n'.join(cleaned_lines))
 
         return cleaned_pages
