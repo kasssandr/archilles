@@ -77,7 +77,13 @@ python scripts/batch_index.py --tag "History" --skip-existing
 
 ### Can I index books not in Calibre?
 
-Not currently. Archilles requires the Calibre library structure (it reads metadata directly from Calibre's `metadata.db`).
+Yes. As of v0.9, Archilles supports multiple source backends via adapters:
+- **Calibre** (default) — reads metadata from `metadata.db`
+- **Zotero** — reads from Zotero's SQLite database
+- **Obsidian** — indexes Markdown files with YAML frontmatter from an Obsidian vault
+- **Folder** — indexes any directory of supported files (PDF, EPUB, TXT, etc.)
+
+Set `ARCHILLES_LIBRARY_PATH` to point at any of these. The adapter is auto-detected from the directory structure.
 
 ### What file formats are supported?
 

@@ -70,12 +70,15 @@ Configurable threshold filters out low-confidence matches before they reach the 
 ### 2.2 PDF Extraction Quality
 - **CropBox filtering**: eliminates headers, footers, and running page numbers before chunking
 - **Page label extraction**: maps printed page numbers (e.g. "xiv", "47") to chunks for citation-accurate references
+- **TOC-aware chunking**: `chapter` and `section_title` populated from the PDF's table of contents. Junk TOCs (scanner artifacts) are auto-detected and ignored
+- **Running footer removal**: detects and removes repeated footer lines (page numbers, publisher names, URLs) while preserving footnotes
 - **Footer detection with footnote disambiguation**: retains footnotes, removes page-bottom noise
 - **Scanned PDF detection**: per-page word-count heuristics trigger OCR path automatically
 - **Multi-tier fallback**: PyMuPDF → pdfplumber → OCR
 
 ### 2.3 EPUB Extraction Quality
-- **TOC-based section classification**: content automatically labeled as `front_matter`, `main`, or `back_matter`
+- **TOC-based section classification**: content automatically labeled as `front_matter`, `main`, or `back_matter` using semantic titles (H1 text or TOC titles), never raw filenames
+- **Introduction as main content**: introductions/Einleitungen are deliberately classified as main_content, not front_matter
 - Structural HTML preserved through extraction; chapter boundaries recognized
 - Significantly faster than PDF; no page numbers (chapter/section references instead)
 
@@ -147,6 +150,24 @@ Hardware auto-detection selects the appropriate profile when none is specified. 
 python scripts/rag_demo.py index "/path/to/book.pdf"
 python scripts/rag_demo.py index "/path/to/book.pdf" --book-id "Arendt_VitaActiva"
 ```
+
+---
+
+### 2.10 Source Adapters
+ARCHILLES supports multiple library backends, auto-detected from the directory structure:
+
+| Adapter | Backend | Detection |
+|---------|---------|-----------|
+| `CalibreAdapter` | Calibre library | Detects `metadata.db` (default) |
+| `ZoteroAdapter` | Zotero library | Detects `zotero.sqlite` |
+| `ObsidianAdapter` | Obsidian vault | Detects `.obsidian/` directory |
+| `FolderAdapter` | Plain directory | Fallback for any supported file collection |
+
+### 2.11 DialogueChunker
+Specialized chunker for chat and Q&A exports (ChatGPT, Gemini, Grok, NotebookLM). Recognizes turn markers (`## User`, `## Assistant`, `**Q:**`, etc.) and chunks per turn or turn-pair, preserving `speaker` metadata. Registered in `ChunkerRegistry`, auto-activated when dialogue structure is detected.
+
+### 2.12 Chunk Inspector (`scripts/chunk_inspector.py`)
+Diagnostic CLI tool for analyzing chunk quality. Reports chunk statistics, metadata coverage, boundary analysis (truncation detection), and TOC alignment for both PDFs and EPUBs. Supports `--calibre-id`, `--toc`, `--summary-only`, and `--export` for Markdown reports.
 
 ---
 
@@ -285,7 +306,7 @@ Python 3.11+. Cross-platform: Windows (primary), macOS (including Apple Silicon 
 
 | Variable | Description |
 |----------|-------------|
-| `ARCHILLES_LIBRARY_PATH` | Path to Calibre library (required) |
+| `ARCHILLES_LIBRARY_PATH` | Path to library root — Calibre, Zotero, Obsidian, or folder (required) |
 | `CALIBRE_LIBRARY_PATH` | Legacy alias |
 | `RAG_DB_PATH` | Override LanceDB path |
 | `CUDA_VISIBLE_DEVICES` | GPU selection |

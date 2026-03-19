@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** February 2026
+**Last updated:** March 2026
 
 ---
 
@@ -35,6 +35,10 @@ Die Basis steht. Der Core-Bestand (Leit-Literatur) mit 267 Titeln ist nahezu vol
 
 Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche mit BGE-M3-Embeddings (multilingual, 75+ Sprachen). Keyword-Suche über BM25. Hybride Suche mit Reciprocal Rank Fusion. Calibre-Metadaten-Integration einschließlich Tags, Comments (mit HTML-Cleaning) und automatischer Custom-Field-Erkennung. Annotationsextraktion aus dem Calibre E-book Viewer (Highlights, Notes, Bookmarks). LanceDB als Vektordatenbank mit nativer Hybrid-Search und IVF-PQ-Indexing. Zwei-Datenbanken-Architektur vollständig realisiert: Mit der Migration von ChromaDB zu LanceDB (Februar 2026) nutzen sowohl Buchinhalte als auch Annotationen einheitlich BGE-M3-Embeddings in zwei getrennten LanceDB-Tabellen — eine einzige Vektor-DB-Engine, keine externe Dependency mehr. Service-Layer-Architektur (`ArchillesService`) als zentrale Geschäftslogik-Fassade für MCP-Server, Web UI und CLI. Cross-Encoder Reranking (optional, BAAI/bge-reranker-v2-m3). MCP-Server mit 12 Tools für Claude Desktop und andere MCP-kompatible Clients. Bibliographie-Export in BibTeX, RIS, EndNote, JSON und CSV. Duplikaterkennung nach Titel+Autor, ISBN oder exaktem Titel. Streamlit-basiertes Web UI als Companion-Interface. Batch-Indexierung mit Tag-/Autoren-Filtern, Checkpoint-Resume und Hardware-Profilen.
 
+**Neu in v0.9 (März 2026):**
+
+Source Adapters: Neben Calibre werden jetzt auch Zotero-Bibliotheken, Obsidian-Vaults und einfache Ordnerstrukturen als Quellen unterstützt (`CalibreAdapter`, `ZoteroAdapter`, `ObsidianAdapter`, `FolderAdapter`). Structure-Aware PDF Chunking: PDF-Chunks tragen jetzt `chapter` und `section_title` aus dem TOC, mit Junk-TOC-Filterung für Scanner-PDFs. Running-Footer-Erkennung und -Entfernung für sauberere PDF-Chunks. EPUB-section_type-Fix: Klassifikation basiert nur noch auf semantischen Titeln, nicht auf Dateinamen. DialogueChunker für Chat-/Q&A-Exporte (ChatGPT, Gemini, Grok, NotebookLM). SemanticChunker verbessert: Markdown-Heading-Erkennung (H1/H2 erzwingen Chunk-Breaks), Splitting überlanger Absätze. Chunk Inspector als Diagnosetool (`scripts/chunk_inspector.py`). TXT-Extractor mit YAML-Frontmatter-Stripping für Obsidian-Dateien.
+
 ---
 
 ## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
@@ -53,9 +57,9 @@ Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher akt
 
 **Fokus:** Die Qualität der Suchergebnisse substantiell verbessern.
 
-Die Chunking-Intelligence-Analyse (durchgeführt über Gemini, Grok und ChatGPT, November 2025) identifizierte hierarchisches Chunking als den größten einzelnen Qualitätshebel. Die aktuelle Konfiguration (RecursiveCharacterTextSplitter mit 1000 Token / 200 Overlap) liefert solide Ergebnisse, verschenkt aber Potenzial bei langen argumentativen Passagen — genau dem Texttyp, der für geisteswissenschaftliche Arbeit zentral ist.
+**Teilweise umgesetzt (März 2026):** Structure-Aware Chunking ist implementiert — PDF-Chunks tragen jetzt `chapter`/`section_title` aus dem TOC, der SemanticChunker erkennt Markdown-Headings und erzwingt Chunk-Breaks an Kapitelgrenzen. Der DialogueChunker behandelt Chat-Exporte korrekt. Running-Footer-Entfernung verbessert die Chunk-Qualität bei PDFs. Die verbleibende Arbeit betrifft fortgeschrittene Chunking-Strategien.
 
-**Small-to-Big Retrieval und Parent-Child-Hierarchien:** Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, liefere dem LLM aber den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Bereits einfaches Recursive Hierarchical Chunking bringt ca. 80% des Qualitätsgewinns gegenüber flachem Chunking.
+**Small-to-Big Retrieval und Parent-Child-Hierarchien:** Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, liefere dem LLM aber den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Bereits einfaches Recursive Hierarchical Chunking bringt ca. 80% des Qualitätsgewinns gegenüber flachem Chunking. Das Schema (`parent_id`, `window_text`, `chunk_type`) ist bereits vorhanden.
 
 **Semantic-Hybrid-Chunking (Upgrade-Pfad):** Kombiniert semantisches Splitting via Embedding-Ähnlichkeit mit Agglomerative Clustering und dynamischen Thresholds, die sich automatisch pro Buch anpassen. Weitere 20–30% Qualitätsgewinn, aber signifikant mehr Implementierungsaufwand — daher als optionaler Upgrade-Pfad nach der Parent-Child-Grundlage.
 
@@ -117,9 +121,7 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 
 ## Langfristiger Horizont
 
-**Multi-Library-Support:** Verwaltung mehrerer Calibre-Bibliotheken, bibliotheksübergreifende Suche, bibliotheksspezifische Konfigurationen.
-
-**Zotero-Backend:** Parallele Unterstützung neben Calibre für Nutzer, die ihre Referenzverwaltung dort pflegen.
+**Multi-Library-Support:** Verwaltung mehrerer Bibliotheken (Calibre, Zotero, Obsidian), bibliotheksübergreifende Suche, bibliotheksspezifische Konfigurationen.
 
 **Wikidata-Integration:** Entity-Disambiguierung für präzisere Wissensgraphen.
 
