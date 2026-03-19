@@ -485,9 +485,8 @@ def get_books_by_ids(library_path: Path, calibre_ids: List[int]) -> List[Dict[st
 
 def get_all_calibre_ids(library_path: Path) -> set:
     """
-    Return the set of ALL Calibre book IDs (as strings, no filters).
-    Used for orphan detection — we compare against the full library,
-    not just the subset selected by --tag / --author / --all.
+    Return the set of ALL Calibre book IDs (as strings) via direct SQLite.
+    Legacy fallback used only when no adapter is available.
     """
     db_path = library_path / "metadata.db"
     if not db_path.exists():
@@ -504,25 +503,39 @@ def cleanup_orphans(
     rag: archillesRAG,
     library_path: Path,
     dry_run: bool = False,
+    adapter=None,
 ) -> Dict[str, Any]:
     """
-    Remove LanceDB entries for books that no longer exist in Calibre.
+    Remove LanceDB entries for books that no longer exist in the library.
 
-    Compares every book_id in the index against the full unfiltered Calibre
-    library and deletes chunks for any book that has been removed from Calibre.
+    Compares every book_id in the index against the full unfiltered library
+    and deletes chunks for any book that has been removed.
+
+    Uses the adapter (if provided) for library ID discovery so that
+    non-Calibre backends (Folder, Obsidian, Zotero) are handled correctly.
+    Falls back to direct SQLite access for legacy Calibre-only setups.
 
     Args:
         rag: Initialized archillesRAG instance
-        library_path: Path to the Calibre library directory
+        library_path: Path to the library directory
         dry_run: If True, report orphans without deleting anything
+        adapter: SourceAdapter instance (preferred over direct DB access)
 
     Returns:
         Dict with 'orphans_found' and 'orphans_removed' counts.
     """
     print("\n🔍 Scanning for orphaned index entries...")
 
-    calibre_ids = get_all_calibre_ids(library_path)
-    print(f"   Calibre library: {len(calibre_ids)} books")
+    if adapter is not None:
+        docs = adapter.list_documents()
+        library_ids = {doc.doc_id for doc in docs}
+        print(f"   Library ({adapter.adapter_type}): {len(library_ids)} documents")
+    else:
+        library_ids = get_all_calibre_ids(library_path)
+        print(f"   Calibre library: {len(library_ids)} books (legacy mode)")
+
+    # alias for the rest of the function (was calibre_ids)
+    calibre_ids = library_ids
 
     all_chunks = rag.store.get_book_ids_for_skip_check()
     indexed_ids = {chunk['book_id'] for chunk in all_chunks}
@@ -934,9 +947,13 @@ def batch_index(
             break
 
         book_id = create_book_id(book)
-        selected = _select_best_format(book['formats'], prefer_format)
-        file_path = selected['path']
-        format_type = selected['format']
+
+        # Build ordered format list: preferred first, alternatives as fallbacks
+        best = _select_best_format(book['formats'], prefer_format)
+        ordered_formats = [best] + [f for f in book['formats'] if f['path'] != best['path']]
+
+        file_path = best['path']
+        format_type = best['format']
 
         # Progress header
         print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
@@ -953,94 +970,112 @@ def batch_index(
             })
             continue
 
-        # Actually index the book
-        try:
-            start_time = time.time()
-            result = rag.index_book(file_path, book_id, force=should_force, phase=phase)
-            elapsed = time.time() - start_time
+        # Try each format in order, falling back on extraction failure
+        result = None
+        elapsed = 0.0
+        last_exc = None
 
-            # Handle already-indexed books (from LanceDB check, not progress tracker)
-            if result.get('status') == 'already_indexed':
-                print(f"         ⏭️  SKIPPED (already in LanceDB: {result['chunks_indexed']} chunks)")
-                stats['skipped'] += 1
-                if safe_indexer:
-                    safe_indexer.record_book(book_id, phase, 'skipped')
-                stats['books_processed'].append({
-                    'id': book_id,
-                    'title': book['title'],
-                    'status': 'skipped',
-                    'reason': 'already in LanceDB'
-                })
-                continue
+        for fmt_entry in ordered_formats:
+            try:
+                start_time = time.time()
+                result = rag.index_book(fmt_entry['path'], book_id, force=should_force, phase=phase)
+                elapsed = time.time() - start_time
+                file_path = fmt_entry['path']
+                format_type = fmt_entry['format']
+                last_exc = None
+                break  # success — stop trying further formats
+            except Exception as e:
+                last_exc = e
+                remaining = ordered_formats[ordered_formats.index(fmt_entry) + 1:]
+                if remaining:
+                    print(f"         ⚠️  {fmt_entry['format']} failed ({e}), trying {remaining[0]['format']}...")
 
-            # Handle metadata-only updates (no full re-index needed)
-            if result.get('status') == 'metadata_updated':
-                print(f"         📝 Metadata updated in {result.get('total_time', 0):.1f}s (content unchanged)")
-                stats['indexed'] += 1
-                if safe_indexer:
-                    safe_indexer.record_book(book_id, phase, 'success',
-                                           chunks=result.get('chunks_indexed', 0),
-                                           duration=result.get('total_time', 0))
-                stats['books_processed'].append({
-                    'id': book_id,
-                    'title': book['title'],
-                    'status': 'metadata_updated',
-                    'time': result.get('total_time', 0)
-                })
-                continue
+        # All formats exhausted without success
+        if last_exc is not None:
+            error_msg = str(last_exc)
+            tried = ', '.join(f['format'] for f in ordered_formats)
+            print(f"         ❌ FAILED (tried: {tried}): {error_msg}")
 
-            # Regular indexing completed
-            if should_force:
-                print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
-            else:
-                print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
-
-            # Record success in progress tracker
-            if safe_indexer:
-                safe_indexer.record_book(
-                    book_id=book_id,
-                    phase=phase,
-                    status='success',
-                    chunks=result.get('chunks_indexed', 0),
-                    duration=elapsed
-                )
-
-            stats['indexed'] += 1
-            if result.get('needs_ocr'):
-                stats['needs_ocr'].append({'id': book_id, 'title': book['title']})
-            stats['books_processed'].append({
-                'id': book_id,
-                'title': book['title'],
-                'status': 'success',
-                'chunks': result['chunks_indexed'],
-                'time': elapsed
-            })
-
-        except Exception as e:
-            error_msg = str(e)
-            print(f"         ❌ FAILED: {error_msg}")
-
-            # Record failure in progress tracker
             if safe_indexer:
                 safe_indexer.record_book(
                     book_id=book_id,
                     phase=phase,
                     status='failed',
-                    error=error_msg[:500]  # Limit error message length
+                    error=error_msg[:500],
                 )
 
             stats['failed'] += 1
             stats['errors'].append({
                 'book_id': book_id,
                 'title': book['title'],
-                'error': error_msg
+                'error': error_msg,
             })
             stats['books_processed'].append({
                 'id': book_id,
                 'title': book['title'],
                 'status': 'failed',
-                'error': error_msg
+                'error': error_msg,
             })
+            continue
+
+        # Handle already-indexed books (from LanceDB check, not progress tracker)
+        if result.get('status') == 'already_indexed':
+            print(f"         ⏭️  SKIPPED (already in LanceDB: {result['chunks_indexed']} chunks)")
+            stats['skipped'] += 1
+            if safe_indexer:
+                safe_indexer.record_book(book_id, phase, 'skipped')
+            stats['books_processed'].append({
+                'id': book_id,
+                'title': book['title'],
+                'status': 'skipped',
+                'reason': 'already in LanceDB'
+            })
+            continue
+
+        # Handle metadata-only updates (no full re-index needed)
+        if result.get('status') == 'metadata_updated':
+            print(f"         📝 Metadata updated in {result.get('total_time', 0):.1f}s (content unchanged)")
+            stats['indexed'] += 1
+            if safe_indexer:
+                safe_indexer.record_book(book_id, phase, 'success',
+                                       chunks=result.get('chunks_indexed', 0),
+                                       duration=result.get('total_time', 0))
+            stats['books_processed'].append({
+                'id': book_id,
+                'title': book['title'],
+                'status': 'metadata_updated',
+                'time': result.get('total_time', 0)
+            })
+            continue
+
+        # Regular indexing completed
+        if should_force:
+            print(f"         ♻️  Re-indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
+        else:
+            print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
+        if format_type != best['format']:
+            print(f"         ↩️  Used fallback format: {format_type} (primary {best['format']} failed)")
+
+        # Record success in progress tracker
+        if safe_indexer:
+            safe_indexer.record_book(
+                book_id=book_id,
+                phase=phase,
+                status='success',
+                chunks=result.get('chunks_indexed', 0),
+                duration=elapsed
+            )
+
+        stats['indexed'] += 1
+        if result.get('needs_ocr'):
+            stats['needs_ocr'].append({'id': book_id, 'title': book['title']})
+        stats['books_processed'].append({
+            'id': book_id,
+            'title': book['title'],
+            'status': 'success',
+            'chunks': result['chunks_indexed'],
+            'time': elapsed
+        })
 
     # Final summary
     stats['end_time'] = datetime.now().isoformat()
@@ -1474,7 +1509,7 @@ Profiles:
 
     # Orphan cleanup (after indexing, or standalone)
     if args.cleanup_orphans:
-        cleanup_orphans(rag, library_path, dry_run=args.dry_run)
+        cleanup_orphans(rag, library_path, dry_run=args.dry_run, adapter=adapter)
 
 
 if __name__ == '__main__':

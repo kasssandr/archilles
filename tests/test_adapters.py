@@ -232,9 +232,9 @@ class TestDetectAdapterType:
     def test_folder_fallback(self, empty_folder):
         assert detect_adapter_type(empty_folder) == "folder"
 
-    def test_obsidian_returns_folder(self, empty_folder):
+    def test_obsidian_detected(self, empty_folder):
         (empty_folder / ".obsidian").mkdir()
-        assert detect_adapter_type(empty_folder) == "folder"
+        assert detect_adapter_type(empty_folder) == "obsidian"
 
 
 # ── Factory ─────────────────────────────────────────────────────
@@ -610,3 +610,163 @@ class TestFolderAdapter:
         assert adapter.list_documents() == []
         assert adapter.get_metadata("any") is None
         assert adapter.get_file_path("any") is None
+
+
+# ── ObsidianAdapter ─────────────────────────────────────────────
+
+
+@pytest.fixture
+def obsidian_vault(tmp_path):
+    """Create a minimal Obsidian vault for testing."""
+    # .obsidian config dir (enables auto-detection)
+    (tmp_path / ".obsidian").mkdir()
+
+    # .trash — should NOT be indexed
+    (tmp_path / ".trash").mkdir()
+    (tmp_path / ".trash" / "deleted_note.md").write_text(
+        "---\ntitle: Deleted\n---\nThis should not be indexed.",
+        encoding="utf-8",
+    )
+
+    # Note with full frontmatter
+    (tmp_path / "Notizen").mkdir()
+    (tmp_path / "Notizen" / "josephus-hypothese.md").write_text(
+        textwrap.dedent("""\
+        ---
+        title: Die Josephus-Hypothese
+        authors:
+          - Max Mustermann
+          - Anna Beispiel
+        tags:
+          - Judentum
+          - Antike
+        created: "2025-11-01"
+        language: de
+        type: research-note
+        source_llm: claude-3-5-sonnet
+        aliases:
+          - Josephus
+        ---
+
+        Ein erster Absatz über die Hypothese.
+
+        Mehr Details folgen hier. Verweis auf [[Flavius Josephus]] und [[Römisches Reich]].
+        Ein Inline-Tag: #Historiographie und #Antike/Judentum.
+        """),
+        encoding="utf-8",
+    )
+
+    # Note without any frontmatter
+    (tmp_path / "Notizen" / "ohne-frontmatter.md").write_text(
+        "Kein Frontmatter hier. Nur Text. #lesezeichen",
+        encoding="utf-8",
+    )
+
+    # Chat-import style filename (Obsidian should still parse filename)
+    (tmp_path / "KI-Chats").mkdir()
+    (tmp_path / "KI-Chats" / "2026-03-01_claude_thema.md").write_text(
+        "---\ntitle: KI-Chat Thema\n---\nInhalt des Chats.",
+        encoding="utf-8",
+    )
+
+    # Non-markdown file (FolderAdapter logic should handle it)
+    (tmp_path / "papers").mkdir()
+    (tmp_path / "papers" / "wichtig.pdf").write_bytes(b"dummy pdf")
+
+    return tmp_path
+
+
+class TestObsidianAdapter:
+    def test_adapter_type(self, obsidian_vault):
+        from src.adapters.obsidian_adapter import ObsidianAdapter
+        adapter = ObsidianAdapter(obsidian_vault)
+        assert adapter.adapter_type == "obsidian"
+
+    def test_autodetect(self, obsidian_vault):
+        from src.adapters.obsidian_adapter import ObsidianAdapter
+        adapter = create_adapter(obsidian_vault)
+        assert isinstance(adapter, ObsidianAdapter)
+        assert adapter.adapter_type == "obsidian"
+
+    def test_folder_override(self, obsidian_vault):
+        from src.adapters.folder_adapter import FolderAdapter
+        adapter = create_adapter(obsidian_vault, "folder")
+        assert isinstance(adapter, FolderAdapter)
+        assert adapter.adapter_type == "folder"
+
+    def test_frontmatter_title_tags_authors(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if "josephus" in d.file_path.name)
+        assert note.title == "Die Josephus-Hypothese"
+        assert note.authors == ["Max Mustermann", "Anna Beispiel"]
+        assert "Judentum" in note.tags
+        assert "Antike" in note.tags
+        assert note.language == "de"
+        assert note.year == 2025
+
+    def test_frontmatter_missing_fields_no_crash(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if d.file_path.name == "ohne-frontmatter.md")
+        assert note.title == "ohne-frontmatter"  # falls back to stem
+        assert isinstance(note.tags, list)
+        assert isinstance(note.authors, list)
+
+    def test_wikilinks_extracted(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if "josephus" in d.file_path.name)
+        wikilinks = note.custom_fields.get("wikilinks", [])
+        assert "Flavius Josephus" in wikilinks
+        assert "Römisches Reich" in wikilinks
+
+    def test_inline_tags_merged(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if "josephus" in d.file_path.name)
+        # frontmatter tags + inline tags combined
+        assert "Historiographie" in note.tags
+        assert "Antike/Judentum" in note.tags
+
+    def test_trash_excluded(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        paths = [str(d.file_path) for d in docs]
+        assert not any(".trash" in p for p in paths)
+
+    def test_obsidian_dir_excluded(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        paths = [str(d.file_path) for d in docs]
+        assert not any(".obsidian" in p for p in paths)
+
+    def test_non_md_file_indexed(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        formats = {d.file_format for d in docs}
+        assert "pdf" in formats
+
+    def test_existing_folder_adapter_tests_pass(self, obsidian_vault):
+        """Obsidian adapter inherits FolderAdapter — basic contract holds."""
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        assert len(docs) > 0
+        for doc in docs:
+            assert doc.doc_id.startswith("folder:")
+            assert isinstance(doc.tags, list)
+            assert doc.file_path.exists()
+
+    def test_custom_fields_type_and_source_llm(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if "josephus" in d.file_path.name)
+        assert note.custom_fields.get("type") == "research-note"
+        assert note.custom_fields.get("source_llm") == "claude-3-5-sonnet"
+        assert note.custom_fields.get("aliases") == ["Josephus"]
+
+    def test_first_paragraph_as_comment(self, obsidian_vault):
+        adapter = create_adapter(obsidian_vault)
+        docs = adapter.list_documents()
+        note = next(d for d in docs if "josephus" in d.file_path.name)
+        assert "Hypothese" in adapter.get_comments(note.doc_id)
