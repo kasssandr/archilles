@@ -10,6 +10,7 @@ This module provides:
 - Integration with existing ChromaDB storage
 """
 
+import re
 import time
 import logging
 from pathlib import Path
@@ -119,6 +120,9 @@ class ModularPipeline:
 
         # Track if embedder is loaded
         self._embedder_loaded = False
+
+        # Lazily initialised alternative chunkers
+        self._dialogue_chunker: Optional[TextChunker] = None
 
     @classmethod
     def from_profile(cls, profile_name: str) -> 'ModularPipeline':
@@ -251,6 +255,54 @@ class ModularPipeline:
             batch_size=self.profile.batch_size
         )
 
+    # ── Chunker selection ────────────────────────────────────────
+
+    def _read_frontmatter_field(self, file_path: Path, field_name: str) -> str:
+        """Return a scalar YAML frontmatter field from a Markdown file, or ''."""
+        try:
+            text = file_path.read_text(encoding='utf-8', errors='replace')
+            if not text.startswith('---'):
+                return ''
+            end = text.find('\n---', 3)
+            if end == -1:
+                return ''
+            yaml_block = text[3:end]
+            m = re.search(
+                r'^' + re.escape(field_name) + r':\s*([^\n]+)',
+                yaml_block,
+                re.MULTILINE,
+            )
+            return m.group(1).strip().strip('"\'') if m else ''
+        except Exception:
+            return ''
+
+    def _select_chunker(self, file_path: Path) -> TextChunker:
+        """Return the appropriate chunker for *file_path*.
+
+        Checks ``chunking_strategy`` in the YAML frontmatter for Markdown files.
+        Falls back to the default chunker for all other formats and strategies.
+        """
+        if file_path.suffix.lower() in {'.md', '.markdown'}:
+            strategy = self._read_frontmatter_field(file_path, 'chunking_strategy')
+            if strategy == 'dialogue':
+                return self._get_dialogue_chunker()
+        return self._get_default_chunker()
+
+    def _get_default_chunker(self) -> TextChunker:
+        if self._chunker is not None:
+            return self._chunker
+        from .chunkers.semantic import SemanticChunker
+        self._chunker = SemanticChunker()
+        return self._chunker
+
+    def _get_dialogue_chunker(self) -> TextChunker:
+        if self._dialogue_chunker is None:
+            from .chunkers.dialogue import DialogueChunker
+            self._dialogue_chunker = DialogueChunker()
+        return self._dialogue_chunker
+
+    # ── Main processing ─────────────────────────────────────────
+
     def process(self, file_path: str | Path) -> ProcessedDocument:
         """
         Process a document through the full pipeline.
@@ -271,15 +323,25 @@ class ModularPipeline:
         parse_time = time.time() - start
         logger.info(f"Parsed in {parse_time:.2f}s: {parsed.page_count} pages")
 
-        # Step 2: Chunk
+        # Step 2: Chunk — select chunker based on file type / frontmatter
+        chunker = self._select_chunker(file_path)
         start = time.time()
         if parsed.has_chunks:
             # Parser already chunked by page, re-chunk with our chunker
             page_texts = [c.text for c in parsed.chunks]
-            chunks = self._chunker.chunk_with_pages(page_texts, str(file_path))
+            chunks = chunker.chunk_with_pages(page_texts, str(file_path))
         else:
-            # Chunk the full text
-            chunks = self._chunker.chunk(parsed.full_text, str(file_path))
+            chunks = chunker.chunk(parsed.full_text, str(file_path))
+
+        # DialogueChunker returns [] when no turn markers are found → fall back
+        if not chunks and chunker is not self._get_default_chunker():
+            logger.info("Dialogue chunker found no turns, falling back to default chunker")
+            default = self._get_default_chunker()
+            if parsed.has_chunks:
+                chunks = default.chunk_with_pages(page_texts, str(file_path))
+            else:
+                chunks = default.chunk(parsed.full_text, str(file_path))
+
         chunk_time = time.time() - start
         logger.info(f"Chunked in {chunk_time:.2f}s: {len(chunks)} chunks")
 

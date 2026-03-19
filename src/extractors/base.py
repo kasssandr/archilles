@@ -86,17 +86,26 @@ class BaseExtractor(ABC):
             return []
 
         chunks = []
-        paragraphs = text.split('\n\n')
+        raw_paragraphs = text.split('\n\n')
+
+        # Pre-split paragraphs that are larger than chunk_size on their own.
+        # This handles e.g. YouTube transcripts that have no paragraph breaks
+        # and would otherwise end up as a single massive chunk.
+        paragraphs = []
+        for raw in raw_paragraphs:
+            raw = raw.strip()
+            if not raw:
+                continue
+            if len(raw.split()) * 1.3 > self.chunk_size:
+                paragraphs.extend(self._split_para_by_words(raw))
+            else:
+                paragraphs.append(raw)
 
         current_chunk = []
         current_size = 0
         char_position = 0
 
         for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
-
             para_tokens = len(para.split()) * 1.3
 
             if current_size + para_tokens > self.chunk_size and current_chunk:
@@ -144,6 +153,25 @@ class BaseExtractor(ABC):
             chunks = LanguageDetector.detect_for_chunks(chunks)
 
         return chunks
+
+    def _split_para_by_words(self, text: str) -> List[str]:
+        """Split a single oversized paragraph into word-boundary chunks with overlap.
+
+        Used as a pre-processing step in ``_create_chunks`` for texts that have
+        no paragraph breaks (e.g. YouTube transcripts).  Overlap is applied so
+        that context at chunk boundaries is not completely lost.
+        """
+        words = text.split()
+        words_per_chunk = max(1, int(self.chunk_size / 1.3))
+        overlap_words = max(0, int(self.overlap / 1.3))
+        step = max(1, words_per_chunk - overlap_words)
+
+        parts: List[str] = []
+        i = 0
+        while i < len(words):
+            parts.append(' '.join(words[i:i + words_per_chunk]))
+            i += step
+        return parts
 
     def _create_hierarchical_chunks(
         self,

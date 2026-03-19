@@ -19,13 +19,19 @@ class SemanticChunker(TextChunker):
     """
     Semantic text chunker that respects natural text boundaries.
 
-    Tries to break at:
+    For plain text, tries to break at:
     1. Paragraph boundaries (double newlines)
     2. Sentence boundaries (., !, ?)
-    3. Clause boundaries (;, :, ,)
-    4. Word boundaries (spaces)
+    3. Word boundaries (spaces)
 
-    Falls back to character boundaries only as last resort.
+    For Markdown text (detected by the presence of ``# Heading`` lines),
+    uses a heading-aware strategy:
+    - ``#`` / ``##`` headings always start a new chunk (hard boundary).
+    - ``###``–``######`` headings are soft boundaries: sections are merged
+      greedily until the chunk budget is reached, so small subsections are
+      not left as isolated micro-chunks.
+    - A section that exceeds ``chunk_size`` on its own is sub-split at
+      sentence/word boundaries using the standard paragraph logic.
     """
 
     # Sentence ending patterns
@@ -34,19 +40,121 @@ class SemanticChunker(TextChunker):
     # Paragraph pattern (2+ newlines)
     PARAGRAPH_BREAK = re.compile(r'\n\s*\n')
 
+    # Markdown heading: captures level (###) and title text
+    HEADING_RE = re.compile(r'^(#{1,6})\s+(.+)$', re.MULTILINE)
+
+    # Heading levels that always force a chunk flush
+    HARD_BREAK_LEVELS = {1, 2}
+
     @property
     def name(self) -> str:
         return "semantic"
 
     @property
     def description(self) -> str:
-        return "Chunks text respecting sentence and paragraph boundaries"
+        return "Chunks text respecting sentence, paragraph, and Markdown heading boundaries"
+
+    # ── Public entry point ───────────────────────────────────────
 
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
         """Split text into semantically coherent chunks."""
         if not text or not text.strip():
             return []
 
+        if self.HEADING_RE.search(text):
+            return self._chunk_markdown(text, source_file)
+
+        return self._chunk_plain(text, source_file)
+
+    # ── Markdown-aware path ──────────────────────────────────────
+
+    def _chunk_markdown(self, text: str, source_file: str) -> List[TextChunk]:
+        """Heading-aware chunking for Markdown text."""
+        sections = self._split_into_sections(text)
+        chunk_size = self.config.chunk_size
+        overlap = self.config.chunk_overlap
+        min_size = self.config.min_chunk_size
+
+        chunks: List[TextChunk] = []
+        # Accumulator: list of (level, section_text) tuples being merged
+        acc: List[tuple[int, str]] = []
+        acc_chars = 0
+
+        def flush():
+            nonlocal acc, acc_chars
+            if not acc:
+                return
+            merged = "\n\n".join(s for _, s in acc).strip()
+            if len(merged) >= min_size:
+                chunks.append(self._create_chunk(merged, len(chunks), source_file, 0, len(merged)))
+            acc = []
+            acc_chars = 0
+
+        for level, section_text in sections:
+            section_text = section_text.strip()
+            if not section_text:
+                continue
+
+            is_hard = level in self.HARD_BREAK_LEVELS
+
+            if is_hard:
+                # Always flush before a major heading
+                flush()
+
+            if len(section_text) > chunk_size:
+                # Section is too large on its own — flush accumulator first,
+                # then sub-split the section using plain paragraph logic
+                flush()
+                sub_chunks = self._chunk_plain(section_text, source_file)
+                for sc in sub_chunks:
+                    sc.chunk_index = len(chunks)
+                    chunks.append(sc)
+            elif acc_chars + len(section_text) > chunk_size and acc:
+                # Adding this section would overflow — flush and start fresh
+                flush()
+                acc.append((level, section_text))
+                acc_chars = len(section_text)
+            else:
+                acc.append((level, section_text))
+                acc_chars += len(section_text)
+
+        flush()
+
+        if overlap > 0 and len(chunks) > 1:
+            chunks = self._apply_overlap(chunks, text, overlap)
+
+        return chunks
+
+    def _split_into_sections(self, text: str) -> List[tuple[int, str]]:
+        """Split *text* into ``(heading_level, section_text)`` pairs.
+
+        ``heading_level`` is 0 for preamble text before the first heading.
+        The heading line itself is included at the top of each section body.
+        """
+        matches = list(self.HEADING_RE.finditer(text))
+        if not matches:
+            return [(0, text)]
+
+        sections: List[tuple[int, str]] = []
+
+        # Preamble before first heading
+        preamble = text[:matches[0].start()].strip()
+        if preamble:
+            sections.append((0, preamble))
+
+        for i, m in enumerate(matches):
+            level = len(m.group(1))
+            body_start = m.start()
+            body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+            section_body = text[body_start:body_end]
+            sections.append((level, section_body))
+
+        return sections
+
+    # ── Plain-text path (unchanged logic) ───────────────────────
+
+    def _chunk_plain(self, text: str, source_file: str) -> List[TextChunk]:
+        """Original paragraph-based chunking for non-Markdown text."""
         chunk_size = self.config.chunk_size
         overlap = self.config.chunk_overlap
         min_size = self.config.min_chunk_size
