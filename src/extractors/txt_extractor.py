@@ -82,6 +82,14 @@ class TXTExtractor(BaseExtractor):
             if text.startswith('\ufeff'):
                 text = text[1:]
 
+            # Strip YAML frontmatter from Markdown files so the YAML block
+            # is not indexed as content (metadata is handled by the adapter)
+            if file_path.suffix.lower() in {'.md', '.markdown'}:
+                if text.startswith('---'):
+                    end = text.find('\n---', 3)
+                    if end != -1:
+                        text = text[end + 4:].lstrip('\n')
+
             # Create base metadata
             base_metadata = ChunkMetadata(
                 source_file=str(file_path),

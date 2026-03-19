@@ -26,10 +26,12 @@ _SECTION_NUM_LABEL = re.compile(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', re.IGN
 
 # Section type classification patterns
 _FRONT_MATTER_PATTERNS = frozenset([
-    'preface', 'foreword', 'introduction', 'acknowledgments', 'acknowledgements',
+    'preface', 'foreword', 'acknowledgments', 'acknowledgements',
     'dedication', 'table of contents', 'contents', 'toc', 'about the author',
     'about this book', 'prologue', 'copyright', 'title page',
     'half title', 'frontispiece', 'list of illustrations', 'list of maps',
+    # NB: "introduction" bewusst NICHT hier —
+    # Einleitungen sind inhaltlich relevant und gehören zu main_content.
 ])
 _BACK_MATTER_PATTERNS = frozenset([
     'index', 'bibliography', 'references', 'glossary',
@@ -117,11 +119,20 @@ class EPUBExtractor(BaseExtractor):
             item_name = item.get_name()
             toc_info = toc_map.get(item_name, {})
 
+            # For section_type detection, use meaningful titles only — never
+            # raw filenames like "index_split_001.html" which falsely match
+            # back_matter keywords.
+            display_title = chapter_title or toc_info.get('title') or ''
+            section_type = (
+                self._detect_section_type(display_title) if display_title
+                else 'main_content'
+            )
+
             chapters_metadata.append({
                 'chapter': chapter_title or item_name,
                 'section': toc_info.get('section'),
                 'section_title': toc_info.get('title'),
-                'section_type': self._detect_section_type(chapter_title or item_name),
+                'section_type': section_type,
                 'file': item_name,
             })
 

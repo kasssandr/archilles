@@ -19,6 +19,9 @@ python-magic==0.4.27  # Magic byte detection (Linux/macOS)
 # Encoding detection
 chardet==5.2.0  # Character encoding detection
 
+# YAML parsing (Obsidian frontmatter)
+PyYAML>=6.0  # YAML parser for Obsidian vault frontmatter
+
 # Language detection
 lingua-language-detector==2.1.1  # Modern, accurate language detection (supports 75+ languages)
 

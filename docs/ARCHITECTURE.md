@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** February 2026 (post-LanceDB migration, post-Service-Layer refactoring, ChromaDB removed)
+**Last updated:** March 2026 (source adapters, TOC-aware PDF chunking, running footer removal, DialogueChunker)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
@@ -76,7 +76,20 @@ The system is built around three principles: privacy by architecture (not by pol
 
 ## Core Components
 
-### 1\. Calibre Database Layer (`src/calibre_db.py`)
+### 1\. Source Adapter Layer (`src/adapters/`)
+
+ARCHILLES supports multiple library backends through a common adapter interface. Each adapter implements `list_books()`, `get_metadata()`, and `resolve_file()`. The batch indexer auto-detects the appropriate adapter from the library structure.
+
+| Adapter | Backend | Detection |
+| --- | --- | --- |
+| `CalibreAdapter` | Calibre library (`metadata.db`) | Default, detects `metadata.db` |
+| `ZoteroAdapter` | Zotero library (`zotero.sqlite`) | Detects `zotero.sqlite` |
+| `ObsidianAdapter` | Obsidian vault (Markdown + YAML frontmatter) | Detects `.obsidian/` directory |
+| `FolderAdapter` | Plain directory of files | Fallback when no specific backend detected |
+
+The adapter layer sits above the Calibre DB layer and generalizes library access. For Calibre libraries, the `CalibreAdapter` delegates to `calibre_db.py`.
+
+### 1b\. Calibre Database Layer (`src/calibre_db.py`)
 
 Read-only interface to Calibre's `metadata.db`. This component never modifies the database—a firm architectural boundary documented in DECISIONS.md (ADR-005).
 
@@ -111,13 +124,17 @@ Primary extractor for PDF files, built on PyMuPDF (fitz). PDF is the preferred f
 
 Key capabilities: CropBox filtering eliminates headers, footers, and running page numbers before the text reaches the chunker, which significantly improves embedding quality. Page label extraction maps printed page numbers (which may differ from internal PDF page indices) to chunks, enabling citations like "p. 47" that match what a reader sees in the physical or digital book. Footer detection with footnote disambiguation ensures that footnotes are preserved while page-bottom noise is removed.
 
+**TOC-aware chunking** (March 2026): `_build_page_toc_map(toc)` maps the PDF's table of contents to page ranges. Level-1 entries become `chapter`, level-2+ entries become `section_title`. Junk TOCs from scanner PDFs are automatically detected and ignored (pattern matching for artifacts like "scan 1", threshold checks for entries count and page diversity). `_section_type_from_toc_title()` derives `section_type` from TOC titles with comprehensive DE/EN keyword matching, falling back to the existing position heuristic when no TOC is available.
+
+**Running footer removal**: `_detect_running_footers()` mirrors the existing header detection but targets the last 3 lines per page. Uses a higher occurrence threshold (5% of pages, minimum 10) to avoid false positives with variable content lines.
+
 The multi-tier fallback system activates pdfplumber when PyMuPDF's extraction quality falls below threshold (measured by character density and encoding coherence). For scanned PDFs without embedded text, the system falls through to the OCR path.
 
 #### EPUB Extractor (`epub_extractor.py`)
 
 Built on ebooklib with custom TOC parsing. EPUBs provide richer structural information than PDFs: the table of contents maps directly to chapter boundaries, and the internal HTML structure enables section-level metadata extraction.
 
-Section metadata classification (introduced January 2026) automatically labels content as Front Matter (foreword, introduction, table of contents), Main Content (the actual text), or Back Matter (bibliography, index, appendices). This classification powers the `section_filter` parameter in search—by default set to `'main'`, which excludes bibliography and index noise from results. This architectural approach replaced a 118-line text heuristic that produced both false negatives and false positives.
+Section metadata classification automatically labels content as Front Matter (foreword, table of contents), Main Content (the actual text, including introductions), or Back Matter (bibliography, index, appendices). Classification uses only semantically meaningful titles (H1 text or TOC entry titles) — never raw EPUB filenames, which caused false positives (e.g., `index_split_001.html` matching "index"). Introduction/Einleitung is deliberately classified as main_content, not front_matter. This classification powers the `section_filter` parameter in search—by default set to `'main'`, which excludes bibliography and index noise from results.
 
 #### OCR Extractor (`ocr_extractor.py`)
 
@@ -133,7 +150,11 @@ The pipeline is orchestrated by `ModularPipeline` (`pipeline.py`), which chains 
 
 1.  **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry`.
     
-2.  **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. `FixedSizeChunker` and `SemanticChunker` (sentence-boundary-aware) are registered in `ChunkerRegistry`. Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
+2.  **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. Three chunkers registered in `ChunkerRegistry`:
+    - `FixedSizeChunker`: Simple token/character-based splitting
+    - `SemanticChunker`: Sentence-boundary-aware, with Markdown heading detection (H1/H2 force chunk breaks) and oversized paragraph splitting
+    - `DialogueChunker`: Specialized for chat/Q&A exports (ChatGPT, Gemini, Grok, NotebookLM). Recognizes turn markers (`## User`, `**Q:**`, etc.) and chunks per turn or turn-pair, preserving `speaker` metadata.
+    Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
     
 3.  **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Registered in `EmbedderRegistry`.
     
@@ -288,8 +309,10 @@ FormatDetector → select appropriate Extractor
         │
         ▼
 Text extraction with metadata enrichment
-  • PDF: CropBox filtering, page label extraction, footnote detection
-  • EPUB: TOC parsing, section classification (front/main/back matter)
+  • PDF: CropBox filtering, page label extraction, footnote detection,
+         TOC-to-page mapping (chapter/section_title), running footer removal
+  • EPUB: TOC parsing, section classification (front/main/back matter, title-based)
+  • TXT: YAML frontmatter stripping (for Obsidian vault imports)
   • Other: CalibreConverter → intermediate format → extraction
         │
         ▼
@@ -387,6 +410,14 @@ archilles/
 ├── README.md
 │
 ├── src/
+│   ├── adapters/                  # Source library backends
+│   │   ├── __init__.py            # get_adapter() auto-detection
+│   │   ├── base.py                # BaseAdapter ABC
+│   │   ├── calibre_adapter.py     # Calibre library
+│   │   ├── zotero_adapter.py      # Zotero library
+│   │   ├── obsidian_adapter.py    # Obsidian vault (Markdown + YAML)
+│   │   └── folder_adapter.py      # Plain directory fallback
+│   │
 │   ├── archilles/                 # Modular pipeline infrastructure
 │   │   ├── pipeline.py            # ModularPipeline orchestration
 │   │   ├── profiles.py            # Hardware profiles (minimal/balanced/maximal)
@@ -399,7 +430,8 @@ archilles/
 │   │   ├── chunkers/
 │   │   │   ├── base.py            # TextChunker ABC, TextChunk, ChunkerConfig
 │   │   │   ├── fixed.py           # FixedSizeChunker
-│   │   │   ├── semantic.py        # SemanticChunker (sentence-aware)
+│   │   │   ├── semantic.py        # SemanticChunker (sentence + heading aware)
+│   │   │   ├── dialogue.py        # DialogueChunker (chat/Q&A exports)
 │   │   │   └── registry.py        # ChunkerRegistry
 │   │   ├── embedders/
 │   │   │   ├── base.py            # TextEmbedder ABC, EmbeddingResult
@@ -409,11 +441,11 @@ archilles/
 │   │       └── checkpoint.py      # IndexingCheckpoint (resume support)
 │   │
 │   ├── extractors/                # Text extraction from book files
-│   │   ├── base.py                # BaseExtractor interface
+│   │   ├── base.py                # BaseExtractor interface (+ oversized para splitting)
 │   │   ├── universal_extractor.py # Delegates to format-specific extractors
-│   │   ├── pdf_extractor.py       # PyMuPDF with CropBox, page labels
-│   │   ├── epub_extractor.py      # ebooklib with TOC + section metadata
-│   │   ├── txt_extractor.py       # Plain text extraction
+│   │   ├── pdf_extractor.py       # PyMuPDF: CropBox, page labels, TOC mapping, footer removal
+│   │   ├── epub_extractor.py      # ebooklib: TOC + section metadata (title-based classification)
+│   │   ├── txt_extractor.py       # Plain text (+ YAML frontmatter stripping)
 │   │   ├── html_extractor.py      # HTML document extraction
 │   │   ├── ocr_extractor.py       # Tesseract OCR integration
 │   │   ├── calibre_converter.py   # Calibre ebook-convert bridge
@@ -423,7 +455,7 @@ archilles/
 │   │   └── exceptions.py          # ExtractionError hierarchy
 │   │
 │   ├── storage/
-│   │   └── lancedb_store.py        # LanceDBStore (all chunks: content + annotations)
+│   │   └── lancedb_store.py       # LanceDBStore (all chunks: content + annotations)
 │   │
 │   ├── retriever/
 │   │   └── reranker.py            # CrossEncoderReranker (optional)
@@ -441,9 +473,10 @@ archilles/
 ├── scripts/
 │   ├── rag_demo.py                # archillesRAG class + CLI (search, index, export)
 │   ├── web_ui.py                  # Streamlit Web UI
-│   └── batch_index.py             # Batch indexing with tag/author filters
+│   ├── batch_index.py             # Batch indexing with tag/author filters
+│   └── chunk_inspector.py         # Diagnostic: chunk quality, boundaries, TOC alignment
 │
-├── .archilles/                    # Per-library data (inside Calibre folder)
+├── .archilles/                    # Per-library data (inside library folder)
 │   ├── config.json                # User configuration
 │   └── rag_db/                    # LanceDB database (all chunks: content + annotations)
 │

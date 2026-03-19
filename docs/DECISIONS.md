@@ -579,6 +579,60 @@ Die Basisversion wird unter MIT-Lizenz veröffentlicht (maximal permissiv für A
 
 ---
 
+## VI-b. Technische Entscheidungen — Extraction & Chunking (März 2026)
+
+### ADR-025: Structure-Aware PDF Chunking (TOC → chapter/section_title)
+
+**Kontext:** Der Chunk Inspector (März 2026) zeigte, dass PDF-Chunks 0% `chapter` und `section_title` hatten, obwohl das TOC bereits via `doc.get_toc()` extrahiert und in `ExtractedText.toc` gespeichert wurde. Bei EPUBs funktionierte die Zuordnung, weil `epub_extractor.py` das TOC explizit mit den Chunks verband. Bei PDFs fehlte dieses Bindeglied.
+
+**Entscheidung:** `_build_page_toc_map(toc)` baut ein Seiten-zu-Kapitel-Dict: Level-1-TOC-Einträge → `chapter`, Level-2+ → `section_title`. `_create_chunks_with_pages()` nutzt dieses Mapping, um jedem Chunk die richtige Strukturinfo zuzuweisen. `_section_type_from_toc_title()` leitet `section_type` aus TOC-Titeln ab, mit Fallback auf die bestehende Keyword/Positions-Heuristik.
+
+**Junk-TOC-Filterung:** Scanner-PDFs haben oft nutzlose Lesezeichen ("scan 1", "z - a.d.n.001"). Filterregeln: <3 Einträge → ignorieren; alle Einträge auf derselben Seite → ignorieren; >50% Junk-Pattern → ignorieren. Das verhindert Fehlzuordnungen ohne brauchbare TOCs zu verwerfen.
+
+**Status:** Implementiert. Tests in `tests/test_pdf_toc_mapping.py`.
+
+### ADR-026: Running-Footer-Erkennung und -Entfernung (PDF)
+
+**Kontext:** Chunk-Inspektionen zeigten systematische Kontamination an Chunk-Enden: Seitenzahlen als letztes Token, Verlagsnamen, URLs. `pdf_extractor.py` hatte bereits `_detect_running_headers()`, aber kein Pendant für Footer.
+
+**Entscheidung:** `_detect_running_footers()` spiegelt die Header-Erkennung, prüft aber die letzten 3 Zeilen pro Seite. Höherer Threshold als bei Headern: `max(10, len(pages_text) // 20)` (5% der Seiten, Minimum 10). Grund: Footer sind variabler als Header (Kapitelüberschriften wechseln, Verlagsnamen nicht), und ein zu niedriger Threshold produziert False Positives bei inhaltlichen Schlusszeilen.
+
+**Status:** Implementiert, integriert in `_build_extraction_result()` nach Header-Entfernung.
+
+### ADR-027: EPUB section_type — Dateinamen nicht als Titel verwenden
+
+**Kontext:** Bei "The Secret Teachings of Plants" (ID 9) wurden 100% der Chunks als `back_matter` klassifiziert, weil die EPUB-internen Dateinamen (`index_split_001.html`) das Keyword "index" enthielten und für die section_type-Erkennung verwendet wurden.
+
+**Entscheidung:** `_detect_section_type()` wird nur noch mit semantisch sinnvollen Titeln aufgerufen — `<h1>`-Text oder TOC-Titel. Rohé Dateinamen werden nie für die Klassifikation verwendet. Wenn kein sinnvoller Titel vorhanden ist, fällt der Chunk auf `main_content` zurück (sichere Default-Annahme).
+
+**Status:** Implementiert in `epub_extractor.py`.
+
+### ADR-028: Introduction/Einleitung als main_content (nicht front_matter)
+
+**Kontext:** Intuitiv gehören Einleitungen zum Haupttext — sie enthalten inhaltlich relevante Argumentation, besonders in geisteswissenschaftlichen Werken. Die Klassifikation als `front_matter` würde sie aus den Default-Suchergebnissen ausschließen.
+
+**Entscheidung:** "Introduction", "Einleitung" und "Einführung" werden bewusst *nicht* in die front_matter-Keyword-Listen aufgenommen — weder im PDF-Extractor noch im EPUB-Extractor. Sie fallen auf `main_content` zurück.
+
+**Status:** Implementiert in beiden Extractoren. Kommentar im Code dokumentiert die bewusste Auslassung.
+
+### ADR-029: Source Adapters — Abstraktion der Bibliotheksquelle
+
+**Kontext:** ARCHILLES war ursprünglich ausschließlich auf Calibre ausgerichtet. Nutzer mit Zotero-Bibliotheken, Obsidian-Vaults oder einfachen Ordnerstrukturen waren ausgeschlossen.
+
+**Entscheidung:** Adapter-Pattern mit vier Backends: `CalibreAdapter` (bestehende Funktionalität), `ZoteroAdapter` (read-only Zugriff auf Zotero-SQLite), `ObsidianAdapter` (Markdown-Vault mit YAML-Frontmatter), `FolderAdapter` (flache Ordnerstruktur). Alle implementieren ein gemeinsames Interface (`list_books`, `get_metadata`, `resolve_file`). Batch-Indexer erkennt den Adapter automatisch anhand der Bibliotheksstruktur.
+
+**Status:** Implementiert. `ARCHILLES_LIBRARY_PATH` zeigt auf beliebige Quellen.
+
+### ADR-030: DialogueChunker für Chat-/Q&A-Exporte
+
+**Kontext:** Import-Skripte für ChatGPT, Gemini, Grok und NotebookLM exportieren Konversationen als Markdown in Obsidian-Vaults. Der Standard-SemanticChunker zerreißt Frage-Antwort-Paare.
+
+**Entscheidung:** Spezialisierter `DialogueChunker`, registriert im `ChunkerRegistry`. Erkennt Turn-Marker (`## User`, `## Assistant`, `**Q:**`, etc.) und chunked pro Turn oder Turn-Paar. Metadata enthält `speaker`-Feld. Wird automatisch aktiviert, wenn der Parser Dialogstruktur erkennt.
+
+**Status:** Implementiert in `src/archilles/chunkers/dialogue.py`. Tests in `tests/test_dialogue_chunker.py`.
+
+---
+
 ## VII. Zusammenfassung: Leitprinzipien
 
 Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt prägen:
@@ -596,16 +650,15 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 ---
 
 *Nächste geplante Aktualisierungen:*
-- *ADR-025: HTTP/SSE-Transport für MCP-Server (LLM-Agnostizismus; geplant v1.0)*
-- *ADR-026: Inkrementelle Indexierung mit Index-Queue (geplant v1.0)*
-- *ADR-027: Markdown-Output via Docling als Extraktionsziel (nach Beta-Feedback)*
-- *ADR-028: VLM-basiertes OCR (LightOnOCR-2 / olmOCR-2; geplant v1.2)*
+- *ADR-031: HTTP/SSE-Transport für MCP-Server (LLM-Agnostizismus; geplant v1.0)*
+- *ADR-032: Inkrementelle Indexierung mit Index-Queue (geplant v1.0)*
+- *ADR-033: Markdown-Output via Docling als Extraktionsziel (nach Beta-Feedback)*
+- *ADR-034: VLM-basiertes OCR (LightOnOCR-2 / olmOCR-2; geplant v1.2)*
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*
 - *Entscheidung über MCPB-Implementation (nach Beta-Feedback)*
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
-- *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
 - *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
-- *CLI-Erfahrung verbessern: Die lokale Kommandozeilen-Abfrage (rag_demo.py) liefert unbefriedigende Ergebnisse im Vergleich zur MCP-Integration, wo Claude den Kontext intelligent interpretiert. Mögliche Ansätze: bessere Prompt-Templates, automatische Query-Expansion, oder ein lokales LLM als Interpretation-Layer.*
-- *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
-- *Citation-Modul in Service-Layer und MCP-Server integrieren: CitationConfig aus config.json laden und format_bibliography_instruction() in den System-Prompt einspeisen.*
-- *citeproc-py als optionale Dependency: formatter.py für Offline-Rendering und Zotero-Export, wenn citeproc-py installiert ist.*
+- *CLI-Erfahrung verbessern: bessere Prompt-Templates, automatische Query-Expansion, oder lokales LLM als Interpretation-Layer.*
+- *Schema-Migrations-Framework: formales Migrations-System mit Versionsnummern statt ad-hoc add_columns().*
+- *Citation-Modul in Service-Layer und MCP-Server integrieren.*
+- *citeproc-py als optionale Dependency: formatter.py für Offline-Rendering und Zotero-Export.*

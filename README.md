@@ -2,7 +2,7 @@
 
 **Intelligent search for your Calibre library**
 
-A privacy-first RAG system that brings semantic search to your personal research library. Built for scholars, researchers, and anyone with a serious book collection.
+A privacy-first RAG system that brings semantic search to your personal research library. Works with Calibre, Zotero, Obsidian vaults, and plain folders. Built for scholars, researchers, and anyone with a serious book collection.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
@@ -310,6 +310,9 @@ Search through your collection of primary sources and secondary literature simul
 - Bibliography export: BibTeX, RIS, EndNote, JSON, CSV
 - Crash-safe batch indexing with `progress.db` checkpoint system and backup rotation
 - Duplicate detection and `calibre://` URI links for direct book access
+- **Source adapters**: Calibre, Zotero, Obsidian vaults, plain folders — not just Calibre anymore
+- **Structure-aware PDF chunking**: chapter/section metadata from TOC, running footer removal
+- **DialogueChunker**: specialized chunking for chat/Q&A exports (ChatGPT, Gemini, Grok, NotebookLM)
 
 ### Coming in v1.0
 
