@@ -330,6 +330,9 @@ class PDFExtractor(BaseExtractor):
             removed = original_lines - sum(len(p.split('\n')) for p in pages_text)
             print(f"  Removed {removed} footer lines from {len(pages_text)} pages", flush=True)
 
+        # Strip standalone page numbers that survived header/footer removal
+        pages_text = self._strip_standalone_page_numbers(pages_text, pages_metadata)
+
         full_text = '\n\n'.join(pages_text)
         chunks = self._create_chunks_with_pages(pages_text, pages_metadata, file_path, toc=toc)
 
@@ -366,6 +369,61 @@ class PDFExtractor(BaseExtractor):
             # Only update if PDF did not provide a meaningful label
             if not current_label or current_label == str(pages_metadata[i].get('page', '')):
                 pages_metadata[i]['page_label'] = label
+
+    @staticmethod
+    def _strip_standalone_page_numbers(
+        pages_text: List[str],
+        pages_metadata: List[Dict[str, Any]],
+    ) -> List[str]:
+        """Remove standalone page numbers from the beginning/end of each page.
+
+        After header/footer removal, some pages still start or end with a
+        bare number that matches the page label.  These are printed page
+        numbers that weren't part of a detected running header pattern.
+
+        Also strips page numbers embedded at the start of the first content
+        line (e.g. "119 Nachbarschaft..." → "Nachbarschaft...").
+        """
+        cleaned = []
+        for i, page_text in enumerate(pages_text):
+            if i >= len(pages_metadata):
+                cleaned.append(page_text)
+                continue
+
+            label = str(pages_metadata[i].get('page_label', ''))
+            page_num = str(pages_metadata[i].get('page', ''))
+            if not label and not page_num:
+                cleaned.append(page_text)
+                continue
+
+            candidates = {label, page_num}
+            candidates.discard('')
+
+            lines = page_text.split('\n')
+            new_lines = []
+            for j, line in enumerate(lines):
+                stripped = line.strip()
+
+                # Only check first 3 and last 2 lines
+                if j < 3 or j >= len(lines) - 2:
+                    # Standalone number matching page label
+                    if stripped in candidates:
+                        continue
+
+                    # Number at start of line: "119 Nachbarschaft..."
+                    if j < 3 and stripped:
+                        for cand in candidates:
+                            prefix = cand + ' '
+                            if stripped.startswith(prefix) and len(stripped) > len(prefix) + 2:
+                                # Only strip if remainder starts with a letter
+                                remainder = stripped[len(prefix):]
+                                if remainder[0].isalpha():
+                                    line = remainder
+                                    break
+
+                new_lines.append(line)
+            cleaned.append('\n'.join(new_lines))
+        return cleaned
 
     # ------------------------------------------------------------------
     # Chunking
@@ -478,16 +536,25 @@ class PDFExtractor(BaseExtractor):
         file_path: Path,
         toc: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
-        """Create chunks while preserving page information and section type."""
-        chunks = []
+        """Create chunks across page boundaries while preserving page metadata.
+
+        Builds a flat list of (paragraph, page_metadata) across all pages,
+        then aggregates paragraphs into chunks up to ``chunk_size`` — exactly
+        like ``_create_chunks`` but without stopping at page boundaries.
+        Each chunk inherits the metadata of its first paragraph's page.
+        """
         total_pages = len(pages_text)
         page_toc_map = self._build_page_toc_map(toc or [])
 
-        for page_num, (page_text, page_meta) in enumerate(zip(pages_text, pages_metadata), start=1):
+        # Phase 1: collect all paragraphs with their page metadata
+        all_paragraphs: List[tuple] = []  # (text, ChunkMetadata)
+
+        for page_num, (page_text, page_meta) in enumerate(
+            zip(pages_text, pages_metadata), start=1
+        ):
             phys_page = page_meta['page']
             toc_info = page_toc_map.get(phys_page, {})
 
-            # section_type: prefer TOC-based, fall back to page heuristic
             toc_section_type = None
             chapter = toc_info.get('chapter', '')
             section_title = toc_info.get('section_title', '')
@@ -498,10 +565,16 @@ class PDFExtractor(BaseExtractor):
 
             if toc_section_type is not None:
                 section_type = toc_section_type
+            elif chapter:
+                # TOC entry exists but title doesn't match front/back keywords
+                # → default to main_content (don't fall through to heuristic)
+                section_type = 'main_content'
             else:
-                section_type = self._detect_section_type(page_text, page_num, total_pages, toc)
+                section_type = self._detect_section_type(
+                    page_text, page_num, total_pages, toc
+                )
 
-            base_metadata = ChunkMetadata(
+            meta = ChunkMetadata(
                 source_file=str(file_path),
                 format='pdf',
                 page=page_meta['page'],
@@ -511,9 +584,217 @@ class PDFExtractor(BaseExtractor):
                 section_type=section_type,
             )
 
-            chunks.extend(self._create_chunks(page_text, base_metadata))
+            page_text = self._detect_paragraph_breaks(page_text)
+            for raw in page_text.split('\n\n'):
+                raw = raw.strip()
+                if not raw:
+                    continue
+                all_paragraphs.append((raw, meta))
+
+        if not all_paragraphs:
+            return []
+
+        # Phase 2: aggregate paragraphs into chunks (mirrors _create_chunks)
+        chunks: List[Dict[str, Any]] = []
+        current_paras: List[tuple] = []  # (text, meta)
+        current_size = 0.0
+        overlap_prefix = ""  # sentence-aligned overlap text from previous chunk
+
+        for para_text, para_meta in all_paragraphs:
+            para_tokens = len(para_text.split()) * 1.3
+
+            if current_size + para_tokens > self.chunk_size and current_paras:
+                chunk_text = '\n\n'.join(t for t, _ in current_paras)
+                chunk_meta = self._copy_metadata(current_paras[0][1])
+                chunks.append({
+                    'text': chunk_text,
+                    'metadata': chunk_meta.__dict__,
+                })
+
+                if self.overlap > 0:
+                    # Build sentence-aligned overlap from end of chunk
+                    overlap_prefix = self._extract_overlap_tail(chunk_text, self.overlap)
+
+                # Start new chunk, optionally prepending overlap text
+                if overlap_prefix:
+                    overlap_tokens = len(overlap_prefix.split()) * 1.3
+                    # Use last paragraph's meta for the overlap context
+                    current_paras = [(overlap_prefix, current_paras[-1][1]),
+                                     (para_text, para_meta)]
+                    current_size = overlap_tokens + para_tokens
+                    overlap_prefix = ""
+                else:
+                    current_paras = [(para_text, para_meta)]
+                    current_size = para_tokens
+            else:
+                current_paras.append((para_text, para_meta))
+                current_size += para_tokens
+
+        if current_paras:
+            chunk_text = '\n\n'.join(t for t, _ in current_paras)
+            chunk_meta = self._copy_metadata(current_paras[0][1])
+            chunks.append({
+                'text': chunk_text,
+                'metadata': chunk_meta.__dict__,
+            })
+
+        # Phase 3: window text (Small-to-Big context)
+        full_text = '\n\n'.join(t for t, _ in all_paragraphs)
+        char_pos = 0
+        for chunk in chunks:
+            # Skip overlap prefix when searching — overlap text duplicates
+            # content from the previous chunk and won't match at char_pos.
+            # Search for a unique snippet from later in the chunk instead.
+            search_text = chunk['text']
+            parts = search_text.split('\n\n', 1)
+            if len(parts) > 1:
+                # Try finding the second paragraph (post-overlap)
+                found = full_text.find(parts[1], char_pos)
+                if found >= 0:
+                    # Extend start back to include overlap
+                    overlap_len = len(parts[0]) + 2  # +2 for \n\n
+                    chunk['metadata']['char_start'] = max(0, found - overlap_len)
+                    chunk['metadata']['char_end'] = found + len(parts[1])
+                    char_pos = found
+                    continue
+
+            found = full_text.find(search_text, char_pos)
+            if found >= 0:
+                chunk['metadata']['char_start'] = found
+                chunk['metadata']['char_end'] = found + len(search_text)
+                char_pos = found
+            else:
+                chunk['metadata']['char_start'] = char_pos
+                chunk['metadata']['char_end'] = char_pos + len(search_text)
+        self._add_window_text(chunks, full_text, 500)
 
         return chunks
+
+    # ------------------------------------------------------------------
+    # Sentence-aligned overlap
+    # ------------------------------------------------------------------
+
+    _SENTENCE_END_RE = re.compile(r'[.!?:»"]\s')
+
+    @classmethod
+    def _extract_overlap_tail(cls, text: str, target_tokens: int) -> str:
+        """Extract the last ~target_tokens from text, aligned to a sentence boundary.
+
+        Scans backward from the end of *text* to find a sentence-ending
+        punctuation mark (. ! ? : ») followed by whitespace.  Returns the
+        text from the nearest sentence start that fits within
+        *target_tokens*.  If no sentence boundary is found, falls back to
+        the last *target_tokens* words.
+        """
+        words = text.split()
+        if len(words) <= target_tokens:
+            return text
+
+        # Take roughly target_tokens words from the end
+        tail = ' '.join(words[-target_tokens:])
+
+        # Find the first sentence boundary in the tail to align the start
+        match = cls._SENTENCE_END_RE.search(tail)
+        if match:
+            # Start after the sentence-ending punctuation + space
+            aligned = tail[match.end():].strip()
+            # Only use aligned version if it retains at least 40% of target
+            if len(aligned.split()) >= target_tokens * 0.4:
+                return aligned
+
+        return tail
+
+    # ------------------------------------------------------------------
+    # Paragraph break detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _detect_paragraph_breaks(text: str) -> str:
+        """Upgrade single newlines to double newlines at likely paragraph boundaries.
+
+        PyMuPDF yields only ``\\n`` between lines.  The downstream chunker
+        splits on ``\\n\\n``, so without this step an entire page is treated
+        as one paragraph — leading to near-duplicate chunks when the text
+        exceeds ``max_tokens``.
+
+        Heuristics (applied per consecutive line pair):
+        1. Short previous line (< 65 % of avg length) NOT ending with
+           hyphen, followed by a line starting with an uppercase letter.
+        2. Previous line ends with sentence-terminal punctuation AND is
+           short, next line starts uppercase.
+        3. Next line is indented (4+ spaces or tab) while previous is not.
+
+        Suppression rules:
+        - Lines ending with ``-`` (hyphenation) never trigger a break.
+        - Footnote zone (bottom half of page): continuation lines inside a
+          footnote entry are kept together; a new footnote number starts a
+          new paragraph.
+        """
+        # Early exit: text already contains paragraph separators
+        if '\n\n' in text:
+            return text
+
+        lines = text.split('\n')
+        if len(lines) < 2:
+            return text
+
+        # Compute average non-empty line length for "short line" threshold
+        lengths = [len(l) for l in lines if l.strip()]
+        if not lengths:
+            return text
+        avg_len = sum(lengths) / len(lengths)
+        short_threshold = avg_len * 0.65
+
+        # Footnote zone heuristic: bottom half of the lines
+        footnote_zone_start = len(lines) // 2
+        fn_number_re = re.compile(r'^\d{1,3}[\s\.]')
+
+        result_lines: list[str] = [lines[0]]
+        in_footnote = False
+
+        for i in range(1, len(lines)):
+            prev = lines[i - 1]
+            curr = lines[i]
+            prev_stripped = prev.rstrip()
+            curr_stripped = curr.lstrip()
+
+            is_break = False
+
+            # --- Suppression: hyphenation --------------------------------
+            if prev_stripped.endswith('-'):
+                result_lines.append(curr)
+                continue
+
+            # --- Suppression / special handling: footnote zone -----------
+            if i >= footnote_zone_start:
+                if fn_number_re.match(curr_stripped):
+                    # New footnote entry → paragraph break
+                    is_break = True
+                    in_footnote = True
+                elif in_footnote:
+                    # Continuation inside a footnote → no break
+                    result_lines.append(curr)
+                    continue
+
+            # --- Heuristic 3: indentation --------------------------------
+            if not is_break:
+                prev_indent = len(prev) - len(prev.lstrip())
+                curr_indent = len(curr) - len(curr.lstrip())
+                if curr_indent >= 4 and prev_indent < 4:
+                    is_break = True
+
+            # --- Heuristic 1+2: short prev line + sentence end ----------
+            if not is_break and len(prev_stripped) < short_threshold:
+                if (prev_stripped and prev_stripped[-1] in '.?!:'
+                        and curr_stripped and curr_stripped[0].isupper()):
+                    is_break = True
+
+            if is_break:
+                result_lines.append('\n' + curr)  # extra \n → \n\n when joined
+            else:
+                result_lines.append(curr)
+
+        return '\n'.join(result_lines)
 
     # ------------------------------------------------------------------
     # Running header detection and removal
