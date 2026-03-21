@@ -101,40 +101,67 @@ class EPUBExtractor(BaseExtractor):
         chapters_text = []
         chapters_metadata = []
 
+        _sub_heading_re = re.compile(r'^h[2-6]$')
+
         for item in book.get_items():
             if item.get_type() != ebooklib.ITEM_DOCUMENT:
                 continue
 
-            text = self._extract_html_text(item.get_content())
-            if not text.strip():
-                continue
+            content = item.get_content()
 
-            chapters_text.append(text)
+            # Parse HTML once — extract text, h1, and sub-headings
+            soup = BeautifulSoup(content, 'html.parser')
+            for el in soup(['script', 'style']):
+                el.decompose()
 
-            # Determine chapter title from first <h1> if present
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
             h1 = soup.find('h1')
             chapter_title = h1.get_text(strip=True) if h1 else None
+
+            text = self._clean_text(soup.get_text(separator='\n\n'))
+            if not text.strip():
+                continue
 
             item_name = item.get_name()
             toc_info = toc_map.get(item_name, {})
 
-            # For section_type detection, use meaningful titles only — never
-            # raw filenames like "index_split_001.html" which falsely match
-            # back_matter keywords.
+            # Section type determined at chapter level — sub-sections inherit
             display_title = chapter_title or toc_info.get('title') or ''
-            section_type = (
+            chapter_section_type = (
                 self._detect_section_type(display_title) if display_title
                 else 'main_content'
             )
 
-            chapters_metadata.append({
-                'chapter': chapter_title or item_name,
-                'section': toc_info.get('section'),
-                'section_title': toc_info.get('title'),
-                'section_type': section_type,
-                'file': item_name,
-            })
+            # Split by sub-sections.  Prefer anchor-based splitting (uses
+            # the unique element IDs from the TOC hrefs), then h2-h6 tags,
+            # then TOC title text matching as last resort.
+            toc_subs = toc_info.get('sub_sections', [])
+            has_anchors = any(s.get('anchor') for s in toc_subs)
+
+            if has_anchors:
+                sections = self._split_html_by_anchors(soup, toc_subs)
+            else:
+                sub_headings = [
+                    h.get_text(strip=True)
+                    for h in soup.find_all(_sub_heading_re)
+                ]
+                if not sub_headings:
+                    sub_headings = [s['title'] for s in toc_subs]
+                sections = self._split_text_by_headings(text, sub_headings)
+
+            for section in sections:
+                if not section['text'].strip():
+                    continue
+
+                section_title = section['heading'] or toc_info.get('title')
+
+                chapters_text.append(section['text'])
+                chapters_metadata.append({
+                    'chapter': chapter_title or item_name,
+                    'section': toc_info.get('section'),
+                    'section_title': section_title,
+                    'section_type': chapter_section_type,
+                    'file': item_name,
+                })
 
         full_text = '\n\n---\n\n'.join(chapters_text)
 
@@ -248,6 +275,12 @@ class EPUBExtractor(BaseExtractor):
                 for sub_item in item:
                     parse_toc_item(sub_item, level, parent_section)
 
+            elif hasattr(item, 'href') and hasattr(item, 'title'):
+                # ebooklib Link object (child of a tuple section)
+                title = item.title if item.title else str(item)
+                href = item.href if item.href else None
+                toc.append(make_toc_entry(title, href, level))
+
         try:
             toc_items = book.toc
             if not toc_items:
@@ -277,17 +310,32 @@ class EPUBExtractor(BaseExtractor):
 
     @staticmethod
     def _build_toc_map(toc: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Build a mapping from href (without anchor) to TOC entry info."""
-        toc_map = {}
+        """Build a mapping from href (without anchor) to TOC entry info.
+
+        Each file entry contains the chapter-level title plus a list of
+        sub-section dicts ``[{'title': ..., 'anchor': ...}, ...]`` for
+        level-2+ TOC entries that point into the same file.
+        """
+        toc_map: Dict[str, Dict[str, Any]] = {}
         for entry in toc:
             href = entry.get('href')
-            if href:
-                href_base = href.split('#')[0]
+            if not href:
+                continue
+            parts = href.split('#', 1)
+            href_base = parts[0]
+            anchor = parts[1] if len(parts) > 1 else None
+            if href_base not in toc_map:
                 toc_map[href_base] = {
                     'section': entry.get('section'),
                     'title': entry.get('title'),
                     'level': entry.get('level', 1),
+                    'sub_sections': [],
                 }
+            elif entry.get('level', 1) > 1:
+                toc_map[href_base]['sub_sections'].append({
+                    'title': entry.get('title', ''),
+                    'anchor': anchor,
+                })
         return toc_map
 
     @staticmethod
@@ -325,6 +373,117 @@ class EPUBExtractor(BaseExtractor):
         if any(pattern in title_lower for pattern in _BACK_MATTER_PATTERNS):
             return 'back_matter'
         return 'main_content'
+
+    @staticmethod
+    def _split_text_by_headings(
+        text: str, heading_texts: List[str]
+    ) -> List[Dict[str, Any]]:
+        """Split extracted text into sections at sub-heading boundaries.
+
+        Args:
+            text: Full extracted text from one HTML item.
+            heading_texts: Texts of h2-h6 headings found in the HTML.
+
+        Returns:
+            List of dicts with 'heading' (str or None) and 'text' (str).
+            The intro before the first heading gets heading=None.
+        """
+        if not heading_texts:
+            return [{'heading': None, 'text': text}]
+
+        normalized_headings = {' '.join(h.split()) for h in heading_texts}
+        paragraphs = text.split('\n\n')
+        sections: List[Dict[str, Any]] = []
+        current_heading: Optional[str] = None
+        current_paras: List[str] = []
+
+        for para in paragraphs:
+            normalized = ' '.join(para.strip().split())
+            if normalized in normalized_headings:
+                if current_paras:
+                    sections.append({
+                        'heading': current_heading,
+                        'text': '\n\n'.join(current_paras),
+                    })
+                current_heading = para.strip()
+                current_paras = [para]  # include heading in section text
+            else:
+                current_paras.append(para)
+
+        if current_paras:
+            sections.append({
+                'heading': current_heading,
+                'text': '\n\n'.join(current_paras),
+            })
+
+        return sections
+
+    def _split_html_by_anchors(
+        self,
+        soup: 'BeautifulSoup',
+        sub_sections: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Split parsed HTML into sections using TOC anchor IDs.
+
+        Each sub-section dict must have ``'title'`` and ``'anchor'`` keys.
+        The anchor is looked up as an ``id`` attribute in the HTML tree.
+        Text between consecutive anchors forms one section.
+
+        Returns:
+            List of ``{'heading': str|None, 'text': str}`` dicts.
+        """
+        # Collect (element, title) pairs for anchors that exist in the HTML
+        markers: List[tuple] = []
+        for sub in sub_sections:
+            anchor = sub.get('anchor')
+            if not anchor:
+                continue
+            el = soup.find(id=anchor)
+            if el:
+                markers.append((el, sub['title']))
+
+        if not markers:
+            text = self._clean_text(soup.get_text(separator='\n\n'))
+            return [{'heading': None, 'text': text}]
+
+        # Walk the body's descendants in document order.  For each marker
+        # element, record where it appears so we can split the flat text.
+        body = soup.find('body') or soup
+        all_strings = list(body.stripped_strings)
+        full_text = '\n\n'.join(all_strings)
+
+        # Build character offsets for each marker in the joined text.
+        # We find each marker's text content and locate it sequentially.
+        marker_texts = [(el.get_text(strip=True), title) for el, title in markers]
+        split_points: List[tuple] = []  # (char_offset, title)
+        search_from = 0
+        for marker_text, title in marker_texts:
+            idx = full_text.find(marker_text, search_from)
+            if idx >= 0:
+                split_points.append((idx, title))
+                search_from = idx + len(marker_text)
+
+        if not split_points:
+            return [{'heading': None, 'text': self._clean_text(full_text)}]
+
+        sections: List[Dict[str, Any]] = []
+
+        # Intro text before the first marker
+        intro = full_text[:split_points[0][0]].strip()
+        if intro:
+            sections.append({'heading': None, 'text': self._clean_text(intro)})
+
+        # Sections between markers
+        for i, (offset, title) in enumerate(split_points):
+            end = split_points[i + 1][0] if i + 1 < len(split_points) else len(full_text)
+            section_text = full_text[offset:end].strip()
+            if section_text:
+                sections.append({
+                    'heading': title,
+                    'text': self._clean_text(section_text),
+                })
+
+        return sections
 
     def _extract_html_text(self, content: bytes) -> str:
         """Extract and clean text from HTML/XHTML content."""
