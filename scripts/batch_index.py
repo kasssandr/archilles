@@ -849,6 +849,61 @@ def batch_reindex_comments(
     return stats
 
 
+def batch_prepare(
+    books: List[Dict[str, Any]],
+    rag: archillesRAG,
+    output_dir: str = './prepared_chunks',
+    dry_run: bool = False,
+    prefer_format: str = 'PDF',
+) -> Dict[str, Any]:
+    """
+    Prepare multiple books (extract + chunk, no embedding).
+    Writes one JSONL per book to output_dir.
+    """
+    stats = {
+        'total': len(books),
+        'prepared': 0,
+        'skipped': 0,
+        'failed': 0,
+        'errors': [],
+    }
+
+    print(f"\n{'='*60}")
+    print(f"  ARCHILLES BATCH PREPARE (no embedding)")
+    print(f"{'='*60}")
+    print(f"  Books to process: {len(books)}")
+    print(f"  Output directory: {output_dir}")
+    print(f"  Mode: {'DRY RUN' if dry_run else 'PREPARING'}")
+    print(f"{'='*60}\n")
+
+    for i, book in enumerate(books, 1):
+        book_id = create_book_id(book)
+        best = _select_best_format(book['formats'], prefer_format)
+
+        print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+        print(f"         Format: {best['format']} | ID: {book_id}")
+
+        if dry_run:
+            print(f"         Would prepare: {best['path']}")
+            continue
+
+        try:
+            result = rag.prepare_book(best['path'], book_id, output_dir=output_dir)
+            if result.get('status') == 'already_prepared':
+                stats['skipped'] += 1
+            else:
+                stats['prepared'] += 1
+        except Exception as e:
+            print(f"         FAILED: {e}")
+            stats['failed'] += 1
+            stats['errors'].append({'book_id': book_id, 'error': str(e)})
+
+    print(f"\n{'='*60}")
+    print(f"  Prepared: {stats['prepared']}, Skipped: {stats['skipped']}, Failed: {stats['failed']}")
+    print(f"{'='*60}\n")
+    return stats
+
+
 def batch_index(
     books: List[Dict[str, Any]],
     rag: archillesRAG,
@@ -1254,6 +1309,11 @@ Profiles:
                         help='Remove index entries for books deleted from Calibre. '
                              'Can be used standalone or combined with an indexing run. '
                              'Use --dry-run to preview orphans without deleting.')
+    parser.add_argument('--prepare-only', action='store_true',
+                        help='Extract and chunk books without embedding (Phase 1 of two-phase indexing). '
+                             'Writes JSONL files to --output-dir. No GPU required.')
+    parser.add_argument('--output-dir', default='./prepared_chunks',
+                        help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks)')
 
     args = parser.parse_args()
 
@@ -1346,6 +1406,7 @@ Profiles:
                 hierarchical=args.hierarchical,
                 use_modular_pipeline=args.use_modular_pipeline,
                 adapter=adapter,
+                skip_model=getattr(args, 'prepare_only', False),
             )
         except LanceDBError as e:
             print(f"\n{'='*60}")
@@ -1458,6 +1519,19 @@ Profiles:
                     dry_run=args.dry_run,
                     log_file=log_file,
                 )
+                return
+
+            # --prepare-only: extract and chunk without embedding
+            if getattr(args, 'prepare_only', False):
+                stats = batch_prepare(
+                    books=books,
+                    rag=rag,
+                    output_dir=args.output_dir,
+                    dry_run=args.dry_run,
+                    prefer_format=args.prefer_format,
+                )
+                if stats['failed'] > 0:
+                    sys.exit(1)
                 return
 
             # Initialize SafeIndexer for crash-safety

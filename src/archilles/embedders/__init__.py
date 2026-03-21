@@ -9,6 +9,7 @@ Provides pluggable text embedding with:
 
 from .base import TextEmbedder, EmbedderCapabilities, EmbeddingResult
 from .registry import EmbedderRegistry, get_embedder, register_embedder
+from .remote import RemoteBGEEmbedder
 
 __all__ = [
     'TextEmbedder',
@@ -17,4 +18,5 @@ __all__ = [
     'EmbedderRegistry',
     'get_embedder',
     'register_embedder',
+    'RemoteBGEEmbedder',
 ]

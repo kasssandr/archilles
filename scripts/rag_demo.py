@@ -255,6 +255,7 @@ class archillesRAG:
         use_modular_pipeline: bool = False,  # Future: use modular architecture
         hierarchical: bool = False,  # Enable parent-child chunking
         adapter=None,  # Optional SourceAdapter for metadata lookup
+        skip_model: bool = False,  # Skip loading embedding model (for prepare-only mode)
     ):
         """
         Initialize RAG system.
@@ -327,12 +328,14 @@ class archillesRAG:
         if enable_ocr or force_ocr:
             print(f"  OCR: {'force' if force_ocr else 'auto-detect'} ({ocr_backend})")
 
-        # Initialize embedding model
-        print(f"  Loading embedding model... (first time: ~500 MB download)")
-
-        # Use device from profile or auto-detected
-        self.embedding_model = SentenceTransformer(model_name, device=self.device)
-        print(f"  Model loaded: {model_name} (device: {self.device})")
+        # Initialize embedding model (skip for prepare-only mode)
+        if skip_model:
+            self.embedding_model = None
+            print(f"  Embedding model: skipped (prepare-only mode)")
+        else:
+            print(f"  Loading embedding model... (first time: ~500 MB download)")
+            self.embedding_model = SentenceTransformer(model_name, device=self.device)
+            print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested
         self.db_path = Path(db_path)
@@ -1138,6 +1141,291 @@ class archillesRAG:
             'indexing_time': index_time,
             'total_time': total_time,
             'needs_ocr': needs_ocr,
+        }
+
+    def prepare_book(self, book_path: str, book_id: str = None,
+                     output_dir: str = "./prepared_chunks") -> Dict[str, Any]:
+        """
+        Extract and chunk a book WITHOUT embedding (Phase 1 of two-phase indexing).
+        Writes one JSONL file per book to output_dir.
+
+        Args:
+            book_path: Path to book file
+            book_id: Optional book ID (default: filename)
+            output_dir: Directory for JSONL output files
+
+        Returns:
+            Dictionary with preparation statistics
+        """
+        book_path = Path(book_path)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not book_path.exists():
+            raise FileNotFoundError(f"Book not found: {book_path}")
+
+        book_id = book_id or book_path.stem
+
+        print(f"  File: {book_path.name}")
+
+        # Extract metadata
+        book_metadata = self._extract_metadata(book_path)
+        calibre_id = book_metadata.get('calibre_id', 0) or 0
+
+        # Check skip-if-exists
+        out_file = output_dir / f"{calibre_id}.jsonl"
+        if out_file.exists():
+            # Quick check: count lines to compare chunk_count
+            with open(out_file, 'r', encoding='utf-8') as f:
+                header = json.loads(f.readline())
+                if header.get('_header'):
+                    print(f"  Already prepared ({header.get('chunk_count', '?')} chunks). Skipping.")
+                    return {
+                        'book_id': book_id,
+                        'status': 'already_prepared',
+                        'chunk_count': header.get('chunk_count', 0),
+                    }
+
+        # Step 1: Extract text
+        start_time = time.time()
+        extracted = self.extractor.extract(book_path)
+        extract_time = time.time() - start_time
+
+        # Handle hierarchical chunking if requested
+        if self.hierarchical and extracted.full_text:
+            from src.extractors.base import BaseExtractor
+            from src.extractors.models import ChunkMetadata
+
+            chunker = type('HierarchicalChunker', (BaseExtractor,), {
+                'extract': lambda self, fp: None,
+                'supports': lambda self, fp: True
+            })(chunk_size=512, overlap=100)
+
+            base_meta = ChunkMetadata(
+                book_id=book_metadata.get('calibre_id'),
+                title=book_metadata.get('title'),
+                author=book_metadata.get('author'),
+                year=book_metadata.get('year'),
+                source_file=str(book_path),
+            )
+
+            extracted.chunks = chunker._create_hierarchical_chunks(
+                text=extracted.full_text,
+                book_id=book_id,
+                base_metadata=base_meta,
+                parent_size=2048,
+                parent_overlap=400,
+                child_size=512,
+                child_overlap=100,
+                window_chars=500
+            )
+
+        print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
+
+        # Step 2: Build chunk dicts (same as index_book lines 1009-1052, without embeddings)
+        chunks = []
+        for i, chunk in enumerate(extracted.chunks):
+            chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', 'content')
+
+            chunk_data = {
+                'id': chunk_id,
+                'text': chunk['text'],
+                'book_id': book_id,
+                'book_title': extracted.metadata.file_path.stem,
+                'chunk_index': i,
+                'chunk_type': chunk_type,
+                'format': extracted.metadata.detected_format,
+                'indexed_at': datetime.now().isoformat(),
+            }
+
+            chunk_meta = chunk.get('metadata', {})
+            for field in ('char_start', 'char_end'):
+                if chunk_meta.get(field) is not None:
+                    chunk_data[field] = chunk_meta[field]
+            if chunk.get('window_text'):
+                chunk_data['window_text'] = chunk['window_text']
+
+            if chunk.get('parent_id') is not None:
+                chunk_data['parent_id'] = chunk['parent_id']
+
+            self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
+
+            if book_metadata:
+                chunk_data['metadata_hash'] = self._compute_metadata_hash(book_metadata)
+
+            chunk_data['source_file'] = str(extracted.metadata.file_path)
+
+            for src_key, dst_key in [
+                ('page', 'page_number'), ('page_label', 'page_label'),
+                ('chapter', 'chapter'), ('section', 'section'),
+                ('section_title', 'section_title'), ('section_type', 'section_type'),
+                ('language', 'language'),
+            ]:
+                if chunk_meta.get(src_key):
+                    chunk_data[dst_key] = chunk_meta[src_key]
+
+            chunks.append(chunk_data)
+
+        # Step 3: Write JSONL
+        header = {
+            '_header': True,
+            'calibre_id': calibre_id,
+            'book_id': book_id,
+            'book_metadata': {k: v for k, v in book_metadata.items()
+                             if k not in ('comments', 'comments_html', 'custom_fields')},
+            'chunk_count': len(chunks),
+            'prepared_at': datetime.now().isoformat(),
+        }
+
+        with open(out_file, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(header, ensure_ascii=False) + '\n')
+            for chunk in chunks:
+                f.write(json.dumps(chunk, ensure_ascii=False) + '\n')
+
+        print(f"  Prepared: {len(chunks)} chunks -> {out_file.name} ({out_file.stat().st_size / 1024:.0f} KB)")
+
+        return {
+            'book_id': book_id,
+            'status': 'prepared',
+            'chunk_count': len(chunks),
+            'extraction_time': extract_time,
+            'output_file': str(out_file),
+        }
+
+    def embed_prepared(self, input_dir: str, mode: str = 'local',
+                       host: str = None, port: int = 8000, token: str = None,
+                       batch_size: int = 100, use_gzip: bool = True,
+                       profile: str = None) -> Dict[str, Any]:
+        """
+        Embed pre-prepared chunks and store in LanceDB (Phase 2 of two-phase indexing).
+
+        Args:
+            input_dir: Directory with JSONL files from prepare_book()
+            mode: 'local' (use local GPU/CPU) or 'remote' (use remote server)
+            host: Remote server host (required if mode='remote')
+            port: Remote server port
+            token: Bearer token for remote server
+            batch_size: Texts per HTTP request (remote) or encode batch (local)
+            use_gzip: Use gzip compression for remote requests
+            profile: Hardware profile for local mode
+
+        Returns:
+            Summary statistics
+        """
+        input_dir = Path(input_dir)
+        if not input_dir.exists():
+            raise FileNotFoundError(f"Input directory not found: {input_dir}")
+
+        # Set up embedder
+        if mode == 'remote':
+            if not host:
+                raise ValueError("--host required for remote mode")
+            from src.archilles.embedders.remote import RemoteBGEEmbedder
+            embedder = RemoteBGEEmbedder(
+                host=host, port=port, token=token,
+                batch_size=batch_size, use_gzip=use_gzip,
+            )
+            embedder.load_model()  # checks health
+            print(f"  Remote embedder: {host}:{port}")
+        else:
+            # Use local SentenceTransformer (already loaded in self.embedding_model)
+            if self.embedding_model is None:
+                raise RuntimeError("No embedding model loaded. Don't use --skip-model with local embed mode.")
+            print(f"  Local embedder: {self.device}, batch_size={self.batch_size}")
+
+        # Load progress tracker
+        progress_file = input_dir / '.progress.json'
+        if progress_file.exists():
+            with open(progress_file, 'r') as f:
+                progress = json.load(f)
+        else:
+            progress = {'embedded': []}
+        embedded_set = set(progress['embedded'])
+
+        # Find all JSONL files
+        jsonl_files = sorted(input_dir.glob('*.jsonl'))
+        if not jsonl_files:
+            print("  No JSONL files found.")
+            return {'total_books': 0, 'total_chunks': 0}
+
+        total_books = 0
+        total_chunks = 0
+        skipped = 0
+
+        for jsonl_file in jsonl_files:
+            # Parse header
+            with open(jsonl_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
+                header = json.loads(first_line)
+                if not header.get('_header'):
+                    print(f"  Skipping {jsonl_file.name}: no header")
+                    continue
+
+                file_key = str(header.get('calibre_id', jsonl_file.stem))
+
+                # Skip if already embedded
+                if file_key in embedded_set:
+                    skipped += 1
+                    continue
+
+                # Also check LanceDB
+                book_id = header['book_id']
+                existing = self.store.get_by_book_id(book_id, limit=1)
+                content = [c for c in existing if c.get('chunk_type', 'content') in ('content', 'child', 'parent')]
+                if content:
+                    print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
+                    embedded_set.add(file_key)
+                    skipped += 1
+                    continue
+
+                # Read chunks
+                chunk_lines = f.readlines()
+
+            chunks = [json.loads(line) for line in chunk_lines]
+            if not chunks:
+                continue
+
+            print(f"  {book_id}: {len(chunks)} chunks...", end=' ', flush=True)
+
+            # Embed
+            texts = [c['text'] for c in chunks]
+            start = time.time()
+
+            if mode == 'remote':
+                result = embedder.embed_batch(texts)
+                embeddings_array = result.embeddings
+            else:
+                # Local: batch through SentenceTransformer
+                all_emb = []
+                for i in range(0, len(texts), self.batch_size):
+                    batch = texts[i:i + self.batch_size]
+                    batch_emb = self.embedding_model.encode(
+                        batch, show_progress_bar=False, convert_to_numpy=True
+                    )
+                    all_emb.append(batch_emb)
+                embeddings_array = np.concatenate(all_emb, axis=0)
+
+            embed_time = time.time() - start
+
+            # Store in LanceDB
+            num_added = self.store.add_chunks(chunks, embeddings_array)
+            print(f"{num_added} indexed ({embed_time:.1f}s)")
+
+            total_books += 1
+            total_chunks += num_added
+
+            # Update progress
+            embedded_set.add(file_key)
+            progress['embedded'] = list(embedded_set)
+            with open(progress_file, 'w') as f:
+                json.dump(progress, f)
+
+        print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. {skipped} skipped.")
+        return {
+            'total_books': total_books,
+            'total_chunks': total_chunks,
+            'skipped': skipped,
         }
 
     def _build_comment_chunks(
@@ -2412,6 +2700,31 @@ Examples:
     create_index_parser.add_argument('--db-path', default=None, help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
     create_index_parser.add_argument('--fts-only', action='store_true', help='Only create FTS index (skip IVF-PQ vector index)')
 
+    # Prepare command (extract + chunk, no embedding)
+    prepare_parser = subparsers.add_parser('prepare', help='Extract and chunk a book without embedding (Phase 1)')
+    prepare_parser.add_argument('book_path', help='Path to book file')
+    prepare_parser.add_argument('--book-id', help='Optional book ID (default: filename)')
+    prepare_parser.add_argument('--output-dir', default='./prepared_chunks', help='Output directory for JSONL files')
+    prepare_parser.add_argument('--db-path', default=None, help='Database path (for metadata extraction)')
+    prepare_parser.add_argument('--enable-ocr', action='store_true', help='Enable OCR for scanned PDFs')
+    prepare_parser.add_argument('--force-ocr', action='store_true', help='Force OCR even for digital PDFs')
+    prepare_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto')
+    prepare_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes')
+    prepare_parser.add_argument('--hierarchical', action='store_true', help='Enable parent-child chunking')
+
+    # Embed command (embed prepared chunks, store in LanceDB)
+    embed_parser = subparsers.add_parser('embed', help='Embed prepared chunks and store in LanceDB (Phase 2)')
+    embed_parser.add_argument('--input-dir', default='./prepared_chunks', help='Directory with JSONL files from prepare')
+    embed_parser.add_argument('--mode', choices=['local', 'remote'], default='local', help='Embedding mode')
+    embed_parser.add_argument('--host', help='Remote embedding server host (e.g. http://1.2.3.4:8000)')
+    embed_parser.add_argument('--port', type=int, default=8000, help='Remote server port')
+    embed_parser.add_argument('--token', help='Bearer token for remote server')
+    embed_parser.add_argument('--batch-size', type=int, default=100, help='Texts per batch')
+    embed_parser.add_argument('--use-gzip', action='store_true', default=True, help='Use gzip for remote requests')
+    embed_parser.add_argument('--no-gzip', action='store_true', help='Disable gzip for remote requests')
+    embed_parser.add_argument('--db-path', default=None, help='Database path')
+    embed_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'], help='Hardware profile for local mode')
+
     args = parser.parse_args()
 
     if not args.command:
@@ -2447,6 +2760,9 @@ Examples:
         use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
         hierarchical = getattr(args, 'hierarchical', False)
 
+        # Skip embedding model for prepare command (no GPU needed)
+        skip_model = (args.command == 'prepare')
+
         rag = archillesRAG(
             db_path=args.db_path,
             reset_db=reset_db,
@@ -2456,7 +2772,8 @@ Examples:
             ocr_language=ocr_language,
             use_modular_pipeline=use_modular_pipeline,
             profile=profile,
-            hierarchical=hierarchical
+            hierarchical=hierarchical,
+            skip_model=skip_model,
         )
 
         if args.command == 'index':
@@ -2511,6 +2828,28 @@ Examples:
                 for ft, n in sorted(stats['file_types'].items(), key=lambda x: -x[1]):
                     print(f"    {ft:<25} {n:>8}")
                 print()
+
+        elif args.command == 'prepare':
+            # Prepare book (extract + chunk, no embedding)
+            stats = rag.prepare_book(
+                args.book_path,
+                book_id=args.book_id,
+                output_dir=args.output_dir,
+            )
+
+        elif args.command == 'embed':
+            # Embed prepared chunks
+            use_gzip = not getattr(args, 'no_gzip', False)
+            stats = rag.embed_prepared(
+                input_dir=args.input_dir,
+                mode=args.mode,
+                host=args.host,
+                port=args.port,
+                token=args.token,
+                batch_size=args.batch_size,
+                use_gzip=use_gzip,
+                profile=profile,
+            )
 
         elif args.command == 'create-index':
             # Create search indexes
