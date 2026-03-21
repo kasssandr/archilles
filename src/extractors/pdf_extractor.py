@@ -1292,10 +1292,6 @@ class PDFExtractor(BaseExtractor):
             if self._detect_roman_numerals(page_text[:100]):
                 return 'front_matter'
 
-        # Last 10% of pages are likely back matter
-        if page_num >= total_pages * 0.90:
-            return 'back_matter'
-
         return 'main_content'
 
     @staticmethod
