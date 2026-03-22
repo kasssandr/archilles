@@ -13,6 +13,8 @@ Usage:
     python scripts/chunk_inspector.py --calibre-id 1234 --toc --export report.md
     python scripts/chunk_inspector.py --calibre-id 1234 5678 --summary-only
     python scripts/chunk_inspector.py --book-id "Author/Book/book.pdf"
+    python scripts/chunk_inspector.py --jsonl prepared_chunks/6737.jsonl
+    python scripts/chunk_inspector.py --jsonl prepared_chunks/6737.jsonl --toc
 """
 
 import argparse
@@ -83,6 +85,21 @@ def load_chunks(db_path: str, calibre_id: Optional[int] = None,
         df = df.drop(columns=['vector'])
 
     return df.to_dict('records')
+
+
+def load_chunks_from_jsonl(jsonl_path: Path) -> List[dict]:
+    """Load chunks from a --prepare-only JSONL file (skips _header line)."""
+    chunks = []
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rec = json.loads(line)
+            if rec.get('_header'):
+                continue
+            chunks.append(rec)
+    return chunks
 
 
 # ---------------------------------------------------------------------------
@@ -473,9 +490,13 @@ def inspect_book(db_path: str, library_path: Path,
                  calibre_id: Optional[int] = None,
                  book_id: Optional[str] = None,
                  summary_only: bool = False,
-                 show_toc: bool = False) -> List[str]:
+                 show_toc: bool = False,
+                 jsonl_path: Optional[Path] = None) -> List[str]:
     """Run full inspection for one book, return output lines."""
-    chunks = load_chunks(db_path, calibre_id=calibre_id, book_id=book_id)
+    if jsonl_path:
+        chunks = load_chunks_from_jsonl(jsonl_path)
+    else:
+        chunks = load_chunks(db_path, calibre_id=calibre_id, book_id=book_id)
     if not chunks:
         id_str = f"calibre_id={calibre_id}" if calibre_id else f"book_id={book_id}"
         return [f"Keine Chunks gefunden für {id_str}.", ""]
@@ -500,6 +521,8 @@ def main():
                        help='Calibre-ID(s) der zu inspizierenden Bücher')
     group.add_argument('--book-id', type=str,
                        help='book_id (LanceDB) des zu inspizierenden Buchs')
+    group.add_argument('--jsonl', type=str, nargs='+', metavar='FILE',
+                       help='JSONL-Datei(en) aus --prepare-only inspizieren')
 
     parser.add_argument('--summary-only', action='store_true',
                         help='Nur Übersicht, keine Chunk-Grenzen')
@@ -515,7 +538,19 @@ def main():
 
     all_output = []
 
-    if args.calibre_id:
+    if args.jsonl:
+        for jp in args.jsonl:
+            result = inspect_book(
+                db_path, library_path,
+                summary_only=args.summary_only,
+                show_toc=args.toc,
+                jsonl_path=Path(jp),
+            )
+            all_output += result
+            if len(args.jsonl) > 1:
+                all_output.append("=" * 60)
+                all_output.append("")
+    elif args.calibre_id:
         for cid in args.calibre_id:
             result = inspect_book(
                 db_path, library_path,

@@ -138,6 +138,145 @@ def _select_best_format(formats: List[Dict[str, str]], prefer_format: str = 'PDF
     return formats[0]
 
 
+# ---------------------------------------------------------------------------
+# Chunk quality scoring for format selection
+# ---------------------------------------------------------------------------
+
+SENTENCE_END_CHARS = set('.!?;:\'"»)')
+
+
+def _score_chunks(chunks: List[dict]) -> dict:
+    """Compute quality signals from a list of chunk dicts.
+
+    Returns a dict with individual metrics and an overall quality score (0-100).
+    Higher is better.
+    """
+    if not chunks:
+        return {'score': 0, 'chunk_count': 0}
+
+    content_chunks = [c for c in chunks
+                      if c.get('chunk_type', 'content') == 'content']
+    total = len(content_chunks) or 1
+
+    # 1. Truncation rate: chunks ending mid-sentence
+    truncated = 0
+    for c in content_chunks:
+        text = (c.get('text') or '').rstrip()
+        if text and text[-1] not in SENTENCE_END_CHARS:
+            truncated += 1
+    truncation_rate = truncated / total
+
+    # 2. Misplaced back_matter: back_matter chunks appearing before the last 10% of the book
+    back_matter_chunks = [c for c in chunks if c.get('section_type') in ('back_matter',)]
+    early_back_matter = 0
+    if back_matter_chunks and content_chunks:
+        max_idx = max(c.get('chunk_index', 0) for c in chunks)
+        threshold = max_idx * 0.9
+        early_back_matter = sum(1 for c in back_matter_chunks
+                                if (c.get('chunk_index', 0)) < threshold)
+    misplaced_back_rate = early_back_matter / total
+
+    # 3. Chunk length variance (coefficient of variation) — lower is better
+    word_counts = [len((c.get('text') or '').split()) for c in content_chunks]
+    if word_counts:
+        import statistics
+        mean_wc = statistics.mean(word_counts)
+        stdev_wc = statistics.stdev(word_counts) if len(word_counts) > 1 else 0
+        cv = stdev_wc / mean_wc if mean_wc > 0 else 0
+    else:
+        cv = 1.0
+
+    # 4. Very short chunks (< 50 words) — often garbage
+    short_chunks = sum(1 for wc in word_counts if wc < 50)
+    short_rate = short_chunks / total
+
+    # 5. Section title coverage — higher is better
+    has_section = sum(1 for c in content_chunks
+                      if c.get('section_title') or c.get('chapter'))
+    section_coverage = has_section / total
+
+    # Composite score (0-100)
+    # Each factor contributes to the score; weights reflect importance
+    score = 100.0
+    score -= truncation_rate * 30       # up to -30 for all chunks truncated
+    score -= misplaced_back_rate * 25   # up to -25 for footnote pollution
+    score -= min(cv, 1.0) * 10          # up to -10 for erratic chunk sizes
+    score -= short_rate * 15            # up to -15 for many tiny chunks
+    score += section_coverage * 10      # up to +10 bonus for section metadata
+    # PDF bonus for page-level citations
+    has_pages = any(c.get('page_number') or c.get('page_label') for c in content_chunks)
+    if has_pages:
+        score += 5                      # +5 bonus for page citations
+
+    score = max(0, min(100, score))
+
+    return {
+        'score': round(score, 1),
+        'chunk_count': len(chunks),
+        'content_chunks': total,
+        'truncation_rate': round(truncation_rate, 3),
+        'misplaced_back_rate': round(misplaced_back_rate, 3),
+        'cv': round(cv, 3),
+        'short_rate': round(short_rate, 3),
+        'section_coverage': round(section_coverage, 3),
+        'has_pages': has_pages,
+    }
+
+
+def _select_best_format_by_quality(
+    formats: List[Dict[str, str]],
+    rag,
+    book_id: str,
+    prefer_format: str = 'PDF',
+) -> tuple:
+    """Prepare multiple formats, score them, return (best_format_entry, scores_dict).
+
+    Falls back to static preference if only one format is available
+    or if quality scoring fails.
+    """
+    # Filter to formats we can compare (PDF and EPUB)
+    comparable = [f for f in formats if f['format'] in ('PDF', 'EPUB')]
+    if len(comparable) < 2:
+        best = _select_best_format(formats, prefer_format)
+        return best, {}
+
+    import tempfile
+    scores = {}
+    for fmt_entry in comparable:
+        try:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                result = rag.prepare_book(
+                    fmt_entry['path'], book_id, output_dir=tmp_dir
+                )
+                # Load the prepared chunks
+                jsonl_files = list(Path(tmp_dir).glob('*.jsonl'))
+                if not jsonl_files:
+                    continue
+                chunks = []
+                with open(jsonl_files[0], 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        rec = json.loads(line)
+                        if rec.get('_header'):
+                            continue
+                        chunks.append(rec)
+                scores[fmt_entry['format']] = _score_chunks(chunks)
+                scores[fmt_entry['format']]['path'] = fmt_entry['path']
+        except Exception as e:
+            print(f"         ⚠  Quality check for {fmt_entry['format']} failed: {e}")
+
+    if not scores:
+        best = _select_best_format(formats, prefer_format)
+        return best, {}
+
+    # Pick format with highest score
+    best_fmt = max(scores, key=lambda k: scores[k]['score'])
+    best_entry = next(f for f in formats if f['format'] == best_fmt)
+    return best_entry, scores
+
+
 def _build_book_entry(row: sqlite3.Row, library_path: Path, include_rating: bool = False) -> Optional[Dict[str, Any]]:
     """Build a standardized book dictionary from a database row.
 
@@ -855,6 +994,7 @@ def batch_prepare(
     output_dir: str = './prepared_chunks',
     dry_run: bool = False,
     prefer_format: str = 'PDF',
+    quality_select: bool = False,
 ) -> Dict[str, Any]:
     """
     Prepare multiple books (extract + chunk, no embedding).
@@ -865,6 +1005,7 @@ def batch_prepare(
         'prepared': 0,
         'skipped': 0,
         'failed': 0,
+        'quality_selected': 0,
         'errors': [],
     }
 
@@ -873,15 +1014,36 @@ def batch_prepare(
     print(f"{'='*60}")
     print(f"  Books to process: {len(books)}")
     print(f"  Output directory: {output_dir}")
+    if quality_select:
+        print(f"  Quality selection: ENABLED (multi-format books will be compared)")
     print(f"  Mode: {'DRY RUN' if dry_run else 'PREPARING'}")
     print(f"{'='*60}\n")
 
     for i, book in enumerate(books, 1):
         book_id = create_book_id(book)
-        best = _select_best_format(book['formats'], prefer_format)
 
-        print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
-        print(f"         Format: {best['format']} | ID: {book_id}")
+        # Quality-based format selection for multi-format books
+        has_multiple = quality_select and len(book['formats']) > 1
+        if has_multiple and not dry_run:
+            best, scores = _select_best_format_by_quality(
+                book['formats'], rag, book_id, prefer_format
+            )
+            if scores:
+                stats['quality_selected'] += 1
+                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+                for fmt, s in scores.items():
+                    marker = " ✓" if fmt == best['format'] else ""
+                    print(f"         {fmt}: score={s['score']}"
+                          f" (trunc={s['truncation_rate']}, back={s['misplaced_back_rate']}"
+                          f", cv={s['cv']}, short={s['short_rate']}){marker}")
+                print(f"         → Selected: {best['format']} | ID: {book_id}")
+            else:
+                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+                print(f"         Format: {best['format']} | ID: {book_id}")
+        else:
+            best = _select_best_format(book['formats'], prefer_format)
+            print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+            print(f"         Format: {best['format']} | ID: {book_id}")
 
         if dry_run:
             print(f"         Would prepare: {best['path']}")
@@ -917,6 +1079,7 @@ def batch_index(
     phase: str = 'phase2',
     db_path: str = None,
     prefer_format: str = 'PDF',
+    quality_select: bool = False,
 ) -> Dict[str, Any]:
     """
     Index multiple books into the RAG database.
@@ -1003,16 +1166,32 @@ def batch_index(
 
         book_id = create_book_id(book)
 
-        # Build ordered format list: preferred first, alternatives as fallbacks
-        best = _select_best_format(book['formats'], prefer_format)
+        # Format selection: quality-based or static preference
+        has_multiple = quality_select and len(book['formats']) > 1
+        if has_multiple:
+            best, scores = _select_best_format_by_quality(
+                book['formats'], rag, book_id, prefer_format
+            )
+            if scores:
+                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+                for fmt, s in scores.items():
+                    marker = " ✓" if fmt == best['format'] else ""
+                    print(f"         {fmt}: score={s['score']}"
+                          f" (trunc={s['truncation_rate']}, back={s['misplaced_back_rate']}"
+                          f", cv={s['cv']}, short={s['short_rate']}){marker}")
+                print(f"         → Selected: {best['format']} | ID: {book_id}")
+            else:
+                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+                print(f"         Format: {best['format']} | ID: {book_id}")
+        else:
+            best = _select_best_format(book['formats'], prefer_format)
+            print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+            print(f"         Format: {best['format']} | ID: {book_id}")
+
         ordered_formats = [best] + [f for f in book['formats'] if f['path'] != best['path']]
 
         file_path = best['path']
         format_type = best['format']
-
-        # Progress header
-        print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
-        print(f"         Format: {format_type} | ID: {book_id}")
 
         should_force = force or reindex_before is not None or reindex_missing_labels
 
@@ -1309,6 +1488,10 @@ Profiles:
                         help='Remove index entries for books deleted from Calibre. '
                              'Can be used standalone or combined with an indexing run. '
                              'Use --dry-run to preview orphans without deleting.')
+    parser.add_argument('--quality-select', action='store_true',
+                        help='When a book has multiple formats (e.g. PDF+EPUB), '
+                             'prepare both, compare chunk quality, and pick the better one. '
+                             'Adds a few seconds per multi-format book.')
     parser.add_argument('--prepare-only', action='store_true',
                         help='Extract and chunk books without embedding (Phase 1 of two-phase indexing). '
                              'Writes JSONL files to --output-dir. No GPU required.')
@@ -1529,6 +1712,7 @@ Profiles:
                     output_dir=args.output_dir,
                     dry_run=args.dry_run,
                     prefer_format=args.prefer_format,
+                    quality_select=getattr(args, 'quality_select', False),
                 )
                 if stats['failed'] > 0:
                     sys.exit(1)
@@ -1561,6 +1745,7 @@ Profiles:
                 phase=phase if safe_indexer else 'phase2',
                 db_path=args.db_path,
                 prefer_format=args.prefer_format,
+                quality_select=getattr(args, 'quality_select', False),
             )
 
             # End session (if not dry run)
