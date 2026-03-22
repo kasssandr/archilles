@@ -240,8 +240,8 @@ def _select_best_format_by_quality(
     Falls back to static preference if only one format is available
     or if quality scoring fails.
     """
-    # Filter to formats we can compare (PDF and EPUB)
-    comparable = [f for f in formats if f['format'] in ('PDF', 'EPUB')]
+    # Filter to formats we can compare (PDF vs EPUB-like)
+    comparable = [f for f in formats if f['format'] in ('PDF', 'EPUB', 'MOBI', 'AZW3')]
     if len(comparable) < 2:
         best = _select_best_format(formats, prefer_format)
         return best, {}
