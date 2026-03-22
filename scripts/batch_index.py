@@ -159,10 +159,16 @@ def _score_chunks(chunks: List[dict]) -> dict:
     total = len(content_chunks) or 1
 
     # 1. Truncation rate: chunks ending mid-sentence
+    # Only count as truncated if the last paragraph is long enough to be
+    # a real sentence fragment (>20 words). Short endings like headings,
+    # terms, or footnote markers are not meaningful truncations.
     truncated = 0
     for c in content_chunks:
         text = (c.get('text') or '').rstrip()
-        if text and text[-1] not in SENTENCE_END_CHARS:
+        if not text or text[-1] in SENTENCE_END_CHARS:
+            continue
+        last_para = text.split('\n\n')[-1].strip()
+        if len(last_para.split()) > 20:
             truncated += 1
     truncation_rate = truncated / total
 

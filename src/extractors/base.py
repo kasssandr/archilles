@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Dict, Any
+import re
 import time
 
 from .models import ExtractedText, ExtractionMetadata, ChunkMetadata
@@ -154,24 +155,60 @@ class BaseExtractor(ABC):
 
         return chunks
 
+    _SENTENCE_END_RE = re.compile(r'[.!?;:»"\')\u201d]\s')
+
     def _split_para_by_words(self, text: str) -> List[str]:
-        """Split a single oversized paragraph into word-boundary chunks with overlap.
+        """Split a single oversized paragraph into sentence-aligned chunks with overlap.
 
         Used as a pre-processing step in ``_create_chunks`` for texts that have
-        no paragraph breaks (e.g. YouTube transcripts).  Overlap is applied so
-        that context at chunk boundaries is not completely lost.
+        no paragraph breaks (e.g. YouTube transcripts, long EPUB sections).
+        Tries to cut at sentence boundaries; falls back to word boundaries
+        if no sentence end is found within the target window.
         """
         words = text.split()
+        total = len(words)
+        if total == 0:
+            return []
+
         words_per_chunk = max(1, int(self.chunk_size / 1.3))
         overlap_words = max(0, int(self.overlap / 1.3))
-        step = max(1, words_per_chunk - overlap_words)
 
         parts: List[str] = []
         i = 0
-        while i < len(words):
-            parts.append(' '.join(words[i:i + words_per_chunk]))
+        while i < total:
+            end = min(i + words_per_chunk, total)
+            candidate = ' '.join(words[i:end])
+
+            # If not the last chunk, try to align to a sentence boundary
+            if end < total:
+                candidate = self._align_to_sentence_end(candidate)
+
+            parts.append(candidate)
+
+            # Advance: actual words consumed minus overlap
+            consumed = len(candidate.split())
+            step = max(1, consumed - overlap_words)
             i += step
         return parts
+
+    @classmethod
+    def _align_to_sentence_end(cls, text: str) -> str:
+        """Trim text to end at the last sentence boundary, if one exists.
+
+        Looks for sentence-ending punctuation followed by whitespace.
+        Only trims if at least 40% of the text is retained, to avoid
+        degenerate tiny chunks.
+        """
+        # Find all sentence boundaries
+        min_keep = int(len(text) * 0.4)
+        last_match = None
+        for m in cls._SENTENCE_END_RE.finditer(text):
+            if m.end() >= min_keep:
+                last_match = m
+        if last_match:
+            # Include the punctuation, strip trailing whitespace
+            return text[:last_match.start() + 1].rstrip()
+        return text
 
     def _create_hierarchical_chunks(
         self,
