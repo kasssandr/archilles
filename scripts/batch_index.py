@@ -152,7 +152,12 @@ def _score_chunks(chunks: List[dict]) -> dict:
     Higher is better.
     """
     if not chunks:
-        return {'score': 0, 'chunk_count': 0}
+        return {
+            'score': 0, 'chunk_count': 0, 'content_chunks': 0,
+            'truncation_rate': 0, 'misplaced_back_rate': 0,
+            'cv': 0, 'short_rate': 0, 'section_coverage': 0,
+            'has_pages': False,
+        }
 
     content_chunks = [c for c in chunks
                       if c.get('chunk_type', 'content') == 'content']
@@ -1028,6 +1033,24 @@ def batch_prepare(
     for i, book in enumerate(books, 1):
         book_id = create_book_id(book)
 
+        # Skip-existing check BEFORE quality comparison (avoid expensive re-prepare)
+        if not dry_run:
+            calibre_id = book.get('id', 0)
+            existing_jsonl = Path(output_dir) / f"{calibre_id}.jsonl"
+            if existing_jsonl.exists():
+                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
+                stats['skipped'] += 1
+                try:
+                    with open(existing_jsonl, 'r', encoding='utf-8') as ef:
+                        hdr = json.loads(ef.readline())
+                        if hdr.get('_header'):
+                            print(f"         Already prepared ({hdr.get('chunk_count', '?')} chunks). Skipping.")
+                            continue
+                except Exception:
+                    pass
+                # File exists but no valid header — re-prepare
+                stats['skipped'] -= 1
+
         # Quality-based format selection for multi-format books
         has_multiple = quality_select and len(book['formats']) > 1
         if has_multiple and not dry_run:
@@ -1040,8 +1063,8 @@ def batch_prepare(
                 for fmt, s in scores.items():
                     marker = " ✓" if fmt == best['format'] else ""
                     print(f"         {fmt}: score={s['score']}"
-                          f" (trunc={s['truncation_rate']}, back={s['misplaced_back_rate']}"
-                          f", cv={s['cv']}, short={s['short_rate']}){marker}")
+                          f" (trunc={s.get('truncation_rate', '?')}, back={s.get('misplaced_back_rate', '?')}"
+                          f", cv={s.get('cv', '?')}, short={s.get('short_rate', '?')}){marker}")
                 print(f"         → Selected: {best['format']} | ID: {book_id}")
             else:
                 print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
