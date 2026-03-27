@@ -1222,6 +1222,26 @@ class archillesRAG:
 
         print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
 
+        # Detect scanned/mostly-scanned PDFs
+        needs_ocr = False
+        if extracted.metadata.detected_format == 'pdf':
+            total_pages = extracted.metadata.total_pages or 0
+            total_words = extracted.metadata.total_words or 0
+            if not extracted.chunks:
+                needs_ocr = True
+                print(f"  \u26a0\ufe0f  No text extracted \u2014 likely fully scanned. Re-index with --enable-ocr.")
+            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
+                pages_with_text = len(set(
+                    c['metadata'].get('page', 0)
+                    for c in extracted.chunks
+                    if isinstance(c.get('metadata'), dict)
+                )) if extracted.chunks else 0
+                page_coverage = pages_with_text / total_pages if total_pages > 0 else 1.0
+                if page_coverage < 0.4:
+                    needs_ocr = True
+                    wpp = total_words // total_pages
+                    print(f"  \u26a0\ufe0f  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages \u2014 likely mostly scanned. Re-index with --enable-ocr.")
+
         # Step 2: Build chunk dicts (same as index_book lines 1009-1052, without embeddings)
         chunks = []
         for i, chunk in enumerate(extracted.chunks):
@@ -1267,13 +1287,26 @@ class archillesRAG:
 
             chunks.append(chunk_data)
 
+        # Step 2b: Add Calibre comments as structured chunk(s) (if available)
+        has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
+        if has_comment:
+            meta_hash = self._compute_metadata_hash(book_metadata)
+            comment_chunks, _ = self._build_comment_chunks(
+                book_metadata=book_metadata,
+                book_id=book_id,
+                book_format=extracted.metadata.detected_format,
+                metadata_hash=meta_hash,
+                embed=False,
+            )
+            chunks.extend(comment_chunks)
+
         # Step 3: Write JSONL
         header = {
             '_header': True,
             'calibre_id': calibre_id,
             'book_id': book_id,
             'book_metadata': {k: v for k, v in book_metadata.items()
-                             if k not in ('comments', 'comments_html', 'custom_fields')},
+                             if k not in ('custom_fields',)},
             'chunk_count': len(chunks),
             'prepared_at': datetime.now().isoformat(),
         }
@@ -1291,6 +1324,7 @@ class archillesRAG:
             'chunk_count': len(chunks),
             'extraction_time': extract_time,
             'output_file': str(out_file),
+            'needs_ocr': needs_ocr,
         }
 
     def embed_prepared(self, input_dir: str, mode: str = 'local',
@@ -1434,6 +1468,7 @@ class archillesRAG:
         book_id: str,
         book_format: str,
         metadata_hash: str,
+        embed: bool = True,
     ) -> tuple:
         """
         Build calibre_comment chunk(s) with structure-aware text.
@@ -1517,9 +1552,12 @@ class archillesRAG:
 
             chunk_text = f"[CALIBRE_COMMENT] {' '.join(parts)}"
 
-            embedding = self.embedding_model.encode(
-                chunk_text, show_progress_bar=False, convert_to_numpy=True
-            )
+            if embed:
+                embedding = self.embedding_model.encode(
+                    chunk_text, show_progress_bar=False, convert_to_numpy=True
+                )
+            else:
+                embedding = []
 
             chunk = {
                 'id': f"{book_id}_comment_{i}",
@@ -1537,7 +1575,7 @@ class archillesRAG:
             self._apply_book_metadata_to_chunk(chunk, book_metadata)
 
             chunks.append(chunk)
-            embeddings.append(embedding.tolist())
+            embeddings.append(embedding.tolist() if hasattr(embedding, 'tolist') else embedding)
 
         return chunks, embeddings
 
