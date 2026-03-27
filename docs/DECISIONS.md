@@ -1,8 +1,8 @@
 # ARCHILLES – Entscheidungsarchiv
 
-**Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen  
+**Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 11. März 2026 (ADR-019–024: Research Interest Boosting, list_books_by_author, Erweiterte Batch-Optionen, MPS-Support, Stop-Word-Removal, Progress-DB)
+**Letzte Überarbeitung:** 27. März 2026 (ADR-014 bis ADR-018 ergänzt: Quality-Select, Two-Phase Pipeline, Comment-Chunks, März-2026-Fixes)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -146,7 +146,7 @@ Die semantische Unterscheidung zwischen Buchinhalt und Nutzernotizen bleibt übe
 Vorteile der Konsolidierung:
 - **Ein Embedding-Modell statt zwei:** BGE-M3 für alles eliminiert die semantische Inkompatibilität zwischen `all-mpnet-base-v2` (384 Dim.) und BGE-M3 (1024 Dim.), die Cross-Suchen zwischen Buchtext und Annotationen erschwerte.
 - **Annotationen profitieren von Hybrid-Search:** LanceDBs native Fusion aus Vektor- und Keyword-Matching (ADR-006) steht jetzt auch für Annotationen zur Verfügung.
-- **Eine Dependency weniger:** ChromaDB ist für die Annotation-Suche nicht mehr erforderlich. Der ChromaDB-Index (`annotations_indexer.py`) wurde am 28. Februar 2026 vollständig entfernt (siehe ADR-016).
+- **Eine Dependency weniger:** ChromaDB ist für die Annotation-Suche nicht mehr erforderlich. Der bestehende ChromaDB-Index (`annotations_indexer.py`) bleibt als Fallback erhalten, wird aber nicht mehr aktiv gefüllt.
 - **Einheitliche Änderungserkennung:** Annotationen werden über denselben Hash-Mechanismus wie Metadaten auf Änderungen geprüft (siehe ADR-011).
 
 Die konzeptionelle Zwei-Datenbanken-Architektur ist damit technisch als Filterung innerhalb einer einzigen LanceDB-Tabelle realisiert – einfacher, performanter und wartungsärmer als zwei physisch getrennte Datenbanken.
@@ -186,12 +186,13 @@ src/
 │   ├── models.py                  # Gemeinsame Dataclasses
 │   └── exceptions.py              # Fehlertypen-Hierarchie
 ├── storage/
-│   └── lancedb_store.py           # LanceDBStore (alle Chunks: Buchtext + Annotationen)
+│   └── lancedb_store.py           # LanceDBStore (Vektor-DB-Backend)
 ├── retriever/
 │   └── reranker.py                # Cross-Encoder Reranking (optional)
 ├── calibre_mcp/
-│   ├── server.py                  # CalibreMCPServer (10 MCP-Tools)
-│   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping, Text-Suche
+│   ├── server.py                  # CalibreMCPServer (12 MCP-Tools)
+│   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping
+│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Legacy; LanceDB-Integration in ADR-012)
 │   └── calibre_analyzer.py        # Bibliotheks-Statistiken
 └── calibre_db.py                  # Read-only Calibre-Metadaten-Zugriff
 ```
@@ -208,6 +209,8 @@ CLI-Skripte: `scripts/rag_demo.py`, `scripts/batch_index.py`, `scripts/web_ui.py
 **Begründung:** Die Beschränkung auf eine Datei verhindert doppelte Indexierung desselben Inhalts in verschiedenen Formaten. PDF hat Vorrang wegen des zuverlässigen Seitenzahlen-Mappings, das für zitierfähige Quellenangaben entscheidend ist. EPUBs liefern dafür bessere Strukturinformationen (TOC-Parsing, Section-Metadata) und werden schneller verarbeitet.
 
 Das Ignorieren von Unterordnern ist eine bewusste Produktentscheidung, keine technische Limitierung. Gut organisierte Nutzer lagern dort oft eigene Exzerpte und Texte, die sie durchaus indexiert haben möchten – und die sie aus guten Gründen nicht ins Calibre-Kommentarfeld schreiben. Statt sie zur Umorganisation zu nötigen, wird die Fein-Indexierung mit Wahl- und Einstelloptionen für eine spätere Version oder die Paid-Version reserviert. Das schafft einen natürlichen Upgrade-Pfad, ohne die Basis-Version zu verkomplizieren.
+
+**Aktualisierung (März 2026):** Die statische Priorität PDF > EPUB wurde durch eine qualitätsbasierte Auswahl ergänzt (siehe ADR-014). Die Grundentscheidung "eine Datei pro Buchordner" bleibt bestehen; was sich ändert, ist wie diese eine Datei bei Mehrfachvorkommen ausgewählt wird.
 
 ### ADR-011: Smart Metadata & Annotation Update mit Hash-basierter Änderungserkennung (Februar 2026)
 
@@ -270,61 +273,6 @@ Das `[ANNOTATION]`-Präfix sorgt dafür, dass BGE-M3 den semantischen Kontext "N
 
 ### ADR-013: Crash-sichere Backup-Strategie für LanceDB (Februar 2026)
 
-### ADR-014: Citation Style Module – Prompt-basiert, CSL-ready (Februar 2026)
-
-**Kontext:** ARCHILLES liefert Suchergebnisse mit Zitationsangaben (Autor, Titel, Jahr, Seite/Kapitel). Die Formatierung dieser Angaben – Chicago, APA, Harvard, MLA, IEEE – lag bisher implizit in der Formulierung der MCP-Tool-Ergebnisse. Es fehlte eine zentrale Stelle, die den gewünschten Zitierstil konfigurierbar macht und die Formatierungsanweisung für das LLM generiert.
-
-**Entscheidung:** Neues Modul `src/citation/` mit drei Komponenten:
-- `CITATION_STYLES`: Registry mit 6 Stilen (Chicago Author-Date, Chicago Notes, APA 7, Harvard, MLA 9, IEEE). Jeder Eintrag enthält Label, kanonische CSL-Style-ID, Locale-Hint, deutsch/englische Prompt-Fragmente und ein Formatbeispiel.
-- `CitationConfig`: Dataclass für Nutzerpräferenzen (`style`, `locale`, optionaler `csl_path`). Serialisierbar für `config.json`.
-- `format_bibliography_instruction()`: Generiert den Instruktionsblock, der in den RAG-System-Prompt injiziert wird, damit Claude die Bibliografie im gewünschten Stil formatiert.
-
-**Begründung – Warum Prompt-basiert statt CSL-Prozessor:**
-
-Die parallele CSL-Forschung (citeproc-py Evaluation, Februar 2026) ergab:
-
-| Aspekt | citeproc-py | Prompt-basiert (aktueller Ansatz) |
-|---|---|---|
-| CSL-Spec-Compliance | ~60% der Test-Suite | Claude kennt APA/Chicago/Harvard nativ |
-| Maintenance | Inaktiv (letzte Release v0.9.0, volunteer-maintained) | Keine externe Dependency |
-| Dependencies | lxml (~4 MB), optional citeproc-py-styles (~40 MB) | Keine |
-| Flexibilität | Exakt nach CSL-Spec | Claude kann Randfall-Formatierung intelligent lösen |
-| Geeignet für | Offline-Rendering, Zotero-Roundtrip, Verlagseinreichung | Interaktive Recherche mit LLM |
-
-Für den aktuellen Use Case – Claude formatiert die Bibliografie im Rahmen einer MCP-Session – ist der Prompt-basierte Ansatz überlegen: null Dependencies, sofort funktionsfähig, und Claude beherrscht die gängigen Stile aus seinem Training.
-
-**CSL-Readiness als Architekturprinzip:** Die kanonischen CSL-Style-IDs (identisch mit Zoteros Style Repository) sind bereits im Code hinterlegt. Wenn citeproc-py als optionale Dependency hinzugefügt wird, braucht es nur noch ein ~40-Zeilen-`formatter.py`, das `CitationConfig.csl_style_id` nimmt und eine formatierte Bibliografie zurückgibt. Kein Schema-Umbau nötig. Für ARCHILLES wären nur 6 .csl-Dateien (~50 KB) statt des vollen Styles-Pakets (~40 MB) nötig.
-
-**citeproc-py lohnt sich erst für:**
-- Offline-Rendering ohne Claude
-- Exakte Konformitätsprüfung (Dissertation, Verlagseinreichung)
-- Zotero-Roundtrip mit garantierter Stil-Treue
-
-**Implementierungsstand:** Modul vollständig implementiert (`src/citation/__init__.py`, `src/citation/config.py`). Noch nicht in den MCP-Server oder Service-Layer integriert – das erfolgt mit dem nächsten config.json-System.
-
-### ADR-015: EPUB-Ergebnisse mit Originalsprachen-Zitat (Februar 2026)
-
-**Kontext:** EPUB-Dateien haben keine physischen Seitenzahlen. ARCHILLES zitiert EPUB-Quellen mit Kapitelnamen statt Seitenzahlen: `(Autor, Titel [Jahr], Kap. Kapitelname)`. Der Nutzer muss die zitierte Passage im Originaldokument wiederfinden können – etwa um den Kontext zu prüfen, weiterzulesen oder korrekt zu zitieren.
-
-**Entscheidung:** Bei EPUB-Quellen (und allen anderen Quellen ohne physische Seitenzahl) wird stets ein kurzes wörtliches Zitat in der Originalsprache des Textes mitgeliefert. Das Zitat muss hinreichend distinktiv sein, um mit der Suchfunktion des E-Book-Readers die Passage eindeutig zu lokalisieren.
-
-**Begründung:** Die Kapitelangabe allein ist für die Auffindbarkeit unzureichend – Kapitel können Dutzende Seiten umfassen. Ein Originalsprachen-Zitat von 5–15 Wörtern löst das Problem elegant:
-- **Findability:** Der Nutzer kann das Zitat per Strg+F im Calibre-Viewer oder jedem anderen Reader suchen und landet exakt an der Stelle.
-- **Originalsprache:** Wenn der Text auf Latein, Englisch oder einer anderen Fremdsprache verfasst ist, muss das Zitat in dieser Sprache stehen – nicht in der Übersetzung. Nur so funktioniert die Textsuche im Originaldokument.
-- **Verifizierbarkeit:** Das wörtliche Zitat ermöglicht eine sofortige Plausibilitätsprüfung, ob die Passage tatsächlich das behauptete Argument enthält.
-
-**Geltungsbereich:** Diese Regel gilt für alle ARCHILLES-Ausgabeformate (Synthese, Materialliste, Zitatsammlung) und wird in ARCHILLES_SKILL.md als Handlungsanweisung für KI-Assistenten verankert.
-
-**Beispiel:**
-```
-(Eusebius, Kirchengeschichte, Kap. III.4 — „τὴν τῶν ἀποστόλων διαδοχὴν")
-(Blumenberg, Die Legitimität der Neuzeit [1966], Kap. 2.1 — „die Selbstbehauptung der Vernunft")
-```
-
----
-
-### ADR-013: Crash-sichere Backup-Strategie für LanceDB (Februar 2026)
-
 **Kontext:** Die LanceDB-Datenbank für 670+ Bücher umfasst ca. 243.000 Chunks und belegt ~13 GB auf der Festplatte. Batch-Indexierung läuft über Stunden bis Tage. Ein Abbruch durch Systemabsturz, Stromausfall oder CTRL+C darf nicht zum Datenverlust führen.
 
 **Entscheidung:** `SafeIndexer` (`scripts/safe_indexer.py`) erstellt periodische Kopien der LanceDB und begrenzt die Anzahl aufbewahrter Backups.
@@ -341,117 +289,123 @@ Für den aktuellen Use Case – Claude formatiert die Bibliografie im Rahmen ein
 
 **Konsequenz:** Der `SafeIndexer` bleibt als Sicherheitsnetz erhalten, ist aber kein Engpass mehr. Für die Zukunft wäre ein inkrementelles Backup-Konzept denkbar (nur geänderte Lance-Fragmente kopieren), aber bei der aktuellen Datenbankgröße ist die einfache Kopie-Strategie ausreichend.
 
-### ADR-016: ChromaDB vollständig entfernt (28. Februar 2026)
+### ADR-014: Quality-Based Format Selection statt statischer Priorität (März 2026)
 
-**Kontext:** ChromaDB war nach der LanceDB-Migration (ADR-001) und der Annotation-Konsolidierung (ADR-012) nur noch als leere Hülle vorhanden: `annotations_indexer.py` (850+ Zeilen) existierte im Code, wurde aber seit dem 18. Februar 2026 nicht mehr gefüllt. `search_annotations` routete weiterhin gegen ChromaDB – also gegen einen leeren Index.
+**Kontext:** ADR-010 legte eine statische Priorität fest: PDF > EPUB > sonstige Formate. Diese Regel ist zu grob. In der Praxis gibt es EPUB-Konvertierungen aus Scan-PDFs, die massive Truncation-Fehler und inkohärente Chunks produzieren – während das Original-PDF strukturell sauber ist. Umgekehrt gibt es OCR-PDFs, bei denen das EPUB deutlich bessere Chunk-Qualität liefert. Eine statische Rangfolge wählt systematisch das falsche Format.
 
-**Entscheidung:** Vollständige Entfernung von ChromaDB aus dem Projekt.
+**Entscheidung:** Bei mehreren verfügbaren Formaten (PDF, EPUB, MOBI/AZW3) wird das qualitativ bessere automatisch ausgewählt. Das System bereitet beide Formate temporär vor und vergleicht anhand eines Scores (0–100). CLI-Flag: `--quality-select [--prefer-format pdf|epub]`.
 
-**Änderungen:**
-- `src/calibre_mcp/annotations_indexer.py` gelöscht (850+ Zeilen ChromaDB-Logik)
-- `chromadb==0.4.22` aus `requirements.txt` entfernt
-- `rank-bm25==0.2.2` aus `requirements.txt` entfernt (LanceDB hat native FTS)
-- `search_annotations`-Tool auf LanceDB umgestellt: sucht jetzt in `chunk_type='annotation'` und `chunk_type='calibre_comment'` via neuem Kombinationsfilter `'annotations_and_comments'` in `LanceDBStore._build_filter()`
-- `index_annotations`-Tool aus MCP-Server entfernt (Annotationen werden im regulären Indexierungslauf automatisch gespeichert)
-- `get_index_stats`-Tool aus MCP-Server entfernt (war ChromaDB-spezifisch; LanceDB-Stats über `get_index_status` verfügbar)
-- `chroma_db/` aus `.gitignore` entfernt
-- ChromaDB-Kompatibilitäts-Shim (`ChromaDBCorruptionError = LanceDBError`) aus `rag_demo.py` entfernt
+**Score-Kriterien:**
 
-**Begründung:** Eine tote Dependency mit 850 Zeilen totem Code ist ein aktives Wartungsproblem. Der ChromaDB-Index war nie in die LanceDB-Architektur integriert – das war eine Schuld, die seit ADR-012 angewachsen war. Die Entfernung schließt die Migration ab und reduziert die Installationsgröße und Komplexität erheblich.
+| Kriterium | Gewicht | Beschreibung |
+|-----------|---------|--------------|
+| Truncation Rate | −30 | Chunks die mitten im Satz enden |
+| Misplaced Back Matter | −25 | Bibliographie/Index vor den letzten 10% |
+| Chunk Length Variance | −10 | Ungleichmäßige Chunk-Längen |
+| Very Short Chunks | −15 | Chunks <50 Wörter |
+| Section Coverage | +10 | Chunks mit chapter/section_title |
+| Page Metadata | +5 | Seitenzahlen vorhanden (PDF-Bonus) |
 
-**Konsequenz:** `search_annotations` nutzt jetzt denselben Hybrid-Search-Pfad wie `search_books_with_citations` – mit BGE-M3-Embeddings, BM25-Keyword-Matching und RRF-Fusion. Annotationen, die vor dem 18. Februar 2026 in ChromaDB gespeichert waren, sind verloren, sofern sie nicht im LanceDB-Lauf vom 18. Februar erfasst wurden. Eine Neu-Indexierung mit `--reindex-before 2026-02-19` stellt sie wieder her.
+**Begründung:** EPUB ist nicht grundsätzlich besser als PDF – die Qualität hängt von der Konvertierungshistorie des konkreten Titels ab. Ein score-basiertes System trifft diese Entscheidung datengetrieben statt dogmatisch. Der `--prefer-format`-Parameter ermöglicht es, bei Gleichstand eine Präferenz zu setzen (z.B. PDF für Seitenzahlen-Garantie).
 
-### ADR-017: `--cleanup-orphans` – Stale-Index-Einträge entfernen (28. Februar 2026)
+**Implementierung:** `batch_index.py:124-288`. Beide Formate werden temporär verarbeitet; nur das gewählte Format wandert in die Pipeline. Die Qualitätsanalyse läuft vollständig CPU-seitig (kein Embedding erforderlich) und wird durch die Skip-Existing-Optimierung (s.u.) ohnehin nur bei Erstindexierungen ausgeführt.
 
-**Kontext:** Wenn ein Buch aus Calibre gelöscht wird, verbleiben seine Chunks in LanceDB – der Index wächst mit toten Einträgen. Es fehlte ein Mechanismus, um diese Orphans zu bereinigen.
+**Weitere Fixes im März 2026 in diesem Kontext:**
+- **MOBI/AZW3 einbezogen** (commit b4c0a7a): Auch diese Formate nehmen am Qualitätsvergleich teil.
+- **Skip-Existing vor Quality-Vergleich** (commit 192593b): Wenn für ein Buch bereits ein JSONL existiert, wird die teure Qualitätsanalyse übersprungen. Performance-Gewinn bei Batch-Läufen über teilweise vorbereitete Bestände erheblich.
+- **Back-Matter-Heuristik entfernt** (commit eabed12): Die positionsbasierte Heuristik, die Bibliographien und Indizes anhand ihrer Zeichenposition im Dokument erkannte, wurde vollständig entfernt. Sie war strukturell unzuverlässig und produzierte False Positives. Der Quality-Score berücksichtigt Misplaced-Back-Matter jetzt als Scoring-Kriterium statt als Filter – ein Befund fließt in die Formatwahl ein, blockiert aber keine Chunks mehr.
 
-**Entscheidung:** Neues CLI-Flag `--cleanup-orphans` in `batch_index.py`.
+### ADR-015: Two-Phase Indexing Pipeline – Prepare/Embed (März 2026)
 
-**Implementierung:** `get_all_calibre_ids()` liest alle Book-IDs direkt aus Calibres `metadata.db` (ohne Tag/Autor-Filter, um nicht Bücher aus anderen Tags fälschlicherweise als Orphans zu werten). `cleanup_orphans()` vergleicht die LanceDB-IDs gegen die Calibre-IDs und löscht Chunks zu nicht mehr vorhandenen Büchern. Das Flag kann standalone verwendet werden, ohne `--tag`/`--author`/`--all` anzugeben.
+**Kontext:** Die bisherige Pipeline koppelte Textextraktion (CPU-intensiv, kein GPU erforderlich) und Embedding-Erzeugung (GPU-intensiv) in einem einzigen Durchlauf. Das erzeugte zwei praktische Probleme: Erstens musste bei jedem Neustart der gesamte Prozess für ein Buch wiederholt werden, selbst wenn die Textextraktion bereits erfolgreich war. Zweitens war die Pipeline nicht auf verteilte Setups vorbereitet, bei denen Extraktion und Embedding auf verschiedenen Maschinen laufen.
 
-**Begründung:** Ein wachsender Index mit toten Einträgen schadet der Suchqualität (False Positives) und verschwendet Speicher. Der Dry-Run-Modus erlaubt sichere Inspektion vor dem Löschen.
+**Entscheidung:** Entkopplung in zwei explizite Phasen:
+- **Phase 1 – Prepare** (`--prepare-only --output-dir ./prepared_chunks`): Textextraktion, Chunking, Metadaten-Anreicherung → JSONL-Dateien pro Buch (benannt nach Calibre-ID). Läuft vollständig CPU-seitig.
+- **Phase 2 – Embed** (`python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode local|remote`): Liest JSONLs, erzeugt BGE-M3-Embeddings, schreibt in LanceDB. Progress-Tracking via `.progress.json` (Resume bei Abbruch). Remote-Modus für externen Embedding-Server.
 
-### ADR-018: `--prefer-format` – Dateiformat-Präferenz bei Batch-Indexierung (28. Februar 2026)
+**JSONL-Format:** Header-Zeile mit Buch-Metadaten, anschließend eine Zeile pro Chunk (Chunk-Daten ohne Vektoren). Dateinamen entsprechen der Calibre-ID (`{calibre_id}.jsonl`).
 
-**Kontext:** Viele Bücher in Calibre liegen in mehreren Formaten vor (z.B. PDF + EPUB). Die bisherige Strategie (PDF-Vorrang hardcodiert) bevorzugte Seitenzahlen, ignorierte aber die erheblichen Vorteile strukturierter EPUB-Extraktion.
+**Begründung:** JSONL als Zwischenformat ist menschenlesbar, inspizierbar und portierbar. Die Trennung ermöglicht:
+- GPU-unabhängige Extraktion auf Systemen ohne dedizierte GPU
+- Batch-Embedding auf einem Remote-Server (z.B. mit stärkerer GPU)
+- Inspektion und manuelle Korrektur zwischen den Phasen
+- Resume-Fähigkeit: Abgebrochene Embedding-Läufe setzen an der letzten erfolgreich verarbeiteten Datei fort, nicht am Anfang
 
-**Entscheidung:** Neues CLI-Flag `--prefer-format` mit Optionen `pdf`, `epub`, `mobi`, `azw3` (Standard: `pdf`). Ist das bevorzugte Format nicht vorhanden, greift automatisch das nächste verfügbare Format.
+**Companion-Tool – Chunk Inspector** (`scripts/chunk_inspector.py`): Mit der Two-Phase-Pipeline entstand ein Diagnostik-Tool, das JSONL-Dateien und LanceDB-Einträge analysiert:
+- Metadaten-Abdeckung (chapter, section_title, page_label)
+- Chunk-Statistiken (Wortanzahl min/max/mean/median)
+- Truncation-Erkennung (abgeschnittene Sätze)
+- TOC-Alignment (Kapitelzuordnung prüfen)
+- Unterstützt LanceDB (`--calibre-id`) und JSONL (`--jsonl`)
 
-**Abwägung:**
+Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugging-Werkzeug. Er macht die Qualität des Zwischenformats sichtbar, bevor Embedding-Ressourcen investiert werden.
 
-| Format | Vorteil | Nachteil |
-|--------|---------|----------|
-| PDF | Exakte Seitenzahlen, wissenschaftliche Zitierbarkeit | OCR-Rauschen bei gescannten PDFs; Headers/Footers in Chunks |
-| EPUB | Saubere Chunks (HTML-Struktur), schnellere Indexierung | Keine Seitenzahlen; Kapitel-Zitate statt Seiten-Zitate |
+**Implementierung:** `rag_demo.py:1146-1463`, `batch_index.py`.
 
-**Begründung:** Die Format-Wahl ist ein echtes Qualitäts-Trade-off, der vom Nutzer je nach Primärzweck (wissenschaftliches Zitieren vs. thematische Recherche) getroffen werden soll. EPUBs sind aufgrund der HTML-basierten Struktur schneller zu indexieren und produzieren semantisch kohärentere Chunks, was die Suchqualität bei konzeptuellen Fragen verbessert. PDFs bleiben für akademische Arbeit mit Seitenreferenzen vorzuziehen.
+### ADR-016: Calibre-Kommentare in der Prepare-Only-Pipeline (März 2026, commit 221610c)
 
-**Umstellen bereits indexierter Bücher:** Die Format-Präferenz wird nicht automatisch auf bereits indexierte Bücher angewendet. Für einen vollständigen Wechsel: `--prefer-format epub --reindex-before 2099-01-01`.
+**Kontext:** Calibre-Kommentare (Klappentexte, Verlagsbeschreibungen, persönliche Exzerpte) wurden bislang als `calibre_comment`-Chunks nur in der vollständigen Indexierungspipeline erzeugt – also immer gemeinsam mit dem Embedding-Schritt. In der Two-Phase-Pipeline (ADR-015) fehlten Comment-Chunks daher in den JSONL-Dateien, wenn `--prepare-only` verwendet wurde.
 
-### ADR-019: `set_research_interests` – Keyword-Boosting ohne Re-Indexierung (März 2026)
+**Entscheidung:** `_build_comment_chunks(embed=False)` – Comment-Chunks werden jetzt auch in der Prepare-Phase ohne GPU erzeugt und in das JSONL geschrieben. Die Embedding-Erzeugung erfolgt in Phase 2 gemeinsam mit den Content-Chunks.
 
-**Kontext:** Nutzer arbeiten über Wochen oder Monate an spezifischen Forschungsprojekten. Innerhalb eines Projekts sind bestimmte Eigennamen, Konzepte und Fachbegriffe durchgehend relevant (z.B. "Josephus", "Mithras", "priestly elite"). Die Suchergebnisse sollten diese Prioritäten reflektieren, ohne dass der Nutzer bei jeder Anfrage explizite Filter setzt oder den Index neu aufbauen muss.
+**Konsequenzen:**
+- `prepare_book()` erzeugt jetzt vollständige JSONLs mit `calibre_comment`-Chunks
+- Scan-/OCR-Erkennung (Warnung bei unzureichender Textdichte) läuft ebenfalls im prepare-only-Pfad
+- `scripts/patch_comments.py`: Nachträgliches Patchen bestehender JSONLs, die vor diesem Fix erstellt wurden. Erlaubt Migration des bestehenden Bestands ohne vollständige Neuextraktion.
 
-**Entscheidung:** Einführung von `set_research_interests` als dediziertes MCP-Tool. Es registriert eine Liste von Boost-Keywords in einer JSON-Datei im Library-Ordner (`research_interests.json`). Bei jeder Suchanfrage werden Treffer, die mindestens eines dieser Keywords im Text oder in den Metadaten enthalten, mit einem konfigurierbaren additiven Faktor hochgestuft (Standard: +0,15 pro übereinstimmendem Keyword). Das Tool erlaubt `action: 'get'` (aktuelle Interessen anzeigen), `action: 'set'` (neue Keywords setzen) und `action: 'clear'` (zurücksetzen).
+**Begründung:** Die Vollständigkeit des JSONL-Formats ist eine Invariante der Prepare-Phase. Wenn Phase 1 abgeschlossen ist, soll Phase 2 keine Metadaten mehr aus Calibre nachlesen müssen – alle Entscheidungen über Chunk-Inhalt fallen in Phase 1. Das `patch_comments.py`-Skript ermöglicht den sanften Übergang für bestehende Datenbestände.
 
-**Begründung:** Die Alternative – explizite Tag-Filter bei jeder Anfrage – ist für Nutzer im aktiven Forschungsfluss unpraktisch. Fine-Tuning oder Re-Indexierung für dasselbe Ziel wäre unverhältnismäßig teuer. Das Boosting-Modell ist adressierbar ohne Architektureingriff: Die Gewichte werden am Abruf-Zeitpunkt angewendet, nicht beim Indexaufbau. Das unterscheidet es fundamental von einem Embedding-basierten Ansatz.
+### ADR-017: Chunk-Splitting bei Calibre-Kommentaren (März 2026)
 
-**Abgrenzung zum Tag-Filter:** Tag-Filter sind explizit pro Anfrage und schließen nicht getaggte Ergebnisse aus. Research-Interest-Boosting ist implizit und dauerhaft für alle Anfragen aktiv – es unterdrückt keine Ergebnisse, sondern priorisiert sie. Beide Mechanismen sind kombinierbar.
+**Kontext:** Calibre-Kommentarfelder können sehr lang sein – insbesondere wenn der Nutzer ausführliche persönliche Exzerpte, NotebookLM-Ausgaben oder mehrseitige Verlagstexte ablegt. Ein einzelner `calibre_comment`-Chunk mit 2.000+ Wörtern beeinträchtigt die Retrieval-Qualität erheblich, weil BGE-M3's Kontext-Fenster dann nicht mehr optimal genutzt wird.
 
-**Implementierungsstand:** `set_research_interests_tool()` in `src/calibre_mcp/server.py`. Keywords werden im Service-Layer geladen und bei der Ergebnisaufbereitung in `ArchillesService` angewendet.
+**Entscheidung:** Calibre-Kommentare werden bei >400 Wörtern an Satzgrenzen gesplittet. Jeder Teil-Chunk erbt die Buch-Metadaten und erhält einen `chunk_index`-Zähler zur Rekonstruktion der Reihenfolge.
 
-### ADR-020: `list_books_by_author` – Direkter Metadaten-Zugriff als eigenständiges Tool (März 2026)
+**Begründung:** Die Retrieval-Qualität von BGE-M3 sinkt messbar bei Chunks >500 Wörtern. Die Grenze 400 Wörter gibt Puffer vor dem Qualitätsabfall und entspricht ungefähr dem Optimum für dichte akademische Prosa. Satzgrenzen statt willkürliche Zeichenpositionen (wie beim alten Fixed-Size-Chunker) verhindern semantisch zerrissene Chunks – dasselbe Prinzip wie beim Sentence-Aligned EPUB Chunking (ADR-018).
 
-**Kontext:** `search_books_with_citations` ist ein Volltext- und Vektorsuchsystem, kein Metadaten-Abfragesystem. Autornamen tauchen in kurzen Texten (Artikel, Buchkapitel in Sammelbänden) oft nur auf der Titelseite auf – die entweder kein eigener Chunk im Index ist oder bei der Extraktion leer war. Ein Historiker, der alle Artikel eines bestimmten Autors in seiner Bibliothek finden will, bekommt über Vektorsuche unzuverlässige Ergebnisse.
+**Implementierung:** Splitter nutzt Regex-basiertes Sentence-Splitting (`re.split(r'(?<=[.!?])\s+', ...)`) an Satzgrenzen. Maximal-Chunk-Größe konfigurierbar, Default 400 Wörter.
 
-**Entscheidung:** Einführung von `list_books_by_author` als dediziertes MCP-Tool. Es fragt direkt gegen Calibres `metadata.db` ab (nicht gegen den LanceDB-Index) und gibt alle Titel eines Autors mit vollständigen Metadaten zurück. Unterstützt Partial-Match (case-insensitive), optionale Tag-Filter (AND-Logik), Jahresbereich-Filter und Sortierung nach Titel oder Jahr.
+### ADR-018: Sentence-Aligned EPUB Chunking (März 2026, commit 6982171)
 
-**Begründung:** Der Unterschied zwischen "Suche nach Inhalten" und "Suche nach Titeln" ist für geisteswissenschaftliche Arbeit fundamental. Bibliographische Abfragen – wer hat was wann veröffentlicht – sind Metadaten-Aufgaben, keine Retrieval-Aufgaben. Die Trennung gehört in die Tool-Architektur des MCP-Servers, nicht nur in die Dokumentation. Das Tool ist auch die richtige Antwort auf eine häufige Nutzeranfrage: "Welche Artikel von Mason habe ich zu Josephus?" – eine Frage, die weder Vektorsuche noch Volltext-BM25 zuverlässig beantworten kann.
+**Kontext:** Der bisherige EPUB-Chunker teilte Text an Zeichenpositionen (Fixed-Size mit Overlap). Das produzierte regelmäßig Chunks, die mitten in einem Satz endeten – ein bekanntes Problem, das sich im Quality-Score (ADR-014) als "Truncation Rate" niederschlägt und bei geisteswissenschaftlichen Texten mit langen Satzgefügen besonders störend ist.
 
-**Implementierungsstand:** `list_books_by_author_tool()` in `src/calibre_mcp/server.py`. Direkter SQL-Zugriff auf `metadata.db` via `src/calibre_db.py`.
+**Entscheidung:** EPUB-Chunks enden grundsätzlich an Satzgrenzen, nicht an Zeichenpositionen. Die Implementierung nutzt Regex-basiertes Sentence-Splitting an Interpunktionsgrenzen (`.`, `!`, `?`).
 
-### ADR-021: Erweiterte Batch-Indexierungsoptionen (März 2026)
+**Begründung:** Ein Chunk, der mitten in einem Satz endet, produziert zwei Schäden: Er kürzt die semantische Einheit des aktuellen Chunks, und er fügt dem folgenden Chunk ein syntaktisch verwaistes Satzfragment voran. Beide Effekte degradieren die Embedding-Qualität. Sentence-Alignment bei EPUB-Chunking ist die Analogie zu strukturorientiertem Chunking bei PDFs – es respektiert die natürlichen Grenzen des Textes statt arbiträrer Byte-Offsets.
 
-**Kontext:** Im Betrieb mit einer voll entwickelten Bibliothek von 8.000+ Titeln entstehen Szenarien, die über einfaches Tag-basiertes Batch-Indexieren hinausgehen: selektive Re-Indexierung einzelner Bücher via ID, Qualitätsfilterung nach Calibre-Rating, Autoren-Kreuzfilter innerhalb von Tag-Auswahlen, nicht-interaktiver Betrieb in gescripteten Workflows.
+**Konsequenz:** Die Chunk-Längen variieren jetzt leicht um den Ziel-Wert, sind aber semantisch kohärent. Der Quality-Score (ADR-014) zeigt nach dieser Änderung eine deutlich niedrigere Truncation Rate für EPUB-basierte Bücher. Auch das Truncation-Scoring im Quality-Select-Vergleich wurde im selben Commit verfeinert.
 
-**Entscheidungen:**
+### ADR-019: Stop-Word-Entfernung für 12 Sprachen (Februar 2026)
 
-- `--all`: Alle Bücher der Bibliothek indexieren (ohne Tag-Voraussetzung). Für den initialen Vollaufbau oder System-Migrationen.
-- `--ids 1234,5678`: Einzelne Bücher via Calibre-ID. Für gezielte Re-Indexierung nach Metadaten-Korrekturen oder Format-Wechseln.
-- `--filter-author NAME`: Sekundärfilter innerhalb einer `--tag`- oder `--all`-Auswahl. Erlaubt z.B. "alle Bücher der Leit-Literatur von Arendt oder Benjamin" ohne eine eigene Tag-Hierarchie.
-- `--min-rating N` / `--rating N`: Qualitätsfilter über Calibre-Sternebewertungen. Für selektives Indexieren des als besonders relevant bewerteten Bestands.
-- `--exclude-tag TAG` (wiederholbar): Gezielte Ausnahmen innerhalb einer Selektion. Die Default-Ausschlussliste (`exclude`, `Übersetzung`) ist hartcodiert; `--exclude-tag` ergänzt sie für den einzelnen Lauf.
-- `--include-excluded`: Hebt den Default-Ausschluss auf. Für Fälle, in denen Übersetzungen oder andersweitig markierte Bücher dennoch indexiert werden sollen.
-- `--non-interactive`: Unterdrückt Bestätigungsabfragen. Für Cronjobs, automatisierte Workflows und Remote-Ausführung.
-- `--reindex-missing-labels`: Selektive Re-Indexierung von Büchern, bei denen die Page-Label-Extraktion in einem früheren Lauf fehlschlug (z.B. weil der Extractor-Code verbessert wurde). Vermeidet teures Vollständig-Re-Indexieren.
+**Kontext:** Hybrid-Search (ADR-006) kombiniert semantische und Keyword-Suche. Die Keyword-Komponente (BM25) wertet Terme nach Häufigkeit und Selektivität – Stop-Words wie "der", "the", "et" oder "και" tragen dabei nichts zum Retrieval bei, erzeugen aber Rauschen und verlangsamen die Indexierung.
 
-**Begründung:** Diese Flags sind keine Feature-Creep, sondern die logische Vervollständigung eines ernst gemeinten Batch-Systems. Jeder fortgeschrittene Nutzer mit einer großen Bibliothek braucht mindestens einen davon. Die Alternative – jedes Szenario manuell über Tag-Hierarchien abzubilden – verlegt die Komplexität in Calibre, wo sie nicht hingehört.
+**Entscheidung:** Explizite Stop-Word-Listen für 12 Sprachen werden vor der Keyword-Indexierung angewendet: Englisch, Deutsch, Französisch, Spanisch, Italienisch, Portugiesisch, Niederländisch, Latein, Russisch, Neugriechisch, Hebräisch, Arabisch.
 
-### ADR-022: Apple Silicon MPS Support (März 2026)
+**Begründung:** Die Sprachpalette deckt den realistischen Kern einer geisteswissenschaftlichen Bibliothek ab. Latein, Neugriechisch, Hebräisch und Arabisch sind für Altphilologen und Theologen unverzichtbar und in keiner Standard-NLP-Bibliothek als vollständige Liste enthalten – sie wurden manuell kuratiert. Die Stop-Word-Entfernung verbessert BM25-Precision und reduziert Index-Größe ohne jeden Recall-Verlust bei inhaltlich relevanten Termen.
 
-**Kontext:** BGE-M3 Embedding-Inferenz und der optionale Cross-Encoder Reranker profitieren erheblich von GPU-Beschleunigung. Während CUDA für Windows/Linux-Nutzer der Standardfall ist, haben macOS-Nutzer (Apple Silicon: M1–M4) keinen CUDA-Zugriff, aber Metal Performance Shaders (MPS) als GPU-Backend.
+**Implementierung:** `rag_demo.py:76-120`. Die Spracherkennung erfolgt über `language_detector.py` (Lingua-basiert); bei mehrsprachigen Büchern werden die Stop-Word-Listen der erkannten Sprachen vereinigt.
 
-**Entscheidung:** Automatische MPS-Erkennung in der Hardware-Detection-Schicht (`src/archilles/hardware.py`). Fallback-Kette: CUDA → MPS → CPU. Alle drei Profile (minimal/balanced/maximal) funktionieren auf MPS.
+### ADR-020: Confidence Threshold (min_similarity) für semantische Ergebnisse (Februar 2026)
 
-**Begründung:** Apple Silicon Macs sind ein relevantes Segment der geisteswissenschaftlichen Nutzerbasis – Forschende an europäischen Universitäten arbeiten häufig mit MacBook Pro. MPS-Support ist keine große Implementierungsarbeit (PyTorch unterstützt MPS seit 1.12), aber ohne explizite Erkennung fällt das System auf CPU zurück und hinterlässt erhebliches Performance-Potenzial ungenutzt. Die Entscheidung, MPS als vollwertiges unterstütztes Backend zu dokumentieren und zu testen, ist eine Aussage über den Anspruch: ARCHILLES ist kein Windows-only-Tool.
+**Kontext:** BGE-M3 berechnet immer einen Similarity-Score, auch wenn ein Chunk thematisch völlig unpassend ist. Ohne Untergrenze werden bei semantischer Suche auch Ergebnisse mit Score 0.3–0.4 zurückgegeben – was bei geisteswissenschaftlichen Anfragen mit präziser Terminologie störend wirkt: Der Forscher bekommt vage assoziierte Passagen statt nichts.
 
-### ADR-023: Stop-Word-Removal für mehrere Sprachen (März 2026)
+**Entscheidung:** Ein konfigurierbarer `min_similarity`-Schwellwert filtert semantische Ergebnisse, die unterhalb der Qualitätsgrenze liegen. Default-Wert: 0.5 (empirisch ermittelt für wissenschaftliche Prosa in Deutsch/Englisch).
 
-**Kontext:** BM25 (Keyword-Suche) behandelt ohne Stop-Word-Filterung häufige Funktionswörter ("der", "die", "das", "the", "in", "de", "et") als relevante Terme und verschlechtert das Ranking. Für eine mehrsprachige Bibliothek mit Texten in Deutsch, Englisch, Latein, Altgriechisch und weiteren Sprachen ist eine rein englische Stop-Word-Liste unzureichend.
+**Begründung:** "Kein Ergebnis" ist informativer als ein falsches Ergebnis. Der Schwellwert ist konfigurierbar, weil er von der Abfragesprache, dem Fachgebiet und der Schreibweise abhängt – für latinistische Texte ist 0.45 sinnvoller als für moderne Sozialwissenschaften. Die Einstellung ist über CLI (`--min-similarity`) und Web-UI zugänglich.
 
-**Entscheidung:** Multi-Language Stop-Word-Removal, angewendet bei der Indexierung (BM25-FTS-Aufbau) und bei der Query-Verarbeitung. Unterstützte Sprachen: EN, DE, FR, ES, IT, PT, NL, LA, RU, EL, HE, AR. Implementierung auf Basis von Lingua-erkannten Sprach-Codes pro Chunk.
+**Implementierung:** `rag_demo.py`, `web_ui.py`. Greift ausschließlich auf den semantischen Teil der Hybrid-Suche; Keyword-Matches werden nicht gefiltert.
 
-**Begründung:** Für eine historisch-geisteswissenschaftliche Bibliothek sind lateinische und griechische Funktionswörter ("in", "et", "de", "τῆς", "τοῦ") besonders problematisch: Sie erscheinen in fast jedem Chunk, erzeugen aber keine Relevanz-Information. Eine sprach-agnostische Stop-Word-Liste würde semantisch bedeutsame Terme in anderen Sprachen als Stop-Words misklassifizieren. Die pro-Chunk-Spracherkennung über Lingua ermöglicht sprachgerechtes Filtering ohne globalen Kompromiss.
+### ADR-021: Source Adapter Architecture (Februar 2026)
 
-### ADR-024: Progress.db – Crash-sicheres Checkpoint-System für Batch-Indexierung (März 2026)
+**Kontext:** ARCHILLES wurde ursprünglich als Calibre-spezifisches System entwickelt. Nach dem ersten Beta-Feedback wurde klar, dass die Zielgruppe auch andere Wissensquellen integrieren möchte: Zotero-Bibliotheken, Obsidian-Vaults und schlichte Ordnerstrukturen. Eine monolithische Implementierung hätte jede neue Quelle zur Code-Änderung im Kern geführt.
 
-**Kontext:** Lange Batch-Indexierungsläufe (50–500 Bücher, mehrere Stunden) können durch Systemabsturz, Stromausfall, Speichermangel oder manuelle Unterbrechung abgebrochen werden. Das `IndexingCheckpoint`-System in `src/archilles/indexer/checkpoint.py` verfolgt den Fortschritt auf Book-Level. Für noch feinkörnigere Crash-Sicherheit und zuverlässiges Resume wurde ein separates SQLite-Tracking eingeführt.
+**Entscheidung:** Einführung einer Source-Adapter-Schicht mit einheitlicher Schnittstelle. Aktuell implementiert: `CalibreAdapter`, `ZoteroAdapter`, `ObsidianAdapter`, `FolderAdapter`.
 
-**Entscheidung:** `progress.db` (SQLite) im `.archilles`-Ordner der Bibliothek als sekundäres Fortschritts-Log. Speichert pro Buch: Calibre-ID, Indexierungsstatus (pending/processing/done/failed), Timestamp, Chunk-Anzahl, ggf. Fehler-Trace. `--skip-existing` nutzt dieses Log für schnelles Pre-Filtering, ohne alle Bücher gegen die LanceDB abgleichen zu müssen.
+**Begründung:** Das Adapter-Pattern entkoppelt die Quellenlogik (wie Metadaten gelesen werden, wie Dateipfade aufgelöst werden) vom Indexierungs-Core. Neue Quellen können als eigenständige Adapter hinzugefügt werden, ohne Batch-Indexer oder Pipeline anzutasten. Die Schnittstelle definiert: `list_books()`, `get_metadata(book_id)`, `get_file_path(book_id)`. Der `FolderAdapter` ist zugleich die einfachste Implementierung und die Grundlage für alle nicht-Calibre-Setups.
 
-**Begründung:** LanceDB-Abfragen für jeden einzelnen Titel beim Startup wären bei 8.000+ Büchern inakzeptabel langsam. Eine SQLite-Tabelle mit dem Indexierungsstatus ist eine O(1)-Abfrage statt O(n)-Scan der Vektordatenbank. Das Checkpoint-System schützt außerdem gegen einen selten aber real auftretenden Datenverlust: Wird der LanceDB-Schreibvorgang mitten in einem Buch unterbrochen, kann der Eintrag inkonsistent sein. Progress.db ermöglicht das Erkennen und Bereinigen solcher Halbzustände.
+**Implementierung:** `batch_index.py:720-772`. Der aktive Adapter wird über `--source calibre|zotero|obsidian|folder` gewählt. Calibre bleibt der Default.
 
-**Ergänzung: Backup-Rotation.** Parallel zu Progress.db wurde automatische Backup-Rotation implementiert: alle 50 Bücher wird ein LanceDB-Snapshot angelegt, 2 Backups werden aufbewahrt. Das begrenzt den maximalen Datenverlust bei Korruption auf 50 Bücher, ohne Disk-Space durch unbegrenzte Backup-Akkumulation zu verbrauchen.
+**Offene Frage (Pending ADR):** Structure-Aware PDF Chunking. Eine Analyse vom 19. März 2026 (`BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) ergab, dass PDF-Chunks aktuell 0% chapter/section_title-Abdeckung haben, während EPUB-Chunks 96-100% erreichen. Ursache: Der PDF-TOC wird zwar extrahiert, aber nicht auf Chunks gemappt. Lösung: TOC-zu-Seite-Mapping, section_type-Verbesserung, Behandlung malformierter TOCs. Implementation steht aus; ein ADR folgt nach Umsetzung und Verifikation an 5 Testbüchern.
 
 ---
 
@@ -579,60 +533,6 @@ Die Basisversion wird unter MIT-Lizenz veröffentlicht (maximal permissiv für A
 
 ---
 
-## VI-b. Technische Entscheidungen — Extraction & Chunking (März 2026)
-
-### ADR-025: Structure-Aware PDF Chunking (TOC → chapter/section_title)
-
-**Kontext:** Der Chunk Inspector (März 2026) zeigte, dass PDF-Chunks 0% `chapter` und `section_title` hatten, obwohl das TOC bereits via `doc.get_toc()` extrahiert und in `ExtractedText.toc` gespeichert wurde. Bei EPUBs funktionierte die Zuordnung, weil `epub_extractor.py` das TOC explizit mit den Chunks verband. Bei PDFs fehlte dieses Bindeglied.
-
-**Entscheidung:** `_build_page_toc_map(toc)` baut ein Seiten-zu-Kapitel-Dict: Level-1-TOC-Einträge → `chapter`, Level-2+ → `section_title`. `_create_chunks_with_pages()` nutzt dieses Mapping, um jedem Chunk die richtige Strukturinfo zuzuweisen. `_section_type_from_toc_title()` leitet `section_type` aus TOC-Titeln ab, mit Fallback auf die bestehende Keyword/Positions-Heuristik.
-
-**Junk-TOC-Filterung:** Scanner-PDFs haben oft nutzlose Lesezeichen ("scan 1", "z - a.d.n.001"). Filterregeln: <3 Einträge → ignorieren; alle Einträge auf derselben Seite → ignorieren; >50% Junk-Pattern → ignorieren. Das verhindert Fehlzuordnungen ohne brauchbare TOCs zu verwerfen.
-
-**Status:** Implementiert. Tests in `tests/test_pdf_toc_mapping.py`.
-
-### ADR-026: Running-Footer-Erkennung und -Entfernung (PDF)
-
-**Kontext:** Chunk-Inspektionen zeigten systematische Kontamination an Chunk-Enden: Seitenzahlen als letztes Token, Verlagsnamen, URLs. `pdf_extractor.py` hatte bereits `_detect_running_headers()`, aber kein Pendant für Footer.
-
-**Entscheidung:** `_detect_running_footers()` spiegelt die Header-Erkennung, prüft aber die letzten 3 Zeilen pro Seite. Höherer Threshold als bei Headern: `max(10, len(pages_text) // 20)` (5% der Seiten, Minimum 10). Grund: Footer sind variabler als Header (Kapitelüberschriften wechseln, Verlagsnamen nicht), und ein zu niedriger Threshold produziert False Positives bei inhaltlichen Schlusszeilen.
-
-**Status:** Implementiert, integriert in `_build_extraction_result()` nach Header-Entfernung.
-
-### ADR-027: EPUB section_type — Dateinamen nicht als Titel verwenden
-
-**Kontext:** Bei "The Secret Teachings of Plants" (ID 9) wurden 100% der Chunks als `back_matter` klassifiziert, weil die EPUB-internen Dateinamen (`index_split_001.html`) das Keyword "index" enthielten und für die section_type-Erkennung verwendet wurden.
-
-**Entscheidung:** `_detect_section_type()` wird nur noch mit semantisch sinnvollen Titeln aufgerufen — `<h1>`-Text oder TOC-Titel. Rohé Dateinamen werden nie für die Klassifikation verwendet. Wenn kein sinnvoller Titel vorhanden ist, fällt der Chunk auf `main_content` zurück (sichere Default-Annahme).
-
-**Status:** Implementiert in `epub_extractor.py`.
-
-### ADR-028: Introduction/Einleitung als main_content (nicht front_matter)
-
-**Kontext:** Intuitiv gehören Einleitungen zum Haupttext — sie enthalten inhaltlich relevante Argumentation, besonders in geisteswissenschaftlichen Werken. Die Klassifikation als `front_matter` würde sie aus den Default-Suchergebnissen ausschließen.
-
-**Entscheidung:** "Introduction", "Einleitung" und "Einführung" werden bewusst *nicht* in die front_matter-Keyword-Listen aufgenommen — weder im PDF-Extractor noch im EPUB-Extractor. Sie fallen auf `main_content` zurück.
-
-**Status:** Implementiert in beiden Extractoren. Kommentar im Code dokumentiert die bewusste Auslassung.
-
-### ADR-029: Source Adapters — Abstraktion der Bibliotheksquelle
-
-**Kontext:** ARCHILLES war ursprünglich ausschließlich auf Calibre ausgerichtet. Nutzer mit Zotero-Bibliotheken, Obsidian-Vaults oder einfachen Ordnerstrukturen waren ausgeschlossen.
-
-**Entscheidung:** Adapter-Pattern mit vier Backends: `CalibreAdapter` (bestehende Funktionalität), `ZoteroAdapter` (read-only Zugriff auf Zotero-SQLite), `ObsidianAdapter` (Markdown-Vault mit YAML-Frontmatter), `FolderAdapter` (flache Ordnerstruktur). Alle implementieren ein gemeinsames Interface (`list_books`, `get_metadata`, `resolve_file`). Batch-Indexer erkennt den Adapter automatisch anhand der Bibliotheksstruktur.
-
-**Status:** Implementiert. `ARCHILLES_LIBRARY_PATH` zeigt auf beliebige Quellen.
-
-### ADR-030: DialogueChunker für Chat-/Q&A-Exporte
-
-**Kontext:** Import-Skripte für ChatGPT, Gemini, Grok und NotebookLM exportieren Konversationen als Markdown in Obsidian-Vaults. Der Standard-SemanticChunker zerreißt Frage-Antwort-Paare.
-
-**Entscheidung:** Spezialisierter `DialogueChunker`, registriert im `ChunkerRegistry`. Erkennt Turn-Marker (`## User`, `## Assistant`, `**Q:**`, etc.) und chunked pro Turn oder Turn-Paar. Metadata enthält `speaker`-Feld. Wird automatisch aktiviert, wenn der Parser Dialogstruktur erkennt.
-
-**Status:** Implementiert in `src/archilles/chunkers/dialogue.py`. Tests in `tests/test_dialogue_chunker.py`.
-
----
-
 ## VII. Zusammenfassung: Leitprinzipien
 
 Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt prägen:
@@ -650,15 +550,15 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 ---
 
 *Nächste geplante Aktualisierungen:*
-- *ADR-031: HTTP/SSE-Transport für MCP-Server (LLM-Agnostizismus; geplant v1.0)*
-- *ADR-032: Inkrementelle Indexierung mit Index-Queue (geplant v1.0)*
-- *ADR-033: Markdown-Output via Docling als Extraktionsziel (nach Beta-Feedback)*
-- *ADR-034: VLM-basiertes OCR (LightOnOCR-2 / olmOCR-2; geplant v1.2)*
+- *ADR-022: Structure-Aware PDF Chunking – steht aus nach Implementation und Verifikation (TOC-zu-Seite-Mapping; Vergleichsbasis: 0% vs. 96-100% section_title-Abdeckung bei EPUBs)*
+- *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
+- *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*
 - *Entscheidung über MCPB-Implementation (nach Beta-Feedback)*
-- *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
 - *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
-- *CLI-Erfahrung verbessern: bessere Prompt-Templates, automatische Query-Expansion, oder lokales LLM als Interpretation-Layer.*
-- *Schema-Migrations-Framework: formales Migrations-System mit Versionsnummern statt ad-hoc add_columns().*
-- *Citation-Modul in Service-Layer und MCP-Server integrieren.*
-- *citeproc-py als optionale Dependency: formatter.py für Offline-Rendering und Zotero-Export.*
+- *ChromaDB-Dependency bereinigen: annotations_indexer.py nicht mehr aktiv befüllt; Entscheidung über vollständige Entfernung oder Legacy-Fallback.*
+- *Annotation-Suche im MCP-Server: search_annotations-Tool auf LanceDB umstellen (aktuell noch ChromaDB-Backend).*
+- *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
+- *Parent-Child-Chunking: Entscheidung über Implementierungsreihenfolge nach Two-Phase-Pipeline-Stabilisierung.*
+- *Docling-Evaluation: Ergebnis und ADR für/gegen Markdown-Extraktion als Pipeline-Stufe.*
+- *CLI-Erfahrung verbessern: rag_demo.py liefert unbefriedigende Ergebnisse ohne Claude-Kontext-Interpretation. Ansätze: bessere Prompt-Templates, automatische Query-Expansion, lokales LLM als Interpretation-Layer.*
