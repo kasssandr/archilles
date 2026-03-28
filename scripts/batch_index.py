@@ -252,13 +252,20 @@ def _select_best_format_by_quality(
         return best, {}
 
     import tempfile
+    import io
     scores = {}
     for fmt_entry in comparable:
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                result = rag.prepare_book(
-                    fmt_entry['path'], book_id, output_dir=tmp_dir
-                )
+                # Suppress prepare_book() output during quality scoring
+                old_stdout = sys.stdout
+                sys.stdout = io.StringIO()
+                try:
+                    result = rag.prepare_book(
+                        fmt_entry['path'], book_id, output_dir=tmp_dir
+                    )
+                finally:
+                    sys.stdout = old_stdout
                 # Load the prepared chunks
                 jsonl_files = list(Path(tmp_dir).glob('*.jsonl'))
                 if not jsonl_files:
