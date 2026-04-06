@@ -413,3 +413,26 @@ class CalibreDB:
             result['custom_fields'] = custom_fields
 
         return result
+
+    def get_all_books_brief(self) -> list[Dict[str, Any]]:
+        """
+        Get id, title, and authors for all books in the library.
+
+        Used by BookMatcher for fuzzy title+author matching of external annotations.
+
+        Returns:
+            List of dicts with 'calibre_id', 'title', 'author'
+        """
+        cursor = self.conn.execute("""
+            SELECT books.id, books.title,
+                   GROUP_CONCAT(authors.name, ' & ') as authors
+            FROM books
+            LEFT JOIN books_authors_link ON books.id = books_authors_link.book
+            LEFT JOIN authors ON books_authors_link.author = authors.id
+            GROUP BY books.id
+            ORDER BY books.title
+        """)
+        return [
+            {"calibre_id": row[0], "title": row[1], "author": row[2] or ""}
+            for row in cursor.fetchall()
+        ]

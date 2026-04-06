@@ -463,7 +463,8 @@ def get_combined_annotations(
     Get annotations from both Calibre Viewer and PDF (if applicable).
 
     This is the main function that combines all annotation sources
-    and applies intelligent filtering.
+    and applies intelligent filtering. Delegates to annotation providers
+    internally.
 
     Args:
         book_path: Full path to the book file
@@ -477,16 +478,21 @@ def get_combined_annotations(
     Returns:
         Dictionary with annotations and metadata
     """
+    from .annotation_providers.calibre_provider import CalibreViewerProvider
+    from .annotation_providers.pdf_provider import PdfAnnotationProvider
+
     all_annotations = []
 
-    calibre_annots = get_book_annotations(book_path, annotations_dir)
-    if calibre_annots:
-        for annot in calibre_annots:
-            annot['source'] = 'calibre_viewer'
-        all_annotations.extend(calibre_annots)
+    # Use provider for Calibre Viewer annotations
+    calibre_provider = CalibreViewerProvider(annotations_dir=annotations_dir)
+    calibre_annots = calibre_provider.extract(book_path)
+    all_annotations.extend(a.to_legacy_dict() for a in calibre_annots)
 
+    # Use provider for PDF annotations
     if include_pdf and book_path.lower().endswith('.pdf'):
-        all_annotations.extend(get_pdf_annotations(book_path))
+        pdf_provider = PdfAnnotationProvider()
+        pdf_annots = pdf_provider.extract(book_path)
+        all_annotations.extend(a.to_legacy_dict() for a in pdf_annots)
 
     filtered_annotations, exclusion_stats = filter_annotations(
         all_annotations,

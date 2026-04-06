@@ -32,6 +32,9 @@ sentence-transformers==2.3.1  # BGE-M3 embeddings (multilingual)
 lancedb>=0.5.0  # Vector database with native hybrid search
 pyarrow>=14.0.0  # Arrow format for LanceDB
 
+# Fuzzy matching (annotation import)
+rapidfuzz>=3.0.0  # Fuzzy string matching for book title/author matching
+
 # Progress bars & utilities
 tqdm==4.66.1  # Progress bars for indexing
 

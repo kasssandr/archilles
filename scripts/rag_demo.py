@@ -1330,7 +1330,7 @@ class archillesRAG:
     def embed_prepared(self, input_dir: str, mode: str = 'local',
                        host: str = None, port: int = 8000, token: str = None,
                        batch_size: int = 100, use_gzip: bool = True,
-                       profile: str = None) -> Dict[str, Any]:
+                       profile: str = None, force: bool = False) -> Dict[str, Any]:
         """
         Embed pre-prepared chunks and store in LanceDB (Phase 2 of two-phase indexing).
 
@@ -1343,6 +1343,7 @@ class archillesRAG:
             batch_size: Texts per HTTP request (remote) or encode batch (local)
             use_gzip: Use gzip compression for remote requests
             profile: Hardware profile for local mode
+            force: Delete existing chunks and re-embed (for re-indexing with improved chunks)
 
         Returns:
             Summary statistics
@@ -1403,15 +1404,18 @@ class archillesRAG:
                     skipped += 1
                     continue
 
-                # Also check LanceDB
+                # Check LanceDB for existing chunks
                 book_id = header['book_id']
                 existing = self.store.get_by_book_id(book_id, limit=1)
                 content = [c for c in existing if c.get('chunk_type', 'content') in ('content', 'child', 'parent')]
-                if content:
+                if content and not force:
                     print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
                     embedded_set.add(file_key)
                     skipped += 1
                     continue
+                elif content and force:
+                    deleted = self.store.delete_by_book_id(book_id)
+                    print(f"  {book_id}: {deleted} alte Chunks gelöscht.", end=' ', flush=True)
 
                 # Read chunks
                 chunk_lines = f.readlines()
@@ -2641,6 +2645,126 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         }
 
 
+def _handle_import_annotations(args):
+    """Handle the import-annotations subcommand (no RAG model needed)."""
+    from src.calibre_mcp.annotation_providers import create_default_registry
+    from src.calibre_mcp.book_matcher import BookMatcher
+
+    source = args.source
+    file_path = args.path
+
+    # Resolve library path for Calibre DB matching
+    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
+
+    # 1. Parse annotations
+    print(f"\n{'='*60}")
+    print(f"ANNOTATION IMPORT — Source: {source}")
+    print(f"{'='*60}\n")
+
+    registry = create_default_registry()
+
+    if source == 'auto':
+        provider = registry.detect(file_path)
+        if not provider:
+            print(f"ERROR: Could not auto-detect provider for: {file_path}")
+            print(f"Available sources: {registry.available}")
+            sys.exit(1)
+        print(f"  Auto-detected provider: {provider.name}")
+    else:
+        provider = registry.get(source)
+        if not provider:
+            print(f"ERROR: Unknown source '{source}'. Available: {registry.available}")
+            sys.exit(1)
+
+    annotations = provider.extract(file_path)
+    print(f"  Parsed: {len(annotations)} annotations from {file_path}")
+
+    if not annotations:
+        print("\n  No annotations found. Nothing to import.")
+        return
+
+    # Group by book for display
+    by_book = {}
+    for a in annotations:
+        key = a.book_title or "(unknown)"
+        by_book.setdefault(key, []).append(a)
+
+    print(f"  Books:  {len(by_book)}")
+    for title, annots in sorted(by_book.items()):
+        types = {}
+        for a in annots:
+            types[a.type] = types.get(a.type, 0) + 1
+        type_str = ", ".join(f"{v} {k}s" for k, v in types.items())
+        print(f"    - {title}: {type_str}")
+
+    # 2. Match to Calibre library
+    if library_path:
+        print(f"\n  Matching against Calibre library: {library_path}")
+        try:
+            from src.calibre_db import CalibreDB
+            with CalibreDB(Path(library_path)) as db:
+                books = db.get_all_books_brief()
+            print(f"  Calibre books loaded: {len(books)}")
+        except Exception as e:
+            print(f"  WARNING: Could not load Calibre DB: {e}")
+            books = []
+
+        if books:
+            matcher = BookMatcher(books, fuzzy_threshold=args.fuzzy_threshold)
+            items = [
+                {"title": a.book_title or "", "author": a.book_author, "annotation": a}
+                for a in annotations
+            ]
+            matched, unmatched = matcher.match_batch(items)
+
+            print(f"\n  Match results:")
+            print(f"    Matched:   {len(matched)} annotations")
+            print(f"    Unmatched: {len(unmatched)} annotations")
+
+            if matched:
+                # Group matched by calibre book
+                by_calibre = {}
+                for m in matched:
+                    cid = m["calibre_id"]
+                    by_calibre.setdefault(cid, {"title": m["calibre_title"], "items": []})
+                    by_calibre[cid]["items"].append(m)
+                print(f"\n  Matched books:")
+                for cid, info in sorted(by_calibre.items()):
+                    score = info["items"][0].get("match_score", 0)
+                    mtype = info["items"][0].get("match_type", "?")
+                    print(f"    [{cid}] {info['title']} — {len(info['items'])} annotations ({mtype}, score: {score:.0f})")
+
+            if unmatched:
+                print(f"\n  Unmatched (not in Calibre library):")
+                unmatched_titles = set()
+                for u in unmatched:
+                    t = u.get("title", "(unknown)")
+                    if t not in unmatched_titles:
+                        unmatched_titles.add(t)
+                        print(f"    - {t}")
+
+                if not args.dry_run and library_path:
+                    review_path = Path(library_path) / ".archilles" / "unmatched_annotations.json"
+                    review_path.parent.mkdir(parents=True, exist_ok=True)
+                    review_data = [{"title": u.get("title"), "author": u.get("author")} for u in unmatched]
+                    import json
+                    with open(review_path, "w", encoding="utf-8") as f:
+                        json.dump(review_data, f, indent=2, ensure_ascii=False)
+                    print(f"\n  Review queue written to: {review_path}")
+    else:
+        print(f"\n  WARNING: No ARCHILLES_LIBRARY_PATH set — skipping Calibre matching.")
+        print(f"  Set the environment variable to enable book matching.")
+        matched = []
+
+    # 3. Summary
+    if args.dry_run:
+        print(f"\n  DRY RUN — no changes written to index.")
+        print(f"  Remove --dry-run to import into the ARCHILLES index.\n")
+    else:
+        print(f"\n  NOTE: Embedding into LanceDB index not yet implemented.")
+        print(f"  Annotations were parsed and matched but not stored.\n")
+
+
 def main():
     """Main CLI interface."""
     parser = argparse.ArgumentParser(
@@ -2760,13 +2884,34 @@ Examples:
     embed_parser.add_argument('--batch-size', type=int, default=100, help='Texts per batch')
     embed_parser.add_argument('--use-gzip', action='store_true', default=True, help='Use gzip for remote requests')
     embed_parser.add_argument('--no-gzip', action='store_true', help='Disable gzip for remote requests')
+    embed_parser.add_argument('--force', action='store_true', help='Re-embed: delete existing chunks and replace with prepared chunks')
     embed_parser.add_argument('--db-path', default=None, help='Database path')
     embed_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'], help='Hardware profile for local mode')
+
+    # Import-annotations command
+    import_parser = subparsers.add_parser('import-annotations',
+        help='Import annotations from external reading apps (Kindle, Kobo, etc.)')
+    import_parser.add_argument('--source', required=True,
+        choices=['kindle', 'kobo', 'pdf', 'calibre_viewer', 'auto'],
+        help='Annotation source')
+    import_parser.add_argument('--path', required=True,
+        help='Path to annotation file or database')
+    import_parser.add_argument('--dry-run', action='store_true',
+        help='Show what would be imported without writing to index')
+    import_parser.add_argument('--fuzzy-threshold', type=float, default=80.0,
+        help='Minimum fuzzy match score for book matching (0-100, default: 80)')
+    import_parser.add_argument('--db-path', default=None,
+        help='Database path (default: CALIBRE_LIBRARY/.archilles/rag_db)')
 
     args = parser.parse_args()
 
     if not args.command:
         parser.print_help()
+        return
+
+    # Handle import-annotations separately (no RAG model needed)
+    if args.command == 'import-annotations':
+        _handle_import_annotations(args)
         return
 
     # Determine default database path if not specified
@@ -2887,6 +3032,7 @@ Examples:
                 batch_size=args.batch_size,
                 use_gzip=use_gzip,
                 profile=profile,
+                force=getattr(args, 'force', False),
             )
 
         elif args.command == 'create-index':
