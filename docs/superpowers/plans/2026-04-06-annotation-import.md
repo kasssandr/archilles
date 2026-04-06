@@ -1329,3 +1329,52 @@ Expected: All tests PASS
 git add tests/test_import_integration.py
 git commit -m "test(annotations): add end-to-end integration test for annotation import"
 ```
+
+---
+
+## Future Phases (not yet scheduled)
+
+### Phase 4: Kobo Provider
+
+**Files:**
+- Create: `src/calibre_mcp/annotation_providers/kobo_provider.py`
+- Create: `tests/test_kobo_provider.py`
+
+- SQLite read-only access to `KoboReader.sqlite` (tables: `Bookmark`, `content`)
+- JOIN on `ContentID` to resolve book titles
+- Integration with BookMatcher
+- Test fixture: programmatically generated SQLite with correct schema
+
+### Phase 5: Embedding + MCP Integration
+
+- Store matched annotations as `chunk_type='annotation'` in LanceDB (schema fields already exist)
+- Extend `import-annotations` CLI to actually embed (currently parse+match only)
+- Add `import_annotations` MCP tool to server.py
+- Extend `annotation_stats` MCP tool with source filter
+
+### Phase 6: Zotero as Matching Bridge + Annotation Source (post-Unified MCP)
+
+**Prerequisite:** Unified MCP Server (see `docs/` and memory `project_unified_mcp.md`) — Calibre, Zotero, and Obsidian/Folder adapters must share a common namespace so a document can carry both `calibre_id` and `zotero_key`.
+
+**6a. Zotero ISBN/DOI matching (BookMatcher enhancement):**
+
+Add a "Stage 0" to `BookMatcher` that runs before exact and fuzzy title matching:
+- Query `ZoteroAdapter._get_identifiers()` for ISBN/DOI of each Zotero item
+- Cross-reference against Calibre identifiers (where available) or Zotero's own title/author
+- This is the highest-confidence match path because ISBNs are unique identifiers, unlike fuzzy title matching
+- Calibre's own ISBNs are unreliable (often pulled from description services, not from the actual book), so Zotero's curated ISBNs serve as the authoritative source
+
+**6b. ZoteroAnnotationProvider (new provider):**
+
+- Create `src/calibre_mcp/annotation_providers/zotero_provider.py`
+- Read Zotero's `itemAnnotations` table (PDF highlights, notes) via existing `ZoteroAdapter.get_annotations()`
+- Convert `DocumentAnnotation` objects to the unified `Annotation` dataclass
+- Register in the provider registry alongside Kindle, Kobo, PDF, Calibre Viewer
+
+**6c. Unified Document cross-referencing:**
+
+- A single `Document` object carries `calibre_id`, `zotero_key`, and adapter-agnostic metadata
+- Annotation matching flow: external annotation → Zotero ISBN match → unified Document → index
+- This eliminates the need for separate Calibre and Zotero MCP servers for annotation queries
+
+**Why wait for Unified MCP:** Building cross-adapter references now would create tight coupling between adapters that are currently independent. The Unified MCP refactoring will introduce a shared document model; Zotero matching should build on that, not precede it.
