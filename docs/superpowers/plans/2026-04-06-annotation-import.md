@@ -1345,9 +1345,58 @@ git commit -m "test(annotations): add end-to-end integration test for annotation
 - Integration with BookMatcher
 - Test fixture: programmatically generated SQLite with correct schema
 
-### Phase 5: Embedding + MCP Integration
+### Phase 5: Anchor-Matching + Context-Enriched Embedding
 
-- Store matched annotations as `chunk_type='annotation'` in LanceDB (schema fields already exist)
+**Problem:** Annotations are context-free islands. A Kindle highlight contains the marked text but not which chapter, argument, or surrounding paragraph it belongs to. Content chunks of the same book contain exactly this context — but there is no link between annotation and content chunk. Search results for annotations and content appear as independent hits, never combined.
+
+**Solution: Annotation-Chunk-Linking** — two complementary strategies:
+
+#### 5a. Anchor-Matching (at import time)
+
+**Schema change:** Add `anchor_chunk_id` (str) to the LanceDB chunk schema and `_MIGRATABLE_COLUMNS`.
+
+**Matching logic** (in `_handle_import_annotations` or a new `anchor_resolver.py`):
+1. For each matched annotation, query existing content chunks for the same `calibre_id`
+2. Find the best anchor chunk by:
+   - Same page number (strongest signal for PDF annotations and Kindle highlights with page info)
+   - Substring match: check if the highlight text appears as a substring in any chunk's `text` field
+   - Highest text overlap (for partial matches or long highlights)
+3. Set `anchor_chunk_id` to the best-matching chunk's ID
+
+**Chunk-boundary highlights:** When a highlight spans two chunks, anchor to the chunk with the **largest text overlap**. In ambiguous cases (50/50 split), prefer the earlier chunk (where the reader started reading). The anchor chunk's `window_text` (~500 chars context) naturally covers the adjacent chunk anyway. Always one `anchor_chunk_id`, never multiple.
+
+**Files:**
+- Modify: `src/storage/lancedb_store.py` (add `anchor_chunk_id` to schema + `_MIGRATABLE_COLUMNS`)
+- Create: `src/calibre_mcp/anchor_resolver.py` (match annotations to content chunks)
+- Test: `tests/test_anchor_resolver.py`
+
+#### 5b. Context-Enriched Embedding
+
+Instead of embedding the bare highlight text, enrich it with context from the anchor chunk before vectorization:
+
+```
+Bare (current):    "Normal science is predicated on..."
+
+Enriched (new):    "[Highlight in: The Structure of Scientific Revolutions,
+                    Ch. 'The Route to Normal Science', p. 23]
+                    Normal science is predicated on...
+                    [Note: This is the key definition of normal science]"
+```
+
+The embedding then captures the semantics of the surrounding context without the annotation itself needing to store that context. The enrichment template uses metadata from the anchor chunk: `section_title`, `chapter`, `page_number`, and optionally a snippet from `window_text`.
+
+**Files:**
+- Modify: `src/calibre_mcp/annotation_providers/base.py` (add `to_enriched_text(anchor_chunk)` method to `Annotation`)
+
+#### 5c. Search Integration
+
+When an annotation is hit during search, co-retrieve the anchor chunk automatically:
+- In the retriever/service layer: if a search result has `chunk_type='annotation'` and a non-empty `anchor_chunk_id`, fetch the anchor chunk and include it in the result as `context`
+- This turns two independent hits into one combined result: highlight + user note + full paragraph + chapter/page metadata
+
+#### 5d. Store + MCP Integration
+
+- Store matched+anchored annotations as `chunk_type='annotation'` in LanceDB (schema fields already exist)
 - Extend `import-annotations` CLI to actually embed (currently parse+match only)
 - Add `import_annotations` MCP tool to server.py
 - Extend `annotation_stats` MCP tool with source filter
