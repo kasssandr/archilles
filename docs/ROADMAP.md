@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** March 2026
+**Last updated:** April 2026
 
 ---
 
@@ -35,9 +35,11 @@ Die Basis steht. Der Core-Bestand (Leit-Literatur) mit 267 Titeln ist nahezu vol
 
 Volltextindexierung über 30+ Formate via Calibre-Converter. Semantische Suche mit BGE-M3-Embeddings (multilingual, 75+ Sprachen). Keyword-Suche über BM25. Hybride Suche mit Reciprocal Rank Fusion. Calibre-Metadaten-Integration einschließlich Tags, Comments (mit HTML-Cleaning) und automatischer Custom-Field-Erkennung. Annotationsextraktion aus dem Calibre E-book Viewer (Highlights, Notes, Bookmarks). LanceDB als Vektordatenbank mit nativer Hybrid-Search und IVF-PQ-Indexing. Zwei-Datenbanken-Architektur vollständig realisiert: Mit der Migration von ChromaDB zu LanceDB (Februar 2026) nutzen sowohl Buchinhalte als auch Annotationen einheitlich BGE-M3-Embeddings in zwei getrennten LanceDB-Tabellen — eine einzige Vektor-DB-Engine, keine externe Dependency mehr. Service-Layer-Architektur (`ArchillesService`) als zentrale Geschäftslogik-Fassade für MCP-Server, Web UI und CLI. Cross-Encoder Reranking (optional, BAAI/bge-reranker-v2-m3). MCP-Server mit 12 Tools für Claude Desktop und andere MCP-kompatible Clients. Bibliographie-Export in BibTeX, RIS, EndNote, JSON und CSV. Duplikaterkennung nach Titel+Autor, ISBN oder exaktem Titel. Streamlit-basiertes Web UI als Companion-Interface. Batch-Indexierung mit Tag-/Autoren-Filtern, Checkpoint-Resume und Hardware-Profilen.
 
-**Neu in v0.9 (März 2026):**
+**Neu in v0.9 (März–April 2026):**
 
 Source Adapters: Neben Calibre werden jetzt auch Zotero-Bibliotheken, Obsidian-Vaults und einfache Ordnerstrukturen als Quellen unterstützt (`CalibreAdapter`, `ZoteroAdapter`, `ObsidianAdapter`, `FolderAdapter`). Structure-Aware PDF Chunking: PDF-Chunks tragen jetzt `chapter` und `section_title` aus dem TOC, mit Junk-TOC-Filterung für Scanner-PDFs. Running-Footer-Erkennung und -Entfernung für sauberere PDF-Chunks. EPUB-section_type-Fix: Klassifikation basiert nur noch auf semantischen Titeln, nicht auf Dateinamen. DialogueChunker für Chat-/Q&A-Exporte (ChatGPT, Gemini, Grok, NotebookLM). SemanticChunker verbessert: Markdown-Heading-Erkennung (H1/H2 erzwingen Chunk-Breaks), Splitting überlanger Absätze. Chunk Inspector als Diagnosetool (`scripts/chunk_inspector.py`). TXT-Extractor mit YAML-Frontmatter-Stripping für Obsidian-Dateien.
+
+Annotation-Import-System: Provider-basierte Architektur für den Import von Annotations (Highlights, Notizen, Lesezeichen) aus externen Leseumgebungen. Drei Provider implementiert (PDF, Calibre Viewer, Kindle `My Clippings.txt`). Book-Matcher für fuzzy Titel+Autor-Zuordnung zur Calibre-Bibliothek (rapidfuzz). CLI-Command `import-annotations` mit `--dry-run`. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
 ---
 
@@ -48,6 +50,8 @@ Source Adapters: Neben Calibre werden jetzt auch Zotero-Bibliotheken, Obsidian-V
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
 
 **HTTP/SSE-Transport für den MCP-Server (höchste Priorität):** Archilles spricht derzeit nur stdio-MCP — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT, OpenAI Codex und andere Cloud-basierte AI-Clients erwarten dagegen einen remote-erreichbaren HTTP/SSE-Endpunkt. Die Lösung: ein optionaler HTTP/SSE-Modus, der lokal auf dem eigenen Rechner läuft (localhost) und von MCP-kompatiblen Desktop-Clients direkt angesprochen werden kann. Das macht Archilles LLM-agnostisch — nutzbar mit Claude, ChatGPT, Codex und jedem zukünftigen MCP-kompatiblen Client. Die Implementierung ist mit FastMCP oder ähnlichen Python-Libraries überschaubar und erfordert keine Änderung an der Kernarchitektur.
+
+**Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
 Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
 
@@ -121,7 +125,7 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 
 ## Langfristiger Horizont
 
-**Multi-Library-Support:** Verwaltung mehrerer Bibliotheken (Calibre, Zotero, Obsidian), bibliotheksübergreifende Suche, bibliotheksspezifische Konfigurationen.
+**Multi-Library-Support / Unified MCP Server:** Verwaltung mehrerer Bibliotheken (Calibre, Zotero, Obsidian) in einem einzigen MCP-Server, bibliotheksübergreifende Suche, gemeinsames Dokumentenmodell mit `calibre_id` und `zotero_key`. Darauf aufbauend: Zotero als Matching-Brücke für den Annotation-Import (ISBN/DOI-basiertes Matching, ZoteroAnnotationProvider).
 
 **Wikidata-Integration:** Entity-Disambiguierung für präzisere Wissensgraphen.
 
