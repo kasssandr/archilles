@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 27. März 2026 (ADR-014 bis ADR-018 ergänzt: Quality-Select, Two-Phase Pipeline, Comment-Chunks, März-2026-Fixes)
+**Letzte Überarbeitung:** 9. April 2026 (ADR-022: Strategische Fokussierung — Infrastruktur-Layer, nicht Second Brain)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -42,6 +42,31 @@ Die Schlussfolgerung: Calibres AI-Features lösen ein fundamental anderes Proble
 Die Wettbewerbsanalyse zum Jahreswechsel 2025/26 identifizierte als direktesten Konkurrenten das Projekt calibre-rag-mcp-nodejs von ispyridis (veröffentlicht Dezember 2025, FAISS + Xenova Transformers, Windows-optimiert). Es fehlen exakte Zitationen, Annotationssuche und hybrides Retrieval; die Adoption lag bei 2 GitHub-Stars. Im Zotero-Ökosystem existieren reifere Lösungen (zotero-mcp, PapersGPT, mcp-research), die aber auf Referenzverwaltung statt Volltextsuche spezialisiert sind.
 
 ARCHILLES' Alleinstellungsmerkmale bleiben bestätigt: exakte Zitationsfähigkeit mit Seitenangaben, Annotations-Indexierung, hybrides Retrieval (semantisch + keyword) und vollständig lokaler Betrieb.
+
+### ADR-022: Strategische Fokussierung — Infrastruktur-Layer, nicht Second Brain (April 2026)
+
+**Kontext:** Im Frühjahr 2026 explodiert das Ökosystem für KI-gestütztes persönliches Wissensmanagement. MemPalace (Jovovich/Sigman, April 2026, 27k GitHub-Stars in 3 Tagen) adressiert Konversations-Memory mit räumlicher Metapher und lokalem ChromaDB-Backend. Claudian integriert Claude Code agentisch in Obsidian-Vaults. Nate B. Jones' Open Brain (Februar 2026) und Andrej Karpathys Konzeptualisierung haben das Second-Brain-Thema in den Mainstream gebracht. Parallel dazu hatte ARCHILLES mit der TWO_DB_VISION.md (März 2026) und dem Archilles Lab begonnen, in Richtung eines eigenen Second-Brain-Systems zu expandieren — mit Schreib-Tools (`add_note`, `link_insight`, `save_chat_excerpt`), Cross-Search-Brücke (Corpus callosum) und eigenständiger Knowledge-Base-Verwaltung.
+
+**Analyse:** Das Second-Brain-Feld wird überfüllt, und jeder Akteur bringt mehr Entwicklerressourcen mit als ein Solo-Projekt aufbieten kann. Gleichzeitig löst *keiner* dieser Akteure das Problem, das ARCHILLES bereits löst: einen semantischen Layer zwischen heterogenen Bibliothekssystemen (Calibre, Zotero, Ordnerstrukturen) und LLMs zu legen, der Annotationen als erstklassige Objekte behandelt, exakte Quellenverweise liefert und die epistemische Integrität des Quellkorpus architektonisch schützt.
+
+**Entscheidung:** ARCHILLES positioniert sich als semantische Infrastrukturschicht zwischen bestehenden Bibliothekssystemen und LLM-Ökosystemen. Die Expansion in Richtung Second Brain wird gestoppt. Das Archilles Lab bleibt als Referenzintegration erhalten (es zeigt, wie ein Obsidian-Vault über den Folder-/ObsidianAdapter an ARCHILLES andockt), wird aber nicht zu einem eigenständigen Wissensmanagement-Produkt ausgebaut.
+
+**Was priorisiert wird:**
+- Adapter-Pipeline als Produktkern (jeder neue Adapter erweitert den adressierbaren Markt)
+- Annotation-Engine als USP (Anchor-Matching, Context-Enriched Embedding — das macht sonst niemand)
+- MCP-Tools als saubere API für Drittanbieter-Anbindung
+- HTTP/SSE-Transport für LLM-Agnostik
+- Benchmark-Suite für Bibliotheks-Retrieval (eigener Problemraum, nicht LongMemEval)
+
+**Was deprioritisiert wird:**
+- Lab-Schreib-Tools (`add_note`, `link_insight`, `save_chat_excerpt`) — nicht gestrichen, aber nicht auf dem kritischen Pfad
+- Corpus callosum (Cross-Search-Brücke zwischen Hemisphären) — geparkt
+- Eigene Chat-UI und Desktop-App — nachrangig gegenüber Kern-Pipeline
+- Konversations-Memory-Features — nicht unser Problem
+
+**Begründung:** Fokussierung auf den Teil des Stacks, den sonst niemand baut. Die Adapter-Architektur (ADR-021) ist der technische Burggraben. Die MCP-Schnittstelle ist die API, über die jedes Second-Brain-System an die Bibliothek andocken kann — ob MemPalace, Claudian oder was immer sich durchsetzt. Die Positionierung ist klarer, verteidigbarer und als Solo-Projekt realisierbar.
+
+**Konsequenzen:** Die Roadmap wird angepasst: v1.3 wird zur Lab-Referenzintegration statt zum eigenständigen Knowledge-Base-Meilenstein. Die Benchmark-Suite wird in v1.0 aufgenommen. Die Kommunikation schärft sich: "ARCHILLES ist die semantische Infrastruktur, die dein Second Brain an deine Bibliothek anschließt."
 
 ---
 
@@ -537,6 +562,8 @@ Die Basisversion wird unter MIT-Lizenz veröffentlicht (maximal permissiv für A
 
 Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt prägen:
 
+**Infrastruktur, nicht Anwendung (ADR-022).** ARCHILLES ist der semantische Layer zwischen Bibliotheken und LLMs — nicht ein Second Brain, nicht ein Chat-Memory, nicht ein Schreibwerkzeug. Die Adapter-Architektur ist das Produkt. Die MCP-Tools sind die API. Second-Brain-Systeme sind Kunden, nicht Konkurrenten.
+
 **Privacy ist kein Feature, sondern die Architektur.** Daten bleiben lokal, Datensouveränität ist das Fundament, nicht ein Checkbox-Item.
 
 **Modulare Erweiterbarkeit vor Featurefülle.** Die auf ein Registry-Pattern hin angelegte Architektur, die Plugin-fähigen Schnittstellen und die definierten Erweiterungszonen (`.archilles`-Ordner) sind wichtiger als jedes einzelne Feature.
@@ -555,10 +582,12 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*
 - *Entscheidung über MCPB-Implementation (nach Beta-Feedback)*
-- *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem)*
+- *Aktualisierung der Wettbewerbsanalyse (Calibre 8.x Weiterentwicklung, MCP-Ökosystem, Second-Brain-Landschaft)*
+- *Benchmark-Suite: Design und Implementierung des ARCHILLES-eigenen Retrieval-Benchmarks (Precision/Recall, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy)*
 - *ChromaDB-Dependency bereinigen: annotations_indexer.py nicht mehr aktiv befüllt; Entscheidung über vollständige Entfernung oder Legacy-Fallback.*
 - *Annotation-Suche im MCP-Server: search_annotations-Tool auf LanceDB umstellen (aktuell noch ChromaDB-Backend).*
 - *Schema-Migrations-Framework: Der aktuelle add_columns()-Mechanismus funktioniert, ist aber ad-hoc. Bei wachsender Feldanzahl lohnt sich ein formales Migrations-System mit Versionsnummern.*
 - *Parent-Child-Chunking: Entscheidung über Implementierungsreihenfolge nach Two-Phase-Pipeline-Stabilisierung.*
 - *Docling-Evaluation: Ergebnis und ADR für/gegen Markdown-Extraktion als Pipeline-Stufe.*
 - *CLI-Erfahrung verbessern: rag_demo.py liefert unbefriedigende Ergebnisse ohne Claude-Kontext-Interpretation. Ansätze: bessere Prompt-Templates, automatische Query-Expansion, lokales LLM als Interpretation-Layer.*
+- *Lab-Schreib-Tools (add_note, link_insight): Deprioritisiert per ADR-022; Wiedervorlage nach Community-Feedback.*

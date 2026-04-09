@@ -9,7 +9,9 @@
 
 ## Vision
 
-ARCHILLES verwandelt persönliche Calibre-Bibliotheken in semantisch durchsuchbare Wissensbasen. Das übergeordnete Ziel: Tausende Titel — mitsamt den Verlagstexten, Kritiken, KI-Analysen (z.B. aus NotebookLM) sowie eigenen Exzerpten und Gedanken — per KI erschließen, durchsuchen und in Beziehung setzen.
+ARCHILLES ist die semantische Infrastrukturschicht zwischen bestehenden Bibliothekssystemen und LLM-Ökosystemen. Das übergeordnete Ziel: Tausende Titel — mitsamt den Verlagstexten, Kritiken, KI-Analysen (z.B. aus NotebookLM) sowie eigenen Exzerpten und Gedanken — per KI erschließen, durchsuchen und in Beziehung setzen.
+
+ARCHILLES ist kein Second Brain, kein Konversations-Memory-System und kein Schreibwerkzeug. ARCHILLES löst ein spezifisches Problem, das kein anderes System adressiert: die semantische Tiefenerschließung heterogener Bibliotheken mit zitierfähigen Quellenangaben über das Model Context Protocol.
 
 Dabei gibt es zwei komplementäre Zugangswege. Der eine führt über Calibres eigene KI-Schnittstellen (seit v8.16: GitHubAI, GoogleAI, OllamaAI, OpenRouter), die ein Gesprächsinterface für einzelne Bücher bieten. Der andere — und das ist ARCHILLES' Domäne — ermöglicht die semantische Suche über die gesamte Bibliothek mit verifizierbaren Quellenangaben, verbunden mit der analytischen Kraft eines Frontier-Modells wie Claude über das Model Context Protocol (MCP).
 
@@ -17,11 +19,30 @@ Die beiden Ansätze sind komplementär, nicht konkurrierend: Calibres AI-Feature
 
 ---
 
-## Positionierung: ARCHILLES und Calibre AI
+## Positionierung: ARCHILLES im Ökosystem
+
+### ARCHILLES und Calibre AI
 
 Calibre 8.16 führte im Dezember 2025 eigene AI-Features ein. Systematische Tests zeigten die unterschiedlichen Stärken und Grenzen: Lokale Modelle (z.B. Gemma3 über Ollama) halluzinierten bei unvollständigen Dokumenten, während Cloud-Modelle (z.B. Gemini) sich auf Web-Grounding stützten und bei unveröffentlichten Manuskripten versagten. ARCHILLES löst ein fundamental anderes Problem — nicht einzelne Bücher besprechen, sondern die gesamte Bibliothek semantisch erschließen.
 
 Für Nutzer empfiehlt sich die Kombination: Calibres Ollama-Integration für schnelle Einzelbuch-Gespräche, ARCHILLES über MCP für bibliotheksweite Recherche mit Frontier-Modellen.
+
+### ARCHILLES und Second-Brain-Systeme
+
+Im Frühjahr 2026 entsteht ein lebhaftes Ökosystem für KI-gestütztes persönliches Wissensmanagement: MemPalace (Konversations-Memory mit räumlicher Metapher), Claudian (agentisches Schreiben in Obsidian), Nate B. Jones' Open Brain (MCP-basierte Supabase-Schicht), und weitere. Diese Systeme lösen ein reales Problem — das Verschwinden von Entscheidungskontext aus Chat-Sessions — und tun das zunehmend gut.
+
+ARCHILLES konkurriert nicht mit diesen Systemen, sondern ergänzt sie. Die strategische Abgrenzung:
+
+| | Second-Brain-Systeme | ARCHILLES |
+|---|---|---|
+| **Speichert** | Konversationen, Notizen, Gedanken | Bücher, Artikel, Annotationen |
+| **Optimiert auf** | "Erinnere dich an alles, was ich gesagt habe" | "Finde die relevante Stelle in 3.000 Büchern" |
+| **Quellenangaben** | Konversationsfragmente | Exakte Zitationen mit Seitenangaben |
+| **Kernproblem** | KI-Amnesie | Bibliothekserschließung |
+
+Die Adapter-Architektur (ADR-021) und die MCP-Schnittstelle machen ARCHILLES zur natürlichen Bibliotheks-Anbindung für jedes dieser Systeme: MemPalace für das Konversationsgedächtnis, ARCHILLES für den Zugriff auf den Forschungsbestand. Die MCP-Tools sind die API, über die jedes Second-Brain-System an die Bibliothek andocken kann.
+
+**Kommunikation:** "Bring your own library. ARCHILLES makes it searchable." — "Read your library. Remember your research."
 
 ---
 
@@ -52,6 +73,8 @@ Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidier
 **HTTP/SSE-Transport für den MCP-Server (höchste Priorität):** Archilles spricht derzeit nur stdio-MCP — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT, OpenAI Codex und andere Cloud-basierte AI-Clients erwarten dagegen einen remote-erreichbaren HTTP/SSE-Endpunkt. Die Lösung: ein optionaler HTTP/SSE-Modus, der lokal auf dem eigenen Rechner läuft (localhost) und von MCP-kompatiblen Desktop-Clients direkt angesprochen werden kann. Das macht Archilles LLM-agnostisch — nutzbar mit Claude, ChatGPT, Codex und jedem zukünftigen MCP-kompatiblen Client. Die Implementierung ist mit FastMCP oder ähnlichen Python-Libraries überschaubar und erfordert keine Änderung an der Kernarchitektur.
 
 **Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
+
+**Benchmark-Suite für Bibliotheks-Retrieval (neu):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Benchmark wird vor dem Community-Release veröffentlicht und dient sowohl der internen Qualitätssicherung als auch der externen Kommunikation.
 
 Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
 
@@ -85,13 +108,25 @@ Die strategische Entscheidung: Die OCR-Landschaft entwickelt sich rasant. Die Sc
 
 ---
 
-## v1.5 — Community-Release und Open Source (Q3–Q4 2026)
+## v1.3 — Archilles Lab als Referenzintegration (Q3–Q4 2026)
+
+**Fokus:** Zeigen, wie ein Second-Brain-System an ARCHILLES andockt — nicht ein eigenes bauen.
+
+Das Archilles Lab (Obsidian-Vault über den ObsidianAdapter) bleibt als funktionale Referenzintegration erhalten. Es demonstriert den kanonischen Pfad: ein Obsidian-Vault mit KI-Chats, Exzerpten und Forschungsnotizen wird über den Folder-/ObsidianAdapter indexiert und via MCP durchsuchbar gemacht. Die bestehenden Import-Pipelines (ChatGPT, Gemini, Grok) und der DialogueChunker bedienen diesen Pfad bereits.
+
+**Was das Lab ist:** Die Referenzimplementierung, die zeigt, wie ARCHILLES als Bibliotheks-Layer für beliebige Wissensmanagement-Systeme dient. Dokumentation und Tutorials für Drittanbieter-Anbindung.
+
+**Was das Lab nicht ist:** Ein eigenständiges Second-Brain-Produkt. Die in der TWO_DB_VISION.md skizzierten Schreib-Tools (`add_note`, `link_insight`, `save_chat_excerpt`) und das Corpus callosum (Cross-Search-Brücke) sind weiterhin als Erweiterung denkbar, stehen aber nicht auf dem kritischen Pfad. Sie werden implementiert, wenn die Kern-Pipeline (Adapter, Annotation-Verankerung, HTTP/SSE, Benchmark) steht und die Community danach fragt.
+
+---
+
+## v1.5 — Community-Release und Open Source (Q4 2026)
 
 **Fokus:** ARCHILLES in die Hände der Zielgruppe bringen.
 
 Open-Source-Veröffentlichung unter MIT-Lizenz. Domains sind gesichert (archilles.org, archilles.net, archilles.de). Die Zielgruppe sind technisch versierte Einzelforscher aus den Geisteswissenschaften — Geschichte, Literatur, Philosophie —, die große, kuratierte Calibre-Bibliotheken pflegen und Wert auf Privacy und lokale Datenkontrolle legen.
 
-Community-Aufbau über akademische Kanäle: r/DigitalHumanities, r/AskHistorians, GitHub Discussions, DH-Discord-Server und spezialisierte Foren. Der ARCHILLATOR (Browser-basierter akademischer Textübersetzer) dient als Lead Magnet.
+Community-Aufbau über akademische Kanäle: r/DigitalHumanities, r/AskHistorians, GitHub Discussions, DH-Discord-Server und spezialisierte Foren (MobileRead als Priorität wegen der Calibre-Community). Der ARCHILLATOR (Browser-basierter akademischer Textübersetzer) dient als Lead Magnet.
 
 Freemium-Modell: Kostenlose Basisversion ohne Bibliotheksbeschränkung. Premium-Features und disziplinspezifische Erweiterungen (Special Editions) finanzieren die Weiterentwicklung.
 
@@ -137,15 +172,17 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 
 ## Leitprinzipien
 
+**Infrastruktur, nicht Anwendung.** ARCHILLES ist der semantische Layer zwischen Bibliotheken und LLMs — die Wasserleitung, nicht die Küche. Second-Brain-Funktionalität, Chat-Interfaces und agentische Schreibwerkzeuge werden von spezialisierten Systemen besser gelöst. ARCHILLES liefert die Bibliotheks-Anbindung, die diese Systeme brauchen.
+
 **Privacy ist die Architektur, nicht ein Feature.** Keine Netzwerk-Calls im normalen Betrieb, keine Telemetrie, alle Daten lokal. Wenn der Nutzer sich mit einem Cloud-LLM verbindet, ist das seine bewusste Entscheidung — „Mein Korpus, meine Wahl."
 
 **Weniger Code, mehr Architektur.** Wo eine architektonische Lösung bessere Ergebnisse liefert als eine code-intensive Heuristik, wird die Architektur gewählt.
 
-**Modulare Erweiterbarkeit vor Featurefülle.** Registry-Pattern, Plugin-fähige Schnittstellen und definierte Erweiterungszonen sind wichtiger als jedes einzelne Feature.
+**Modulare Erweiterbarkeit vor Featurefülle.** Registry-Pattern, Plugin-fähige Schnittstellen und definierte Erweiterungszonen sind wichtiger als jedes einzelne Feature. Die Adapter-Architektur ist das Produkt.
 
-**Akademischer Anspruch als Differenzierung.** Exakte Zitationen mit Seitenangaben, transparentes Retrieval, disziplinspezifische Optimierungen — das unterscheidet ARCHILLES von generischen RAG-Lösungen.
+**Akademischer Anspruch als Differenzierung.** Exakte Zitationen mit Seitenangaben, transparentes Retrieval, disziplinspezifische Optimierungen — das unterscheidet ARCHILLES von generischen RAG-Lösungen und von Konversations-Memory-Systemen.
 
-**Aufschub als bewusste Strategie.** Graph RAG, OCR, institutionelle Features werden zum richtigen Zeitpunkt implementiert. Ein funktionierendes Produkt hat Vorrang vor einer vorzeitig aufgeblähten Architektur.
+**Aufschub als bewusste Strategie.** Graph RAG, OCR, institutionelle Features und Lab-Schreib-Tools werden zum richtigen Zeitpunkt implementiert. Ein funktionierendes Produkt hat Vorrang vor einer vorzeitig aufgeblähten Architektur.
 
 **Core bleibt frei und Open Source** (MIT-Lizenz). Special Editions finanzieren die Weiterentwicklung. Keine Breaking Changes ohne Migrationspfad.
 
