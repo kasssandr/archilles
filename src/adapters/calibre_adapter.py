@@ -8,7 +8,6 @@ and continues to do the actual SQLite work.
 import logging
 import os
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.base import (
     DocumentAnnotation,
@@ -48,8 +47,8 @@ class CalibreAdapter(SourceAdapter):
 
     def list_documents(
         self,
-        tag_filter: Optional[str] = None,
-        exclude_tag: Optional[str] = None,
+        tag_filter: str | None = None,
+        exclude_tag: str | None = None,
     ) -> list[DocumentMetadata]:
         import sqlite3
 
@@ -92,19 +91,17 @@ class CalibreAdapter(SourceAdapter):
         conn.close()
         return results
 
-    def get_metadata(self, doc_id: str) -> Optional[DocumentMetadata]:
-        with CalibreDB(self._library_path) as db:
-            # Look up by Calibre book id
-            import sqlite3
+    def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
+        import sqlite3
 
-            conn = sqlite3.connect(self._library_path / "metadata.db")
-            conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(self._library_path / "metadata.db")
+        conn.row_factory = sqlite3.Row
+        try:
             row = conn.execute(
                 "SELECT id, title, path FROM books WHERE id = ?",
                 (int(doc_id),),
             ).fetchone()
             if not row:
-                conn.close()
                 return None
 
             tag_rows = conn.execute(
@@ -119,14 +116,13 @@ class CalibreAdapter(SourceAdapter):
 
             file_path = self._find_primary_file(row["path"])
             if file_path is None:
-                conn.close()
                 return None
 
-            meta = self._row_to_metadata(conn, int(doc_id), row["title"], row["path"], tags, file_path)
+            return self._row_to_metadata(conn, int(doc_id), row["title"], row["path"], tags, file_path)
+        finally:
             conn.close()
-            return meta
 
-    def get_file_path(self, doc_id: str) -> Optional[Path]:
+    def get_file_path(self, doc_id: str) -> Path | None:
         import sqlite3
 
         conn = sqlite3.connect(self._library_path / "metadata.db")
@@ -164,20 +160,21 @@ class CalibreAdapter(SourceAdapter):
             return []
 
     def get_comments(self, doc_id: str) -> str:
-        with CalibreDB(self._library_path) as db:
-            import sqlite3
+        import sqlite3
 
-            conn = sqlite3.connect(self._library_path / "metadata.db")
-            conn.row_factory = sqlite3.Row
+        conn = sqlite3.connect(self._library_path / "metadata.db")
+        conn.row_factory = sqlite3.Row
+        try:
             row = conn.execute(
                 "SELECT text FROM comments WHERE book = ?", (int(doc_id),)
             ).fetchone()
-            conn.close()
             if row and row["text"]:
                 return CalibreDB.clean_html(row["text"])
             return ""
+        finally:
+            conn.close()
 
-    def get_metadata_by_path(self, file_path: Path) -> Optional[DocumentMetadata]:
+    def get_metadata_by_path(self, file_path: Path) -> DocumentMetadata | None:
         """Efficient path-based lookup via CalibreDB."""
         file_path = Path(file_path).resolve()
         library_path = CalibreDB.find_library_path(file_path)
@@ -192,7 +189,7 @@ class CalibreAdapter(SourceAdapter):
 
     # ── Internal helpers ────────────────────────────────────────
 
-    def _find_primary_file(self, calibre_book_path: str) -> Optional[Path]:
+    def _find_primary_file(self, calibre_book_path: str) -> Path | None:
         """Find the best available file for a Calibre book folder."""
         book_dir = self._library_path / calibre_book_path
         if not book_dir.is_dir():

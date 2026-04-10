@@ -11,7 +11,6 @@ import re
 import sqlite3
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.base import (
     DocumentAnnotation,
@@ -63,7 +62,7 @@ def _strip_html(html: str) -> str:
     return re.sub(r'\s+', ' ', text).strip()
 
 
-def _parse_year(date_str: str) -> Optional[int]:
+def _parse_year(date_str: str) -> int | None:
     """Extract a 4-digit year from Zotero's date field."""
     if not date_str:
         return None
@@ -87,7 +86,7 @@ class ZoteroAdapter(SourceAdapter):
     def __init__(
         self,
         library_path: Path,
-        linked_attachment_base: Optional[Path] = None,
+        linked_attachment_base: Path | None = None,
     ):
         self._library_path = Path(library_path)
         self._db_path = self._library_path / "zotero.sqlite"
@@ -207,7 +206,7 @@ class ZoteroAdapter(SourceAdapter):
 
     # ── Attachments ──────────────────────────────────────────────
 
-    def _resolve_attachment_path(self, conn: sqlite3.Connection, attachment_row) -> Optional[Path]:
+    def _resolve_attachment_path(self, conn: sqlite3.Connection, attachment_row) -> Path | None:
         """Resolve a Zotero attachment path to an absolute filesystem path."""
         link_mode = attachment_row["linkMode"]
         raw_path = attachment_row["path"] or ""
@@ -246,7 +245,7 @@ class ZoteroAdapter(SourceAdapter):
         # linkMode 3 = linked URL, linkMode 4 = embedded image — no local file
         return None
 
-    def _get_primary_attachment(self, conn: sqlite3.Connection, item_id: int) -> tuple[Optional[Path], str]:
+    def _get_primary_attachment(self, conn: sqlite3.Connection, item_id: int) -> tuple[Path | None, str]:
         """Find the best attachment for an item. Returns (path, format)."""
         rows = conn.execute(
             """
@@ -314,8 +313,8 @@ class ZoteroAdapter(SourceAdapter):
 
     def list_documents(
         self,
-        tag_filter: Optional[str] = None,
-        exclude_tag: Optional[str] = None,
+        tag_filter: str | None = None,
+        exclude_tag: str | None = None,
     ) -> list[DocumentMetadata]:
         conn = self._connect()
         try:
@@ -361,7 +360,7 @@ class ZoteroAdapter(SourceAdapter):
         finally:
             conn.close()
 
-    def get_metadata(self, doc_id: str) -> Optional[DocumentMetadata]:
+    def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
         conn = self._connect()
         try:
             row = conn.execute(
@@ -379,7 +378,7 @@ class ZoteroAdapter(SourceAdapter):
         finally:
             conn.close()
 
-    def get_file_path(self, doc_id: str) -> Optional[Path]:
+    def get_file_path(self, doc_id: str) -> Path | None:
         conn = self._connect()
         try:
             row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()

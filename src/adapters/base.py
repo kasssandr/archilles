@@ -9,7 +9,6 @@ never on a specific backend like Calibre or Zotero.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 
 
 @dataclass
@@ -21,10 +20,10 @@ class DocumentTimestamps:
     ``imported_at`` and ``indexed_at`` are set by ARCHILLES itself.
     """
 
-    created_at: Optional[str] = None
-    modified_at: Optional[str] = None
-    imported_at: Optional[str] = None
-    indexed_at: Optional[str] = None
+    created_at: str | None = None
+    modified_at: str | None = None
+    imported_at: str | None = None
+    indexed_at: str | None = None
 
 
 @dataclass
@@ -40,7 +39,7 @@ class DocumentMetadata:
     comments: str = ""
     comments_html: str = ""  # Raw HTML from Calibre (for structured indexing)
     language: str = ""
-    year: Optional[int] = None
+    year: int | None = None
     publisher: str = ""
     series: str = ""
     identifiers: dict = field(default_factory=dict)
@@ -55,7 +54,7 @@ class DocumentAnnotation:
     text: str
     note: str = ""
     annotation_type: str = "highlight"
-    page: Optional[int] = None
+    page: int | None = None
     chapter: str = ""
     created: str = ""
 
@@ -73,19 +72,19 @@ class SourceAdapter(ABC):
     @abstractmethod
     def list_documents(
         self,
-        tag_filter: Optional[str] = None,
-        exclude_tag: Optional[str] = None,
+        tag_filter: str | None = None,
+        exclude_tag: str | None = None,
     ) -> list[DocumentMetadata]:
         """List all documents, optionally filtered by tag."""
         ...
 
     @abstractmethod
-    def get_metadata(self, doc_id: str) -> Optional[DocumentMetadata]:
+    def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
         """Metadata for a single document, or ``None`` if not found."""
         ...
 
     @abstractmethod
-    def get_file_path(self, doc_id: str) -> Optional[Path]:
+    def get_file_path(self, doc_id: str) -> Path | None:
         """Absolute path to the primary file (PDF > EPUB > other)."""
         ...
 
@@ -119,7 +118,7 @@ class SourceAdapter(ABC):
         No-op by default.  Implementations may use ``watchdog`` or similar.
         """
 
-    def get_metadata_by_path(self, file_path: Path) -> Optional[DocumentMetadata]:
+    def get_metadata_by_path(self, file_path: Path) -> DocumentMetadata | None:
         """Look up metadata by file path instead of doc_id.
 
         Useful during indexing when only the file path is known.

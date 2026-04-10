@@ -13,7 +13,6 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.base import DocumentMetadata, DocumentTimestamps
 from src.adapters.folder_adapter import (
@@ -134,7 +133,7 @@ class ObsidianAdapter(FolderAdapter):
     def adapter_type(self) -> str:
         return "obsidian"
 
-    def _get_attachment_folder(self) -> Optional[str]:
+    def _get_attachment_folder(self) -> str | None:
         """Read ``attachmentFolderPath`` from ``.obsidian/app.json`` if present."""
         app_json = self._library_path / ".obsidian" / "app.json"
         if not app_json.is_file():

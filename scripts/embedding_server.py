@@ -10,33 +10,19 @@ Dependencies (install on GPU machine):
     pip install fastapi uvicorn sentence-transformers torch
 """
 
+import gzip as gzip_module
+import json
 import os
 import time
 import logging
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
+from fastapi import FastAPI, Header, HTTPException, Request
+from starlette.middleware.gzip import GZipMiddleware
 
 logger = logging.getLogger(__name__)
 
 API_TOKEN = os.environ.get("EMBEDDING_API_TOKEN")
-
-# --- Pydantic models ---
-
-class EmbedRequest(BaseModel):
-    texts: List[str]
-
-class EmbedResponse(BaseModel):
-    embeddings: List[List[float]]
-    model: str
-    dimension: int
-    count: int
-    duration_seconds: float
-
-# --- App ---
-
-app = FastAPI(title="ARCHILLES Embedding Server")
 
 _model = None
 _model_name = "BAAI/bge-m3"
@@ -55,13 +41,27 @@ def _get_model():
     return _model
 
 
-def _check_auth(authorization: Optional[str]):
+def _check_auth(authorization: str | None):
     if not API_TOKEN:
         return
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid token")
     if authorization[7:] != API_TOKEN:
         raise HTTPException(status_code=403, detail="Invalid token")
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    logger.info("Pre-loading model...")
+    _get_model()
+    logger.info("Server ready.")
+    yield
+
+
+# --- App ---
+
+app = FastAPI(title="ARCHILLES Embedding Server", lifespan=_lifespan)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 @app.get("/health")
@@ -75,26 +75,30 @@ def health():
     }
 
 
-@app.post("/embed", response_model=EmbedResponse)
-def embed(
-    request: EmbedRequest,
-    authorization: Optional[str] = Header(None),
+@app.post("/embed")
+async def embed(
+    request: Request,
+    authorization: str | None = Header(None),
 ):
     _check_auth(authorization)
 
-    if not request.texts:
-        return EmbedResponse(
-            embeddings=[], model=_model_name, dimension=_dimension,
-            count=0, duration_seconds=0.0,
-        )
+    body = await request.body()
+    if request.headers.get("content-encoding") == "gzip":
+        body = gzip_module.decompress(body)
+    data = json.loads(body)
+    texts = data.get("texts", [])
 
-    if len(request.texts) > 10000:
+    if not texts:
+        return {"embeddings": [], "model": _model_name, "dimension": _dimension,
+                "count": 0, "duration_seconds": 0.0}
+
+    if len(texts) > 10000:
         raise HTTPException(status_code=400, detail="Max 10000 texts per request")
 
     model = _get_model()
     start = time.time()
     vectors = model.encode(
-        request.texts,
+        texts,
         batch_size=64,
         normalize_embeddings=True,
         convert_to_numpy=True,
@@ -102,17 +106,10 @@ def embed(
     )
     duration = time.time() - start
 
-    return EmbedResponse(
-        embeddings=vectors.tolist(),
-        model=_model_name,
-        dimension=_dimension,
-        count=len(request.texts),
-        duration_seconds=round(duration, 3),
-    )
-
-
-@app.on_event("startup")
-def startup():
-    logger.info("Pre-loading model...")
-    _get_model()
-    logger.info("Server ready.")
+    return {
+        "embeddings": vectors.tolist(),
+        "model": _model_name,
+        "dimension": _dimension,
+        "count": len(texts),
+        "duration_seconds": round(duration, 3),
+    }

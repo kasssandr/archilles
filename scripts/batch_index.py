@@ -57,6 +57,7 @@ import argparse
 import json
 import os
 import sqlite3
+import statistics
 import sys
 import time
 from datetime import datetime
@@ -104,9 +105,6 @@ def get_library_path() -> Path:
         sys.exit(1)
     return Path(library_path)
 
-
-# Backward-compatible alias
-get_calibre_library_path = get_library_path
 
 
 def _discover_formats(book_path: Path) -> List[Dict[str, str]]:
@@ -190,7 +188,6 @@ def _score_chunks(chunks: List[dict]) -> dict:
     # 3. Chunk length variance (coefficient of variation) — lower is better
     word_counts = [len((c.get('text') or '').split()) for c in content_chunks]
     if word_counts:
-        import statistics
         mean_wc = statistics.mean(word_counts)
         stdev_wc = statistics.stdev(word_counts) if len(word_counts) > 1 else 0
         cv = stdev_wc / mean_wc if mean_wc > 0 else 0

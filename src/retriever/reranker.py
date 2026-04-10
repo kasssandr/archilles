@@ -11,7 +11,6 @@ search falls back gracefully to RRF-only ranking.
 """
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +22,8 @@ class CrossEncoderReranker:
 
     def __init__(
         self,
-        model_name: Optional[str] = None,
-        device: Optional[str] = None,
+        model_name: str | None = None,
+        device: str | None = None,
         max_length: int = 512,
     ):
         """

@@ -14,7 +14,7 @@ import logging
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +36,18 @@ class ArchillesService:
     def __init__(
         self,
         db_path: str = "./archilles_rag_db",
-        model_name: Optional[str] = None,
-        profile: Optional[str] = None,
+        model_name: str | None = None,
+        profile: str | None = None,
         enable_ocr: bool = False,
         force_ocr: bool = False,
         ocr_backend: str = "auto",
         ocr_language: str = "deu+eng",
         hierarchical: bool = False,
         enable_reranking: bool = False,
-        reranker_model: Optional[str] = None,
-        reranker_device: Optional[str] = None,
-        citation_config: Optional[Any] = None,
-        archilles_dir: Optional[str] = None,
+        reranker_model: str | None = None,
+        reranker_device: str | None = None,
+        citation_config: Any | None = None,
+        archilles_dir: str | None = None,
         adapter=None,
     ):
         """
@@ -151,15 +151,15 @@ class ArchillesService:
         query: str,
         mode: Literal["semantic", "keyword", "hybrid"] = "hybrid",
         top_k: int = 10,
-        language: Optional[str] = None,
-        book_id: Optional[str] = None,
+        language: str | None = None,
+        book_id: str | None = None,
         exact_phrase: bool = False,
-        tag_filter: Optional[List[str]] = None,
+        tag_filter: list[str] | None = None,
         section_filter: str = "main",
         chunk_type_filter: str = "content",
         max_per_book: int = 2,
         min_similarity: float = 0.0,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Search for relevant passages.
 
@@ -216,13 +216,13 @@ class ArchillesService:
         self,
         query: str,
         top_k: int = 10,
-        mode: str = "hybrid",
-        language: Optional[str] = None,
-        tags: Optional[List[str]] = None,
+        mode: Literal["hybrid", "semantic", "keyword"] = "hybrid",
+        language: str | None = None,
+        tags: list[str] | None = None,
         expand_context: bool = False,
         boost_research_interests: bool = True,
         max_per_book: int = 3,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Search and generate XML-structured prompts with citation support.
 
@@ -285,19 +285,19 @@ class ArchillesService:
 
     # ── Index operations ────────────────────────────────────────
 
-    def get_index_status(self) -> Dict[str, Any]:
+    def get_index_status(self) -> dict[str, Any]:
         """Get database statistics (total chunks, books, file types, etc.)."""
         if not self._ensure_initialized():
             return {"total_chunks": 0, "total_books": 0}
         return self._rag.store.get_stats()
 
-    def get_book_list(self) -> List[Dict[str, Any]]:
+    def get_book_list(self) -> list[dict[str, Any]]:
         """Get list of all indexed books with statistics."""
         if not self._ensure_initialized():
             return []
         return self._rag.store.get_indexed_books()
 
-    def get_chunk_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+    def get_chunk_by_id(self, chunk_id: str) -> dict[str, Any] | None:
         """Get a single chunk by its ID (used for parent lookup)."""
         if not self._ensure_initialized():
             return None
@@ -307,10 +307,10 @@ class ArchillesService:
 
     @staticmethod
     def _diversify(
-        results: List[Dict[str, Any]],
+        results: list[dict[str, Any]],
         max_per_book: int,
         top_k: int,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Apply per-book diversification to reranked results."""
         diversified = []
         book_counts: Dict[str, int] = {}

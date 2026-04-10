@@ -1,14 +1,14 @@
 """
 LanceDB Storage Backend for ARCHILLES RAG System.
 
-Replaces ChromaDB with native hybrid search support (vector + full-text).
+Native hybrid search support (vector + full-text).
 Designed for scalability to 1M+ chunks with IVF-PQ indexing.
 """
 
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import lancedb
 import numpy as np
@@ -137,7 +137,7 @@ class LanceDBStore:
                 except Exception as e:
                     logger.warning(f"Schema migration: failed to add column '{col}': {e}")
 
-    def _create_table_with_data(self, records: List[Dict[str, Any]]):
+    def _create_table_with_data(self, records: list[dict[str, Any]]):
         """Create table with initial data (LanceDB requires data to infer schema)."""
         self.table = self.db.create_table(
             self.table_name,
@@ -195,7 +195,7 @@ class LanceDBStore:
         except Exception as e:
             logger.warning(f"Could not create FTS index: {e}")
 
-    def add_chunks(self, chunks: List[Dict[str, Any]], embeddings: np.ndarray) -> int:
+    def add_chunks(self, chunks: list[dict[str, Any]], embeddings: np.ndarray) -> int:
         """
         Add chunks with their embeddings to the database.
 
@@ -274,9 +274,9 @@ class LanceDBStore:
     def add_processed_documents(
         self,
         processed_docs,
-        book_metadata: Optional[Dict[str, Any]] = None,
-        calibre_id: Optional[int] = None,
-        source_id: Optional[str] = None,
+        book_metadata: dict[str, Any] | None = None,
+        calibre_id: int | None = None,
+        source_id: str | None = None,
     ) -> int:
         """
         Add documents processed by the ModularPipeline to the database.
@@ -376,13 +376,13 @@ class LanceDBStore:
         query_text: str,
         query_vector: np.ndarray,
         top_k: int = 10,
-        book_id: Optional[str] = None,
-        calibre_id: Optional[int] = None,
-        section_type: Optional[str] = None,
-        chunk_type: Optional[str] = None,
-        language: Optional[str] = None,
-        source_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        book_id: str | None = None,
+        calibre_id: int | None = None,
+        section_type: str | None = None,
+        chunk_type: str | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Hybrid search combining vector similarity and full-text search.
 
@@ -449,13 +449,13 @@ class LanceDBStore:
         self,
         query_vector: np.ndarray,
         top_k: int = 10,
-        book_id: Optional[str] = None,
-        calibre_id: Optional[int] = None,
-        section_type: Optional[str] = None,
-        chunk_type: Optional[str] = None,
-        language: Optional[str] = None,
-        source_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        book_id: str | None = None,
+        calibre_id: int | None = None,
+        section_type: str | None = None,
+        chunk_type: str | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Pure vector similarity search.
 
@@ -496,13 +496,13 @@ class LanceDBStore:
         self,
         query_text: str,
         top_k: int = 10,
-        book_id: Optional[str] = None,
-        calibre_id: Optional[int] = None,
-        section_type: Optional[str] = None,
-        chunk_type: Optional[str] = None,
-        language: Optional[str] = None,
-        source_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+        book_id: str | None = None,
+        calibre_id: int | None = None,
+        section_type: str | None = None,
+        chunk_type: str | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """
         Pure full-text search (good for proper nouns, dates, exact phrases).
 
@@ -541,13 +541,13 @@ class LanceDBStore:
 
     def _build_filter(
         self,
-        book_id: Optional[str] = None,
-        calibre_id: Optional[int] = None,
-        section_type: Optional[str] = None,
-        chunk_type: Optional[str] = None,
-        language: Optional[str] = None,
-        source_id: Optional[str] = None,
-    ) -> Optional[str]:
+        book_id: str | None = None,
+        calibre_id: int | None = None,
+        section_type: str | None = None,
+        chunk_type: str | None = None,
+        language: str | None = None,
+        source_id: str | None = None,
+    ) -> str | None:
         """Build SQL-like filter string for LanceDB queries."""
         conditions = []
 
@@ -595,7 +595,7 @@ class LanceDBStore:
         "_score": lambda s: s,
     }
 
-    def _results_to_dicts(self, df) -> List[Dict[str, Any]]:
+    def _results_to_dicts(self, df) -> list[dict[str, Any]]:
         """Convert pandas DataFrame results to list of dictionaries."""
         if df is None or len(df) == 0:
             return []
@@ -676,22 +676,22 @@ class LanceDBStore:
         """Delete all chunks for a specific Calibre ID."""
         return self._delete_where(f"calibre_id = {calibre_id}")
 
-    def _query_where(self, condition: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def _query_where(self, condition: str, limit: int = 100) -> list[dict[str, Any]]:
         """Run a filtered query and return results as dicts."""
         if self.table is None:
             return []
         df = self.table.search().where(condition).limit(limit).to_pandas()
         return self._results_to_dicts(df)
 
-    def get_by_book_id(self, book_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_by_book_id(self, book_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a specific book."""
         return self._query_where(f"book_id = '{book_id}'", limit)
 
-    def get_by_calibre_id(self, calibre_id: int, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_by_calibre_id(self, calibre_id: int, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a specific Calibre ID."""
         return self._query_where(f"calibre_id = {calibre_id}", limit)
 
-    def get_by_source_id(self, source_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_by_source_id(self, source_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a source ID (with calibre_id fallback)."""
         if source_id.isdigit():
             return self._query_where(
@@ -707,12 +707,12 @@ class LanceDBStore:
             )
         return self._delete_where(f"source_id = '{source_id}'")
 
-    def get_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+    def get_by_id(self, chunk_id: str) -> dict[str, Any] | None:
         """Get a single chunk by its ID (used for parent lookup)."""
         results = self._query_where(f"id = '{chunk_id}'", limit=1)
         return results[0] if results else None
 
-    def get_book_ids_for_skip_check(self) -> List[Dict[str, Any]]:
+    def get_book_ids_for_skip_check(self) -> list[dict[str, Any]]:
         """
         Efficiently retrieve the minimal columns needed to build the set of already-indexed
         book IDs for --skip-existing checks.
@@ -760,7 +760,7 @@ class LanceDBStore:
         available = [c for c in columns if c in df.columns]
         return df[available].to_dict(orient='records')
 
-    def get_all(self, limit: int = 1000, offset: int = 0) -> List[Dict[str, Any]]:
+    def get_all(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """
         Get all chunks (with pagination).
 
@@ -779,7 +779,7 @@ class LanceDBStore:
         df = df.iloc[offset:offset + limit]
         return df.to_dict(orient="records")
 
-    def get_indexed_books(self) -> List[Dict[str, Any]]:
+    def get_indexed_books(self) -> list[dict[str, Any]]:
         """
         Get list of all indexed books with statistics.
 
@@ -821,7 +821,7 @@ class LanceDBStore:
             return 0
         return self.table.count_rows()
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """
         Get database statistics.
 

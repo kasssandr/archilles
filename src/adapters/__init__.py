@@ -10,7 +10,6 @@ Usage::
 """
 
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.base import SourceAdapter
 
@@ -40,7 +39,7 @@ def detect_adapter_type(library_path: Path) -> str:
 
 def create_adapter(
     library_path: Path,
-    adapter_type: Optional[str] = None,
+    adapter_type: str | None = None,
 ) -> SourceAdapter:
     """Create the appropriate SourceAdapter for *library_path*.
 

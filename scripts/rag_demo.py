@@ -30,6 +30,7 @@ Usage:
 
 import sys
 import argparse
+from html import escape as _html_escape
 from pathlib import Path
 from typing import List, Dict, Any, Literal, Optional
 import time
@@ -1112,7 +1113,7 @@ class archillesRAG:
                     embeddings.append(annot_embedding.tolist())
 
         except Exception as e:
-            logger.warning("Annotation extraction failed (non-fatal): %s", e)
+            print(f"  ⚠ Annotation extraction failed (non-fatal): {e}")
             annot_count = 0
 
         # Convert embeddings to numpy array
@@ -2594,14 +2595,10 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
         return f"<<<QUELLE ID={doc_id}>>>\n[{meta_str}]"
 
-    def _escape_xml(self, text: str) -> str:
+    @staticmethod
+    def _escape_xml(text: str) -> str:
         """Escape XML special characters."""
-        return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&apos;"))
+        return _html_escape(text, quote=True)
 
     def create_claude_prompt(
         self,
@@ -2747,7 +2744,6 @@ def _handle_import_annotations(args):
                     review_path = Path(library_path) / ".archilles" / "unmatched_annotations.json"
                     review_path.parent.mkdir(parents=True, exist_ok=True)
                     review_data = [{"title": u.get("title"), "author": u.get("author")} for u in unmatched]
-                    import json
                     with open(review_path, "w", encoding="utf-8") as f:
                         json.dump(review_data, f, indent=2, ensure_ascii=False)
                     print(f"\n  Review queue written to: {review_path}")

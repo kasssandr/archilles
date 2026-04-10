@@ -93,6 +93,7 @@ async def stdio_server(server: CalibreMCPServer):
     for tool in tools:
         logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
 
+    request_id = None
     while True:
         try:
             line = sys.stdin.readline()
@@ -156,7 +157,7 @@ async def stdio_server(server: CalibreMCPServer):
             continue
         except Exception as e:
             logger.error(f"Error processing request: {e}", exc_info=True)
-            error_id = request.get('id', -1) if 'request' in locals() and isinstance(request, dict) else -1
+            error_id = request_id if request_id is not None else -1
             error_response = {
                 'jsonrpc': '2.0',
                 'id': error_id,
@@ -207,7 +208,7 @@ def main():
     rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', str(archilles_dir / "rag_db"))
 
     # Create SourceAdapter
-    adapter_type = config.get('adapter', None)  # None = auto-detect
+    adapter_type = config.get('adapter')  # None = auto-detect
     try:
         from src.adapters import create_adapter
         adapter = create_adapter(Path(library_path), adapter_type)

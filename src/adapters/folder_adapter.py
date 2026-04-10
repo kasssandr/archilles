@@ -15,7 +15,6 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 
 from src.adapters.base import (
     DocumentAnnotation,
@@ -106,7 +105,7 @@ class FolderAdapter(SourceAdapter):
             raise NotADirectoryError(f"Not a directory: {self._library_path}")
         self._sidecar_dir = self._library_path / ".archilles" / "metadata"
         # Cache: relative posix path → DocumentMetadata
-        self._cache: Optional[dict[str, DocumentMetadata]] = None
+        self._cache: dict[str, DocumentMetadata] | None = None
 
     @property
     def adapter_type(self) -> str:
@@ -221,8 +220,8 @@ class FolderAdapter(SourceAdapter):
 
     def list_documents(
         self,
-        tag_filter: Optional[str] = None,
-        exclude_tag: Optional[str] = None,
+        tag_filter: str | None = None,
+        exclude_tag: str | None = None,
     ) -> list[DocumentMetadata]:
         docs = list(self._ensure_cache().values())
 
@@ -233,13 +232,13 @@ class FolderAdapter(SourceAdapter):
 
         return docs
 
-    def get_metadata(self, doc_id: str) -> Optional[DocumentMetadata]:
+    def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
         for doc in self._ensure_cache().values():
             if doc.doc_id == doc_id:
                 return doc
         return None
 
-    def get_file_path(self, doc_id: str) -> Optional[Path]:
+    def get_file_path(self, doc_id: str) -> Path | None:
         meta = self.get_metadata(doc_id)
         return meta.file_path if meta else None
 
@@ -250,7 +249,7 @@ class FolderAdapter(SourceAdapter):
         meta = self.get_metadata(doc_id)
         return meta.comments if meta else ""
 
-    def get_metadata_by_path(self, file_path: Path) -> Optional[DocumentMetadata]:
+    def get_metadata_by_path(self, file_path: Path) -> DocumentMetadata | None:
         """Efficient lookup by file path using the cache."""
         file_path = Path(file_path).resolve()
         try:
