@@ -96,7 +96,7 @@ class FormatDetector:
     def _detect_by_magic(cls, file_path: Path) -> Optional[str]:
         """Detect format by reading magic bytes."""
         with open(file_path, 'rb') as f:
-            header = f.read(512)
+            header = f.read(4096)
 
         # Check known signatures
         for signature, fmt in cls.MAGIC_SIGNATURES.items():
@@ -105,11 +105,9 @@ class FormatDetector:
                     return fmt
 
                 # ZIP-based format: disambiguate by inspecting content
-                with open(file_path, 'rb') as f:
-                    content = f.read(4096)
-                if b'mimetype' in content and b'application/epub+zip' in content:
+                if b'mimetype' in header and b'application/epub+zip' in header:
                     return 'epub'
-                if b'word/' in content or b'[Content_Types].xml' in content:
+                if b'word/' in header or b'[Content_Types].xml' in header:
                     return 'docx'
                 return 'epub'  # Default ZIP-based ebook assumption
 

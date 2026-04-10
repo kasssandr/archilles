@@ -195,7 +195,7 @@ class TesseractExtractor(OCRExtractor):
                 # Config: psm for page segmentation, oem for OCR engine mode
                 config = f"--psm {self.psm} --oem 3"
 
-                # Get text with confidence data
+                # Get text and confidence in a single Tesseract call
                 data = pytesseract.image_to_data(
                     img,
                     lang=self.language,
@@ -203,11 +203,9 @@ class TesseractExtractor(OCRExtractor):
                     output_type=pytesseract.Output.DICT
                 )
 
-                # Extract text
-                text = pytesseract.image_to_string(
-                    img,
-                    lang=self.language,
-                    config=config
+                # Reconstruct text from data (avoids a second Tesseract call)
+                text = ' '.join(
+                    w for w, c in zip(data['text'], data['conf']) if w.strip()
                 )
 
                 # Calculate average confidence (filter out -1 values)

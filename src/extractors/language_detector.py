@@ -148,7 +148,7 @@ class LanguageDetector:
         Args:
             chunks: List of chunks with 'text' key
             min_confidence: Minimum confidence threshold
-            show_progress: Show progress bar (default: True)
+            show_progress: Show progress bar (default: False)
 
         Returns:
             Same chunks with 'language' added to metadata

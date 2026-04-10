@@ -3,9 +3,8 @@
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List, Dict, Any
 import re
-import time
+from typing import Any
 
 from .models import ExtractedText, ExtractionMetadata, ChunkMetadata
 from .exceptions import ExtractionError
@@ -60,7 +59,7 @@ class BaseExtractor(ABC):
 
     @staticmethod
     def _add_window_text(
-        chunks: List[Dict[str, Any]], full_text: str, window_chars: int
+        chunks: list[dict[str, Any]], full_text: str, window_chars: int
     ) -> None:
         """Add window_text (surrounding context) to each chunk in-place."""
         for chunk in chunks:
@@ -76,7 +75,7 @@ class BaseExtractor(ABC):
         base_metadata: ChunkMetadata = None,
         detect_language: bool = True,
         window_chars: int = 500
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Split text into semantic chunks with context windows (Small-to-Big).
 
@@ -157,7 +156,7 @@ class BaseExtractor(ABC):
 
     _SENTENCE_END_RE = re.compile(r'[.!?;:»"\')\u201d]\s')
 
-    def _split_para_by_words(self, text: str) -> List[str]:
+    def _split_para_by_words(self, text: str) -> list[str]:
         """Split a single oversized paragraph into sentence-aligned chunks with overlap.
 
         Used as a pre-processing step in ``_create_chunks`` for texts that have
@@ -173,7 +172,7 @@ class BaseExtractor(ABC):
         words_per_chunk = max(1, int(self.chunk_size / 1.3))
         overlap_words = max(0, int(self.overlap / 1.3))
 
-        parts: List[str] = []
+        parts: list[str] = []
         i = 0
         while i < total:
             end = min(i + words_per_chunk, total)
@@ -221,7 +220,7 @@ class BaseExtractor(ABC):
         child_size: int = 512,
         child_overlap: int = 100,
         window_chars: int = 500
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Create two-level hierarchical chunks (parent + child).
 
@@ -300,13 +299,3 @@ class BaseExtractor(ABC):
             **kwargs
         )
 
-    def _extract_with_timing(self, file_path: Path) -> ExtractedText:
-        """Wrapper that times the extraction and records success/failure."""
-        start_time = time.time()
-        try:
-            result = self.extract(file_path)
-            result.metadata.extraction_time = time.time() - start_time
-            result.metadata.success = True
-            return result
-        except Exception as e:
-            raise ExtractionError(f"Extraction failed: {e}") from e

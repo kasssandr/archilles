@@ -31,6 +31,3 @@ class CalibreNotFoundError(ExtractionError):
     pass
 
 
-class PandocNotFoundError(ExtractionError):
-    """Raised when Pandoc is not available."""
-    pass

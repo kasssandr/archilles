@@ -91,27 +91,3 @@ class ExtractedText:
             self.metadata.total_words = len(self.full_text.split())
             self.metadata.total_chunks = len(self.chunks)
 
-    def get_chunk_by_page(self, page: int) -> List[Dict[str, Any]]:
-        """Get all chunks from a specific page."""
-        return [
-            chunk for chunk in self.chunks
-            if chunk.get('metadata', {}).get('page') == page
-        ]
-
-    def get_context_window(self, chunk_index: int, window_size: int = 2) -> str:
-        """Get chunk with surrounding context (±window_size chunks)."""
-        start = max(0, chunk_index - window_size)
-        end = min(len(self.chunks), chunk_index + window_size + 1)
-
-        context_chunks = self.chunks[start:end]
-        return "\n\n".join(c['text'] for c in context_chunks)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for JSON serialization."""
-        return {
-            'full_text': self.full_text,
-            'chunks': self.chunks,
-            'metadata': self.metadata.__dict__ if self.metadata else None,
-            'toc': self.toc,
-            'footnotes': self.footnotes,
-        }

@@ -4,8 +4,7 @@ Universal text extraction from e-books in any format.
 Supports all common e-book formats through a fallback chain:
 1. Native parsers (PDF, EPUB, TXT, HTML) - fast & precise
 2. Calibre ebook-convert - reliable for most formats
-3. Pandoc fallback - for legacy/exotic formats
-4. OCR (Tesseract/VLM) - for scanned documents
+3. OCR (Tesseract/VLM) - for scanned documents
 """
 
 from .universal_extractor import UniversalExtractor

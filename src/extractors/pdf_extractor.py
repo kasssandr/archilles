@@ -450,8 +450,7 @@ class PDFExtractor(BaseExtractor):
         pages_referenced = {e['page'] for e in toc}
         if len(pages_referenced) <= 1:
             return {}
-        junk_pattern = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)
-        junk_count = sum(1 for e in toc if junk_pattern.match(e['title'].strip()))
+        junk_count = sum(1 for e in toc if PDFExtractor._JUNK_TOC_RE.match(e['title'].strip()))
         if junk_count > len(toc) * 0.5:
             return {}
 
@@ -460,7 +459,6 @@ class PDFExtractor(BaseExtractor):
 
         # Build page ranges: each entry covers from its page to next entry's page - 1
         # Track current level-1 heading as "chapter", deeper levels as "section_title"
-        current_chapter = ''
         entries_with_ranges = []
         for i, entry in enumerate(sorted_toc):
             end_page = sorted_toc[i + 1]['page'] - 1 if i + 1 < len(sorted_toc) else 999999
@@ -516,6 +514,15 @@ class PDFExtractor(BaseExtractor):
         'epilogue', 'epilog', 'nachwort', 'afterword',
         'abbreviations', 'abkürzungen', 'abkürzungsverzeichnis',
     ])
+
+    # Pre-compiled regex patterns (avoid re.compile inside hot loops)
+    _JUNK_TOC_RE = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)
+    _FN_NUMBER_RE = re.compile(r'^\d{1,3}[\s\.]')
+    _FOOTNOTE_LINE_RE = re.compile(r'^(\d+)[\.\)\s]\s*[A-Za-z\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF]')
+    _MULTI_NUMBER_RE = re.compile(r'\d+\s*[,\-]\s*\d+')
+    _NUM_START_RE = re.compile(r'^(\d+)\s+')
+    _NUM_END_RE = re.compile(r'\s(\d+)$')
+    _PAGE_REF_RE = re.compile(r'\d{1,4}(?:\s*[,;]\s*\d{1,4})+')
 
     @classmethod
     def _section_type_from_toc_title(cls, title: str) -> Optional[str]:
@@ -674,8 +681,6 @@ class PDFExtractor(BaseExtractor):
     # Sentence-aligned overlap
     # ------------------------------------------------------------------
 
-    _SENTENCE_END_RE = re.compile(r'[.!?:»"]\s')
-
     @classmethod
     def _extract_overlap_tail(cls, text: str, target_tokens: int) -> str:
         """Extract the last ~target_tokens from text, aligned to a sentence boundary.
@@ -747,7 +752,7 @@ class PDFExtractor(BaseExtractor):
 
         # Footnote zone heuristic: bottom half of the lines
         footnote_zone_start = len(lines) // 2
-        fn_number_re = re.compile(r'^\d{1,3}[\s\.]')
+        fn_number_re = PDFExtractor._FN_NUMBER_RE
 
         result_lines: list[str] = [lines[0]]
         in_footnote = False
@@ -1028,11 +1033,14 @@ class PDFExtractor(BaseExtractor):
         """Check if string is a valid Roman numeral."""
         return len(s) > 0 and bool(cls._ROMAN_RE.match(s))
 
-    @staticmethod
-    def _detect_roman_numerals(text: str) -> bool:
+    _ROMAN_NUMERAL_RE = re.compile(
+        r'\b(i{1,3}|iv|v|vi{0,3}|ix|x|xi{0,3}|xiv|xv|xvi{0,3}|xix|xx)\b'
+    )
+
+    @classmethod
+    def _detect_roman_numerals(cls, text: str) -> bool:
         """Detect if text contains roman numeral page numbers."""
-        roman_pattern = r'\b(i{1,3}|iv|v|vi{0,3}|ix|x|xi{0,3}|xiv|xv|xvi{0,3}|xix|xx)\b'
-        return bool(re.search(roman_pattern, text.lower()))
+        return bool(cls._ROMAN_NUMERAL_RE.search(text.lower()))
 
     # ------------------------------------------------------------------
     # Page label extraction from headers/footers
@@ -1051,12 +1059,12 @@ class PDFExtractor(BaseExtractor):
             return False
 
         # Small number + text = likely footnote
-        match = re.match(r'^(\d+)[\.\)\s]\s*[A-Za-z\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF]', line)
+        match = self._FOOTNOTE_LINE_RE.match(line)
         if match and int(match.group(1)) <= 20:
             return True
 
         # Multiple numbers with separators = footnote references
-        return bool(re.search(r'\d+\s*[,\-]\s*\d+', line))
+        return bool(self._MULTI_NUMBER_RE.search(line))
 
     def _extract_page_number_from_lines(
         self,
@@ -1087,7 +1095,7 @@ class PDFExtractor(BaseExtractor):
                 return line.lower()
 
             # Number at start followed by header text
-            match = re.match(r'^(\d+)\s+', line)
+            match = self._NUM_START_RE.match(line)
             if match:
                 num = int(match.group(1))
                 if not check_first and num <= 20 and len(line) > 10:
@@ -1095,7 +1103,7 @@ class PDFExtractor(BaseExtractor):
                 return match.group(1)
 
             # Number at end of header line
-            match = re.search(r'\s(\d+)$', line)
+            match = self._NUM_END_RE.search(line)
             if match:
                 return match.group(1)
 
@@ -1273,9 +1281,6 @@ class PDFExtractor(BaseExtractor):
         Uses keyword matching in the first 5 lines, index-like structure
         detection, positional heuristics, and roman numeral presence.
         """
-        if self._looks_like_index(page_text):
-            return 'back_matter'
-
         lines = page_text.strip().split('\n')
         first_lines_lower = '\n'.join(lines[:5]).lower() if lines else ''
 
@@ -1286,6 +1291,9 @@ class PDFExtractor(BaseExtractor):
         for keyword in self._FRONT_MATTER_KEYWORDS:
             if keyword in first_lines_lower:
                 return 'front_matter'
+
+        if self._looks_like_index(page_text):
+            return 'back_matter'
 
         # First ~5% of pages with roman numerals are likely front matter
         if page_num <= max(3, total_pages * 0.05):
@@ -1303,8 +1311,7 @@ class PDFExtractor(BaseExtractor):
         if len(lines) < 10:
             return False
 
-        page_ref_pattern = r'\d{1,4}(?:\s*[,;]\s*\d{1,4})+'
-        page_refs = sum(1 for line in lines if re.search(page_ref_pattern, line))
+        page_refs = sum(1 for line in lines if PDFExtractor._PAGE_REF_RE.search(line))
         short_lines = sum(1 for line in lines if len(line) < 80)
 
         return page_refs > len(lines) * 0.5 and short_lines > len(lines) * 0.7
