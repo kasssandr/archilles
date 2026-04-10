@@ -5,7 +5,7 @@
 A privacy-first RAG system that brings semantic search to your personal research library. Works with Calibre, Zotero, Obsidian vaults, and plain folders. Built for scholars, researchers, and anyone with a serious book collection.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11--3.12-blue.svg)](https://www.python.org/downloads/)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
 ---
@@ -89,7 +89,7 @@ Archilles gives you the semantic search capabilities of modern RAG systems while
 ## Quick Start
 
 ### Prerequisites
-- Python 3.11 or higher
+- Python 3.11 or 3.12 (3.13+ not yet tested)
 - [Calibre](https://calibre-ebook.com/) with your book library
 - (Optional) [Claude Desktop](https://claude.ai/download) for MCP integration *(recommended — free tier available; ChatGPT/Codex support in development)*
 

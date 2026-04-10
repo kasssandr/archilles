@@ -21,7 +21,7 @@ A step-by-step guide to setting up Archilles on your machine.
 
 | Component | Minimum | Notes |
 |-----------|---------|-------|
-| **Python** | 3.11+ | 3.12 works; 3.10 and below will not |
+| **Python** | 3.11–3.12 | 3.13+ not yet tested; 3.10 and below will not work |
 | **Calibre** | Any recent version | Must have an existing library with books |
 | **RAM** | 8 GB | 16 GB recommended for larger libraries |
 | **Disk space** | ~5 GB free | BGE-M3 model (~2.2 GB) + index storage |
@@ -43,7 +43,7 @@ A step-by-step guide to setting up Archilles on your machine.
 
 ### Step 1: Install Python
 
-Download Python 3.11 or 3.12 from [python.org](https://www.python.org/downloads/).
+Download Python 3.11 or 3.12 from [python.org](https://www.python.org/downloads/). Python 3.13+ is not yet tested and may cause issues with some dependencies.
 
 **Important during installation:** Check **"Add Python to PATH"**.
 

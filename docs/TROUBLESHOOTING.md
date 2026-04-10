@@ -36,7 +36,7 @@ LanceDB requires Python 3.11+. Check your version:
 ```bash
 python --version
 ```
-If it shows 3.10 or below, install Python 3.11 or 3.12 and recreate your virtual environment.
+If it shows 3.10 or below, install Python 3.11 or 3.12 and recreate your virtual environment. Python 3.13+ is not yet tested and may cause issues with some dependencies (notably `ebooklib`).
 
 ---
 
