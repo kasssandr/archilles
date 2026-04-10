@@ -207,18 +207,6 @@ def create_pymupdf_parser(**kwargs) -> Optional[PyMuPDFParser]:
     return PyMuPDFParser(**kwargs)
 
 
-# Auto-register if PyMuPDF is available
-def _auto_register():
-    """Auto-register parser with global registry."""
-    if PYMUPDF_AVAILABLE:
-        from .registry import register_parser
-        try:
-            register_parser(PyMuPDFParser())
-            logger.debug("Auto-registered PyMuPDF parser")
-        except ValueError:
-            pass  # Already registered
-
-
 # Quick test
 if __name__ == "__main__":
     import sys

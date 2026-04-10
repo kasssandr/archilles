@@ -11,6 +11,7 @@ Supported accelerators:
 """
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Optional, Literal
 import logging
 
@@ -88,6 +89,7 @@ class HardwareProfile:
         return "\n".join(lines)
 
 
+@lru_cache(maxsize=1)
 def detect_hardware() -> HardwareProfile:
     """
     Detect available hardware capabilities.

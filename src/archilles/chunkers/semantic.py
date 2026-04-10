@@ -356,30 +356,6 @@ class SemanticChunker(TextChunker):
         )
 
 
-def create_semantic_chunker(
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    **kwargs
-) -> SemanticChunker:
-    """
-    Factory function to create a semantic chunker.
-
-    Args:
-        chunk_size: Target chunk size in characters
-        chunk_overlap: Overlap between chunks
-        **kwargs: Additional ChunkerConfig parameters
-
-    Returns:
-        Configured SemanticChunker instance
-    """
-    config = ChunkerConfig(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        **kwargs
-    )
-    return SemanticChunker(config)
-
-
 # Quick test
 if __name__ == "__main__":
     test_text = """

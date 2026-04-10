@@ -7,7 +7,7 @@ indexing system that can be used with the existing RAG infrastructure.
 This module provides:
 - ModularPipeline: Configurable pipeline for document processing
 - Factory functions for profile-based setup
-- Integration with existing ChromaDB storage
+- Integration with LanceDB storage
 """
 
 import re
@@ -411,38 +411,6 @@ class ModularPipeline:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.unload()
         return False
-
-
-def create_pipeline(profile_name: str = 'minimal') -> ModularPipeline:
-    """
-    Factory function to create a configured pipeline.
-
-    Args:
-        profile_name: 'minimal', 'balanced', or 'maximal'
-
-    Returns:
-        Configured ModularPipeline
-    """
-    return ModularPipeline.from_profile(profile_name)
-
-
-# Convenience function for quick processing
-def process_document(
-    file_path: str | Path,
-    profile_name: str = 'minimal'
-) -> ProcessedDocument:
-    """
-    Process a single document with default settings.
-
-    Args:
-        file_path: Path to document
-        profile_name: Hardware profile to use
-
-    Returns:
-        ProcessedDocument with chunks and embeddings
-    """
-    with ModularPipeline.from_profile(profile_name) as pipeline:
-        return pipeline.process(file_path)
 
 
 # Quick test

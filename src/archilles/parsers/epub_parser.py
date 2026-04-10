@@ -326,17 +326,17 @@ class EPUBParser(DocumentParser):
             if values:
                 return values[0][0]
         except Exception:
-            pass
+            logger.debug("Failed to read EPUB metadata %s:%s", namespace, name, exc_info=True)
         return None
 
-    def _get_metadata_list(self, book, namespace: str, name: str) -> List[str]:
+    def _get_metadata_list(self, book, namespace: str, name: str) -> list[str]:
         """Extract list of metadata values from EPUB."""
         try:
             values = book.get_metadata(namespace, name)
             if values:
                 return [v[0] for v in values if v]
         except Exception:
-            pass
+            logger.debug("Failed to read EPUB metadata list %s:%s", namespace, name, exc_info=True)
         return []
 
     def _extract_toc(self, book) -> List[Dict[str, Any]]:

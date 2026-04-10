@@ -144,32 +144,6 @@ def list_chunkers() -> List[str]:
     return _global_registry.list_chunkers()
 
 
-def create_chunker_for_profile(profile_name: str) -> TextChunker:
-    """
-    Create the appropriate chunker for a hardware profile.
-
-    Args:
-        profile_name: "minimal", "balanced", or "maximal"
-
-    Returns:
-        Configured chunker instance
-    """
-    from .semantic import SemanticChunker
-
-    # Profile-specific settings
-    settings = {
-        "minimal": {"chunk_size": 800, "chunk_overlap": 150},
-        "balanced": {"chunk_size": 1000, "chunk_overlap": 200},
-        "maximal": {"chunk_size": 1500, "chunk_overlap": 300},
-    }
-
-    if profile_name not in settings:
-        profile_name = "balanced"
-
-    config = ChunkerConfig(**settings[profile_name])
-    return SemanticChunker(config)
-
-
 # Quick test
 if __name__ == "__main__":
     from .semantic import SemanticChunker

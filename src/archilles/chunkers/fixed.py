@@ -146,57 +146,6 @@ class TokenBasedChunker(TextChunker):
         return int(len(text) / self.chars_per_token)
 
 
-def create_fixed_chunker(
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    **kwargs
-) -> FixedSizeChunker:
-    """
-    Factory function to create a fixed-size chunker.
-
-    Args:
-        chunk_size: Target chunk size in characters
-        chunk_overlap: Overlap between chunks
-        **kwargs: Additional ChunkerConfig parameters
-
-    Returns:
-        Configured FixedSizeChunker instance
-    """
-    config = ChunkerConfig(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        **kwargs
-    )
-    return FixedSizeChunker(config)
-
-
-def create_token_chunker(
-    max_tokens: int = 256,
-    token_overlap: int = 50,
-    chars_per_token: float = 4.0,
-    **kwargs
-) -> TokenBasedChunker:
-    """
-    Factory function to create a token-based chunker.
-
-    Args:
-        max_tokens: Maximum tokens per chunk
-        token_overlap: Token overlap between chunks
-        chars_per_token: Character-to-token ratio
-        **kwargs: Additional ChunkerConfig parameters
-
-    Returns:
-        Configured TokenBasedChunker instance
-    """
-    config = ChunkerConfig(
-        chunk_size=max_tokens,
-        chunk_overlap=token_overlap,
-        size_unit="tokens",
-        **kwargs
-    )
-    return TokenBasedChunker(config, chars_per_token)
-
-
 # Quick test
 if __name__ == "__main__":
     test_text = """

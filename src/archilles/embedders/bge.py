@@ -8,10 +8,8 @@ Supported models:
 - bge-base-en-v1.5: 768 dim, balanced quality/speed
 - bge-m3: 1024 dim, multilingual, high quality
 
-These are the primary embedders used by ARCHILLES profiles:
-- minimal profile -> bge-small
-- balanced profile -> bge-base
-- maximal profile -> bge-m3
+All three ARCHILLES profiles use bge-m3 (the model is the same;
+profiles differ in batch size and device selection).
 """
 
 import time
@@ -220,7 +218,7 @@ class BGEEmbedder(TextEmbedder):
 
         if not isinstance(embeddings, np.ndarray):
             embeddings = np.array(embeddings, dtype=np.float32)
-        else:
+        elif embeddings.dtype != np.float32:
             embeddings = embeddings.astype(np.float32)
 
         return EmbeddingResult(
@@ -258,51 +256,6 @@ def create_bge_embedder(
         return None
 
     return BGEEmbedder(model_name=model_name, device=device, **kwargs)
-
-
-_PROFILE_MAP = {
-    "minimal": ("bge-small", "cpu", 8),
-    "balanced": ("bge-base", "cuda", 32),
-    "maximal": ("bge-m3", "cuda", 64),
-}
-
-
-def create_embedder_for_profile(profile_name: str) -> Optional[BGEEmbedder]:
-    """
-    Create the appropriate BGE embedder for a hardware profile.
-
-    Args:
-        profile_name: "minimal", "balanced", or "maximal"
-
-    Returns:
-        Configured BGEEmbedder instance
-    """
-    if profile_name not in _PROFILE_MAP:
-        raise ValueError(f"Unknown profile: {profile_name}")
-
-    model_name, device, batch_size = _PROFILE_MAP[profile_name]
-    return create_bge_embedder(
-        model_name=model_name,
-        device=device,
-        batch_size=batch_size,
-    )
-
-
-# Auto-register all BGE embedders
-def _auto_register():
-    """Auto-register BGE embedders with global registry."""
-    if not SENTENCE_TRANSFORMERS_AVAILABLE:
-        return
-
-    from .registry import register_embedder
-
-    for model_name in BGE_MODELS:
-        try:
-            embedder = BGEEmbedder(model_name=model_name, device="cpu")
-            register_embedder(embedder)
-            logger.debug(f"Auto-registered BGE embedder: {model_name}")
-        except Exception as e:
-            logger.warning(f"Failed to register {model_name}: {e}")
 
 
 # Quick test
