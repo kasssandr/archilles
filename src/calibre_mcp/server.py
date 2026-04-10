@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
+from src.archilles.constants import ChunkType
 from .calibre_analyzer import CalibreAnalyzer
 
 try:
@@ -185,7 +186,7 @@ class CalibreMCPServer:
             results = self.service.search(
                 query=query,
                 top_k=max_results,
-                chunk_type_filter='annotations_and_comments',
+                chunk_type_filter=ChunkType.ANNOTATIONS_AND_COMMENTS,
                 section_filter=None,
                 max_per_book=max_per_book if max_per_book > 0 else 999,
             )

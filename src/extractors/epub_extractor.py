@@ -14,6 +14,7 @@ try:
 except ImportError:
     EBOOKLIB_AVAILABLE = False
 
+from src.archilles.constants import SectionType
 from .base import BaseExtractor
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import EPUBExtractionError
@@ -128,7 +129,7 @@ class EPUBExtractor(BaseExtractor):
             display_title = chapter_title or toc_info.get('title') or ''
             chapter_section_type = (
                 self._detect_section_type(display_title) if display_title
-                else 'main_content'
+                else SectionType.MAIN_CONTENT
             )
 
             # Split by sub-sections.  Prefer anchor-based splitting (uses
@@ -369,10 +370,10 @@ class EPUBExtractor(BaseExtractor):
         title_lower = title.lower()
 
         if any(pattern in title_lower for pattern in _FRONT_MATTER_PATTERNS):
-            return 'front_matter'
+            return SectionType.FRONT_MATTER
         if any(pattern in title_lower for pattern in _BACK_MATTER_PATTERNS):
-            return 'back_matter'
-        return 'main_content'
+            return SectionType.BACK_MATTER
+        return SectionType.MAIN_CONTENT
 
     @staticmethod
     def _split_text_by_headings(
@@ -513,7 +514,7 @@ class EPUBExtractor(BaseExtractor):
                 chapter=chapter_meta.get('chapter'),
                 section=chapter_meta.get('section'),
                 section_title=chapter_meta.get('section_title'),
-                section_type=chapter_meta.get('section_type', 'main_content'),
+                section_type=chapter_meta.get('section_type', SectionType.MAIN_CONTENT),
             )
 
             chapter_chunks = self._create_chunks(chapter_text, base_metadata)

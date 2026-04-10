@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from src.archilles.constants import ChunkType
 from .models import ExtractedText, ExtractionMetadata, ChunkMetadata
 from .exceptions import ExtractionError
 from .language_detector import LanguageDetector
@@ -241,7 +242,7 @@ class BaseExtractor(ABC):
         # For each parent, create child chunks
         for p_idx, parent in enumerate(parent_chunks):
             parent_id = f"{book_id}_parent_{p_idx}"
-            parent['metadata']['chunk_type'] = 'parent'
+            parent['metadata']['chunk_type'] = ChunkType.PARENT
             parent['chunk_id'] = parent_id
             parent['parent_id'] = ''
 
@@ -262,7 +263,7 @@ class BaseExtractor(ABC):
             for c_idx, child in enumerate(children):
                 child['chunk_id'] = f"{book_id}_parent_{p_idx}_child_{c_idx}"
                 child['parent_id'] = parent_id
-                child['metadata']['chunk_type'] = 'child'
+                child['metadata']['chunk_type'] = ChunkType.CHILD
 
                 child['metadata']['char_start'] = (
                     parent_char_start + child['metadata'].get('char_start', 0)

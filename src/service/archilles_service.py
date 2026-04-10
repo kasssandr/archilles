@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+from src.archilles.constants import ChunkType, SectionType
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,8 +157,8 @@ class ArchillesService:
         book_id: str | None = None,
         exact_phrase: bool = False,
         tag_filter: list[str] | None = None,
-        section_filter: str = "main",
-        chunk_type_filter: str = "content",
+        section_filter: str = SectionType.MAIN,
+        chunk_type_filter: str = ChunkType.CONTENT,
         max_per_book: int = 2,
         min_similarity: float = 0.0,
     ) -> list[dict[str, Any]]:

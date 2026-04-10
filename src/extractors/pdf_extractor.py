@@ -18,6 +18,7 @@ try:
 except ImportError:
     PYMUPDF_AVAILABLE = False
 
+from src.archilles.constants import SectionType
 from .base import BaseExtractor
 from .exceptions import PDFExtractionError
 from .models import ChunkMetadata, ExtractedText
@@ -530,10 +531,10 @@ class PDFExtractor(BaseExtractor):
         t = title.strip().lower()
         for kw in cls._BACK_MATTER_TOC_KEYWORDS:
             if kw in t:
-                return 'back_matter'
+                return SectionType.BACK_MATTER
         for kw in cls._FRONT_MATTER_TOC_KEYWORDS:
             if kw in t:
-                return 'front_matter'
+                return SectionType.FRONT_MATTER
         return None
 
     def _create_chunks_with_pages(
@@ -575,7 +576,7 @@ class PDFExtractor(BaseExtractor):
             elif chapter:
                 # TOC entry exists but title doesn't match front/back keywords
                 # → default to main_content (don't fall through to heuristic)
-                section_type = 'main_content'
+                section_type = SectionType.MAIN_CONTENT
             else:
                 section_type = self._detect_section_type(
                     page_text, page_num, total_pages, toc
@@ -1286,21 +1287,21 @@ class PDFExtractor(BaseExtractor):
 
         for keyword in self._BACK_MATTER_KEYWORDS:
             if keyword in first_lines_lower:
-                return 'back_matter'
+                return SectionType.BACK_MATTER
 
         for keyword in self._FRONT_MATTER_KEYWORDS:
             if keyword in first_lines_lower:
-                return 'front_matter'
+                return SectionType.FRONT_MATTER
 
         if self._looks_like_index(page_text):
-            return 'back_matter'
+            return SectionType.BACK_MATTER
 
         # First ~5% of pages with roman numerals are likely front matter
         if page_num <= max(3, total_pages * 0.05):
             if self._detect_roman_numerals(page_text[:100]):
-                return 'front_matter'
+                return SectionType.FRONT_MATTER
 
-        return 'main_content'
+        return SectionType.MAIN_CONTENT
 
     @staticmethod
     def _looks_like_index(page_text: str) -> bool:

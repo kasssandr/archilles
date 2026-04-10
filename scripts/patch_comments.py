@@ -23,6 +23,7 @@ from pathlib import Path
 
 # ── project imports ──────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.archilles.constants import ChunkType
 from src.calibre_db import CalibreDB          # parse_html_comment, clean_html
 
 
@@ -131,7 +132,7 @@ def _build_comment_chunks_standalone(
             'book_id': book_id,
             'book_title': title,
             'chunk_index': -(i + 1),
-            'chunk_type': 'calibre_comment',
+            'chunk_type': ChunkType.CALIBRE_COMMENT,
             'format': book_format,
             'indexed_at': datetime.now().isoformat(),
             'metadata_hash': metadata_hash,
@@ -267,7 +268,7 @@ def patch_jsonl_files(input_dir: Path, calibre_db_path: Path, dry_run: bool = Fa
             has_comment_chunks = False
             for line in lines[1:]:
                 chunk = json.loads(line)
-                if chunk.get('chunk_type') == 'calibre_comment':
+                if chunk.get('chunk_type') == ChunkType.CALIBRE_COMMENT:
                     has_comment_chunks = True
                     break
 

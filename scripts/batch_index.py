@@ -72,6 +72,7 @@ from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
 # Hardware-adaptive profile system
+from src.archilles.constants import ChunkType, SectionType
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
 
@@ -158,7 +159,7 @@ def _score_chunks(chunks: List[dict]) -> dict:
         }
 
     content_chunks = [c for c in chunks
-                      if c.get('chunk_type', 'content') == 'content']
+                      if c.get('chunk_type', ChunkType.CONTENT) == ChunkType.CONTENT]
     total = len(content_chunks) or 1
 
     # 1. Truncation rate: chunks ending mid-sentence
@@ -176,7 +177,7 @@ def _score_chunks(chunks: List[dict]) -> dict:
     truncation_rate = truncated / total
 
     # 2. Misplaced back_matter: back_matter chunks appearing before the last 10% of the book
-    back_matter_chunks = [c for c in chunks if c.get('section_type') in ('back_matter',)]
+    back_matter_chunks = [c for c in chunks if c.get('section_type') in (SectionType.BACK_MATTER,)]
     early_back_matter = 0
     if back_matter_chunks and content_chunks:
         max_idx = max(c.get('chunk_index', 0) for c in chunks)
@@ -825,14 +826,14 @@ def get_indexed_book_ids(
 
         # Extract unique book_ids — only count books with actual CONTENT chunks
         # (not just phase1_metadata or calibre_comment)
-        content_types = {'content', 'child', 'parent'}
+        content_types = ChunkType.HIERARCHICAL_TYPES
         book_ids = set()
         for chunk in all_chunks:
             if not chunk or 'book_id' not in chunk:
                 continue
 
             # Only count content chunks as "fully indexed"
-            chunk_type = chunk.get('chunk_type', 'content')
+            chunk_type = chunk.get('chunk_type', ChunkType.CONTENT)
             if chunk_type not in content_types:
                 continue
 
@@ -942,7 +943,7 @@ def batch_reindex_comments(
                 done_ids.add(book_id)
                 continue
 
-            deleted = rag.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
+            deleted = rag.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
             meta_hash = rag._compute_metadata_hash(book_metadata)
             book_format = file_info.get('format', '').lower()
 

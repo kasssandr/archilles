@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
+from src.archilles.constants import ChunkType
+
 
 @dataclass
 class Annotation:
@@ -32,7 +34,7 @@ class Annotation:
         """Convert to dict compatible with LanceDB chunk schema."""
         return {
             "text": self._build_text(),
-            "chunk_type": "annotation",
+            "chunk_type": ChunkType.ANNOTATION,
             "annotation_type": self.type,
             "annotation_source": self.source,
             "page_number": self.page_number or 0,

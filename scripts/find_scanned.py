@@ -33,10 +33,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 
+from src.archilles.constants import ChunkType
 from src.storage.lancedb_store import LanceDBStore
-
-# chunk_type values that are NOT actual book content
-NON_CONTENT_TYPES = {'calibre_comment', 'annotation', 'phase1_metadata', 'parent'}
 
 # Books with these tags are intentionally excluded from indexing — low chunk counts are expected
 INTENTIONALLY_EXCLUDED_TAGS = {'Übersetzung', 'exclude'}
@@ -80,7 +78,7 @@ def find_scanned_books(
     )
 
     # --- Content chunk stats per book ---
-    content_df = df[~df['chunk_type'].isin(NON_CONTENT_TYPES)]
+    content_df = df[~df['chunk_type'].isin(ChunkType.NON_CONTENT_TYPES)]
 
     if not content_df.empty:
         def word_count(texts):

@@ -43,6 +43,7 @@ import numpy as np
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.archilles.constants import ChunkType, SectionType
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
 from src.storage import LanceDBStore
@@ -790,7 +791,7 @@ class archillesRAG:
             'book_id': book_id,
             'book_title': title,
             'chunk_index': 0,  # Single chunk for metadata
-            'chunk_type': 'phase1_metadata',
+            'chunk_type': ChunkType.PHASE1_METADATA,
             'format': book_path.suffix.lower().replace('.', ''),
             'indexed_at': datetime.now().isoformat(),
             'phase': 'phase1'
@@ -860,7 +861,7 @@ class archillesRAG:
         # Books with only phase1_metadata chunks still need full content indexing
         existing = self.store.get_by_book_id(book_id, limit=100)
         content_chunks = [c for c in existing
-                          if c.get('chunk_type', 'content') in ('content', 'child', 'parent')]
+                          if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
         if content_chunks:
             if force:
                 print(f"  Deleting existing chunks for {book_id}...", flush=True)
@@ -883,7 +884,7 @@ class archillesRAG:
                 except Exception:
                     current_annotations = []
                     current_annot_hash = ''
-                existing_annot_chunks = [c for c in existing if c.get('chunk_type') == 'annotation']
+                existing_annot_chunks = [c for c in existing if c.get('chunk_type') == ChunkType.ANNOTATION]
                 stored_annot_hash = existing_annot_chunks[0].get('annotation_hash', '') if existing_annot_chunks else ''
 
                 meta_changed = current_meta_hash != stored_meta_hash
@@ -975,8 +976,8 @@ class archillesRAG:
                 child_overlap=100,
                 window_chars=500
             )
-            parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'parent')
-            child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == 'child')
+            parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.PARENT)
+            child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.CHILD)
             print(f"  Extract: {parent_count}p+{child_count}c chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
         else:
             print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
@@ -1008,7 +1009,7 @@ class archillesRAG:
         for i, chunk in enumerate(extracted.chunks):
             # Use hierarchical chunk_id if available, otherwise generate
             chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
-            chunk_type = chunk.get('metadata', {}).get('chunk_type', 'content')
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', ChunkType.CONTENT)
 
             chunk_data = {
                 'id': chunk_id,
@@ -1098,7 +1099,7 @@ class archillesRAG:
                         'book_id': book_id,
                         'book_title': book_metadata.get('title', book_path.stem) if book_metadata else book_path.stem,
                         'chunk_index': -(idx + 10),  # Negative to distinguish from content
-                        'chunk_type': 'annotation',
+                        'chunk_type': ChunkType.ANNOTATION,
                         'annotation_type': annot.get('type', ''),
                         'annotation_source': annot.get('source', ''),
                         'annotation_hash': annot_hash,
@@ -1247,7 +1248,7 @@ class archillesRAG:
         chunks = []
         for i, chunk in enumerate(extracted.chunks):
             chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
-            chunk_type = chunk.get('metadata', {}).get('chunk_type', 'content')
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', ChunkType.CONTENT)
 
             chunk_data = {
                 'id': chunk_id,
@@ -1408,7 +1409,7 @@ class archillesRAG:
                 # Check LanceDB for existing chunks
                 book_id = header['book_id']
                 existing = self.store.get_by_book_id(book_id, limit=1)
-                content = [c for c in existing if c.get('chunk_type', 'content') in ('content', 'child', 'parent')]
+                content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
                 if content and not force:
                     print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
                     embedded_set.add(file_key)
@@ -1570,7 +1571,7 @@ class archillesRAG:
                 'book_id': book_id,
                 'book_title': title,
                 'chunk_index': -(i + 1),
-                'chunk_type': 'calibre_comment',
+                'chunk_type': ChunkType.CALIBRE_COMMENT,
                 'format': book_format,
                 'indexed_at': datetime.now().isoformat(),
                 'metadata_hash': metadata_hash,
@@ -1625,9 +1626,9 @@ class archillesRAG:
         # 2. Replace calibre_comment chunk if metadata changed
         comment_added = False
         if meta_changed:
-            old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == 'calibre_comment']
+            old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == ChunkType.CALIBRE_COMMENT]
             if old_comment_chunks:
-                deleted = self.store.delete_by_book_id_and_type(book_id, 'calibre_comment')
+                deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
                 print(f"    Deleted {deleted} old comment chunk(s)")
 
             if book_metadata.get('comments') or book_metadata.get('comments_html'):
@@ -1648,9 +1649,9 @@ class archillesRAG:
         annot_updated = False
         if annot_changed and annotations is not None:
             # Delete old annotation chunks
-            old_annot_count = len([c for c in existing_chunks if c.get('chunk_type') == 'annotation'])
+            old_annot_count = len([c for c in existing_chunks if c.get('chunk_type') == ChunkType.ANNOTATION])
             if old_annot_count:
-                deleted = self.store.delete_by_book_id_and_type(book_id, 'annotation')
+                deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.ANNOTATION)
                 print(f"    Deleted {deleted} old annotation chunk(s)")
 
             # Add new annotation chunks
@@ -1672,7 +1673,7 @@ class archillesRAG:
                         'book_id': book_id,
                         'book_title': book_metadata.get('title', book_id),
                         'chunk_index': -(idx + 10),
-                        'chunk_type': 'annotation',
+                        'chunk_type': ChunkType.ANNOTATION,
                         'annotation_type': annot.get('type', ''),
                         'annotation_source': annot.get('source', ''),
                         'annotation_hash': annotation_hash or '',
@@ -1696,7 +1697,7 @@ class archillesRAG:
 
         elapsed = time.time() - start_time
         content_count = len([c for c in existing_chunks
-                           if c.get('chunk_type', 'content') in ('content', 'child', 'parent')])
+                           if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES])
         print(f"  ✅ Updated in {elapsed:.1f}s (content chunks untouched: {content_count})\n")
 
         return {
@@ -1738,8 +1739,8 @@ class archillesRAG:
         book_id: str = None,
         exact_phrase: bool = False,
         tag_filter: List[str] = None,
-        section_filter: str = 'main',
-        chunk_type_filter: str = 'content',
+        section_filter: str = SectionType.MAIN,
+        chunk_type_filter: str = ChunkType.CONTENT,
         max_per_book: int = 2,
         min_similarity: float = 0.0
     ) -> List[Dict[str, Any]]:
@@ -2060,7 +2061,7 @@ class archillesRAG:
             metadata = result['metadata']
 
             # Boost for Calibre comments
-            if metadata.get('chunk_type') == 'calibre_comment':
+            if metadata.get('chunk_type') == ChunkType.CALIBRE_COMMENT:
                 result['score'] *= 1.2
                 result['similarity'] *= 1.2
 
@@ -2216,9 +2217,9 @@ class archillesRAG:
             # Add chunk type indicator
             chunk_type = metadata.get('chunk_type', '')
             type_indicator = ''
-            if chunk_type == 'calibre_comment':
+            if chunk_type == ChunkType.CALIBRE_COMMENT:
                 type_indicator = ' [CALIBRE_COMMENT]'
-            elif chunk_type == 'phase1_metadata':
+            elif chunk_type == ChunkType.PHASE1_METADATA:
                 type_indicator = ' [METADATA]'
 
             print(f"\n[{rank}] {citation}{type_indicator}")
@@ -2301,9 +2302,9 @@ class archillesRAG:
             # Add chunk type indicator
             chunk_type = metadata.get('chunk_type', '')
             type_indicator = ''
-            if chunk_type == 'calibre_comment':
+            if chunk_type == ChunkType.CALIBRE_COMMENT:
                 type_indicator = ' 📝'  # Emoji for markdown
-            elif chunk_type == 'phase1_metadata':
+            elif chunk_type == ChunkType.PHASE1_METADATA:
                 type_indicator = ' ℹ️'
 
             if author and year:
@@ -2962,7 +2963,7 @@ Examples:
         elif args.command == 'query':
             # Search
             # Handle chunk_type: 'all' means no filter (None), otherwise use the specified type
-            chunk_type = args.chunk_type if hasattr(args, 'chunk_type') else 'content'
+            chunk_type = args.chunk_type if hasattr(args, 'chunk_type') else ChunkType.CONTENT
             chunk_type_filter = None if chunk_type == 'all' else chunk_type
 
             results = rag.query(

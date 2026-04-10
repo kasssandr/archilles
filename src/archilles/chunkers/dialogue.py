@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from typing import List, Optional
 
+from src.archilles.constants import ChunkType
 from .base import TextChunker, TextChunk, ChunkerConfig
 
 logger = logging.getLogger(__name__)
@@ -224,7 +225,7 @@ class DialogueChunker(TextChunker):
 
             exchange_text = self._format_exchange(user_content, llm_speaker, llm_content)
             base_meta = {
-                "chunk_type": "exchange",
+                "chunk_type": ChunkType.EXCHANGE,
                 "exchange_index": exchange_idx,
                 "user_prompt_preview": (user_content or llm_content)[:120].replace("\n", " "),
                 "turn_count": 1,

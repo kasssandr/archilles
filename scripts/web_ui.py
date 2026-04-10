@@ -18,6 +18,8 @@ from typing import Any, Dict, List
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.archilles.constants import ChunkType, SectionType
+
 import streamlit as st
 
 # Page config must be first Streamlit command
@@ -208,21 +210,21 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
             badge_row.append(f"🏷️ {tags}")
 
         # Section type badge
-        if section_type and section_type != 'main_content':
+        if section_type and section_type != SectionType.MAIN_CONTENT:
             section_labels = {
-                'front_matter': '📄 Vorwort/Einleitung',
-                'back_matter': '📑 Anhang/Register'
+                SectionType.FRONT_MATTER: '📄 Vorwort/Einleitung',
+                SectionType.BACK_MATTER: '📑 Anhang/Register'
             }
             label = section_labels.get(section_type, section_type)
             badge_row.append(label)
 
         # Chunk type badge (only for hierarchical chunks)
-        if chunk_type and chunk_type not in ('content', ''):
+        if chunk_type and chunk_type not in (ChunkType.CONTENT, ''):
             chunk_labels = {
-                'child': '🧩 Teil-Chunk',
-                'parent': '📦 Eltern-Chunk',
-                'calibre_comment': '💬 Calibre-Kommentar',
-                'phase1_metadata': '📋 Metadaten'
+                ChunkType.CHILD: '🧩 Teil-Chunk',
+                ChunkType.PARENT: '📦 Eltern-Chunk',
+                ChunkType.CALIBRE_COMMENT: '💬 Calibre-Kommentar',
+                ChunkType.PHASE1_METADATA: '📋 Metadaten'
             }
             label = chunk_labels.get(chunk_type, chunk_type)
             badge_row.append(label)
@@ -442,9 +444,9 @@ def main():
 
         # Section filter — default to 'main' (exclude bibliography/index)
         section_options = {
-            '📖 Nur Haupttext': 'main',
-            '📑 Nur Anhang': 'back_matter',
-            '📄 Nur Vorwort': 'front_matter',
+            '📖 Nur Haupttext': SectionType.MAIN,
+            '📑 Nur Anhang': SectionType.BACK_MATTER,
+            '📄 Nur Vorwort': SectionType.FRONT_MATTER,
             'Alle Abschnitte': None,
         }
         selected_section = st.selectbox("Abschnitt", options=list(section_options.keys()))
@@ -452,8 +454,8 @@ def main():
 
         # Chunk type filter
         chunk_options = {
-            '📖 Buchtext': 'content',
-            '💬 Calibre-Kommentare': 'calibre_comment',
+            '📖 Buchtext': ChunkType.CONTENT,
+            '💬 Calibre-Kommentare': ChunkType.CALIBRE_COMMENT,
             '📋 Alle': None
         }
         selected_chunk = st.selectbox("Inhaltstyp", options=list(chunk_options.keys()))

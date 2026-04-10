@@ -13,6 +13,8 @@ from typing import Any
 import lancedb
 import numpy as np
 
+from src.archilles.constants import ChunkType, SectionType
+
 try:
     from lancedb.rerankers import RRFReranker
 except ImportError:
@@ -51,7 +53,7 @@ class LanceDBStore:
 
         # Position metadata
         "chunk_index": int,
-        "chunk_type": str,    # "content", "parent", "child", "calibre_comment"
+        "chunk_type": str,    # See ChunkType constants
         "page_number": int,   # Physical PDF page (for navigation)
         "page_label": str,    # Printed page label (for citations, e.g. "xiv", "62")
         "chapter": str,
@@ -230,7 +232,7 @@ class LanceDBStore:
 
                 # Position metadata
                 "chunk_index": chunk["chunk_index"] if "chunk_index" in chunk else i,
-                "chunk_type": chunk.get("chunk_type") or "content",
+                "chunk_type": chunk.get("chunk_type") or ChunkType.CONTENT,
                 "page_number": chunk.get("page_number") or chunk.get("page") or 0,
                 "chapter": chunk.get("chapter") or "",
 
@@ -332,7 +334,7 @@ class LanceDBStore:
 
                     # Position metadata
                     "chunk_index": chunk.chunk_index,
-                    "chunk_type": chunk.metadata.get("chunk_type", "content"),
+                    "chunk_type": chunk.metadata.get("chunk_type", ChunkType.CONTENT),
                     "page_number": chunk.page_start or 0,
                     "page_label": str(chunk.page_start) if chunk.page_start else "",
                     "chapter": chunk.chapter or "",
@@ -565,19 +567,19 @@ class LanceDBStore:
             conditions.append(f"calibre_id = {calibre_id}")
 
         if section_type:
-            if section_type == "main":
+            if section_type == SectionType.MAIN:
                 # Exclude front_matter and back_matter
-                conditions.append("(section_type = 'main_content' OR section_type = '')")
+                conditions.append(f"(section_type = '{SectionType.MAIN_CONTENT}' OR section_type = '')")
             else:
                 conditions.append(f"section_type = '{section_type}'")
 
         if chunk_type:
-            if chunk_type == "content":
+            if chunk_type == ChunkType.CONTENT:
                 # Include both flat chunks ("content") and hierarchical children ("child")
                 # Parents are excluded — they serve as context, not search targets
-                conditions.append("(chunk_type = 'content' OR chunk_type = 'child')")
-            elif chunk_type == "annotations_and_comments":
-                conditions.append("(chunk_type = 'annotation' OR chunk_type = 'calibre_comment')")
+                conditions.append(f"(chunk_type = '{ChunkType.CONTENT}' OR chunk_type = '{ChunkType.CHILD}')")
+            elif chunk_type == ChunkType.ANNOTATIONS_AND_COMMENTS:
+                conditions.append(f"(chunk_type = '{ChunkType.ANNOTATION}' OR chunk_type = '{ChunkType.CALIBRE_COMMENT}')")
             else:
                 conditions.append(f"chunk_type = '{chunk_type}'")
 

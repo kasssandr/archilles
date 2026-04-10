@@ -30,6 +30,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import lancedb
 
+from src.archilles.constants import ChunkType
+
 
 # ---------------------------------------------------------------------------
 # Config / path helpers
@@ -150,7 +152,7 @@ def render_summary(chunks: List[dict]) -> List[str]:
         indexed = indexed.split('T')[0]
 
     # Chunk type counts
-    type_counts = Counter(c.get('chunk_type', 'content') for c in chunks)
+    type_counts = Counter(c.get('chunk_type', ChunkType.CONTENT) for c in chunks)
     type_str = ", ".join(f"{k}={v}" for k, v in sorted(type_counts.items()))
 
     lines.append(f'=== Chunk-Inspektion: "{title}" (Calibre ID: {calibre_id}) ===')
@@ -207,7 +209,7 @@ def render_boundaries(chunks: List[dict]) -> List[str]:
     """Render first/last 80 chars of each chunk to show cut points."""
     lines = []
     content_chunks = sorted(
-        [c for c in chunks if c.get('chunk_type', 'content') == 'content'],
+        [c for c in chunks if c.get('chunk_type', ChunkType.CONTENT) == ChunkType.CONTENT],
         key=lambda c: c.get('chunk_index', 0)
     )
     if not content_chunks:
@@ -366,7 +368,7 @@ def _render_pdf_toc(toc: List[dict], chunks: List[dict], lines: List[str]) -> Li
 
     # Build TOC page ranges: each entry covers from its page to the next entry's page - 1
     content_chunks = sorted(
-        [c for c in chunks if c.get('chunk_type', 'content') == 'content'],
+        [c for c in chunks if c.get('chunk_type', ChunkType.CONTENT) == ChunkType.CONTENT],
         key=lambda c: c.get('chunk_index', 0)
     )
 
@@ -440,7 +442,7 @@ def _render_epub_toc(toc: List[dict], chunks: List[dict], lines: List[str]) -> L
 
     # Map TOC entries to chunks via chapter/section_title fields
     content_chunks = sorted(
-        [c for c in chunks if c.get('chunk_type', 'content') == 'content'],
+        [c for c in chunks if c.get('chunk_type', ChunkType.CONTENT) == ChunkType.CONTENT],
         key=lambda c: c.get('chunk_index', 0)
     )
 
