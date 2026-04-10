@@ -17,6 +17,14 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+_TOC_KEYWORDS = frozenset([
+    'inhaltsverzeichnis', 'table of contents', 'contents',
+    'chapter', 'kapitel', 'part', 'teil', 'section',
+    'index', 'register', 'anhang', 'appendix',
+    'vorwort', 'preface', 'introduction', 'einleitung',
+    'bibliography', 'literaturverzeichnis',
+])
+
 
 def compute_book_hash(book_path: str) -> str:
     """
@@ -287,18 +295,10 @@ def is_toc_marker(
     if len(text) < min_length and not notes:
         return True
 
-    toc_keywords = [
-        'inhaltsverzeichnis', 'table of contents', 'contents',
-        'chapter', 'kapitel', 'part', 'teil', 'section',
-        'index', 'register', 'anhang', 'appendix',
-        'vorwort', 'preface', 'introduction', 'einleitung',
-        'bibliography', 'literaturverzeichnis'
-    ]
-
     combined = f"{text} {notes}".lower()
 
     if len(text) < 50:
-        if any(keyword in combined for keyword in toc_keywords):
+        if any(keyword in combined for keyword in _TOC_KEYWORDS):
             return True
 
     pos_frac = annotation.get('pos_frac')

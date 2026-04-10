@@ -12,6 +12,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+_RE_NON_WORD = re.compile(r'[^\w\s]')
+_RE_WHITESPACE = re.compile(r'\s+')
+
 
 class CalibreAnalyzer:
     """Analyzes Calibre library metadata from metadata.db"""
@@ -262,8 +265,8 @@ class CalibreAnalyzer:
             if title.startswith(article):
                 title = title[len(article):]
 
-        title = re.sub(r'[^\w\s]', '', title)
-        title = re.sub(r'\s+', ' ', title).strip()
+        title = _RE_NON_WORD.sub('', title)
+        title = _RE_WHITESPACE.sub(' ', title).strip()
         return title
 
     def detect_duplicates(self, method='title_author', include_doublette_tag=True,
@@ -895,7 +898,7 @@ def main():
         epilog="""
 Examples:
   %(prog)s /path/to/Calibre/metadata.db
-  %(prog)s ~/Calibre\ Library/metadata.db --output json
+  %(prog)s ~/Calibre\\ Library/metadata.db --output json
   %(prog)s metadata.db --format json > analysis.json
         """
     )

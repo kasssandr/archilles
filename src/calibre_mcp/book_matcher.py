@@ -22,6 +22,10 @@ from rapidfuzz import fuzz
 
 logger = logging.getLogger(__name__)
 
+_RE_PUNCT = re.compile(r"[^\w\s]")
+_RE_WS = re.compile(r"\s+")
+_RE_EDITION_SUFFIX = re.compile(r"\s*\([\w\s]+Edition\)\s*$", re.IGNORECASE)
+
 
 @dataclass
 class MatchResult:
@@ -41,14 +45,14 @@ def normalize(text: str) -> str:
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     # Replace punctuation with spaces, collapse whitespace
-    text = re.sub(r"[^\w\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
+    text = _RE_PUNCT.sub(" ", text)
+    text = _RE_WS.sub(" ", text).strip()
     return text
 
 
 def _strip_edition_suffix(title: str) -> str:
     """Remove common suffixes like '(German Edition)', '(Kindle Edition)'."""
-    return re.sub(r"\s*\([\w\s]+Edition\)\s*$", "", title, flags=re.IGNORECASE)
+    return _RE_EDITION_SUFFIX.sub("", title)
 
 
 class BookMatcher:
