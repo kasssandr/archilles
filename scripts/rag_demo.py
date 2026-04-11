@@ -355,9 +355,9 @@ class archillesRAG:
             self.store = LanceDBStore(db_path=str(self.db_path))
             print(f"  LanceDB ready")
 
-            # Count chunks
-            chunk_count = self.store.count()
-            print(f"  Current index: {chunk_count} chunks")
+            # Count chunks (cached — refreshed via _refresh_chunk_count())
+            self._chunk_count = self.store.count()
+            print(f"  Current index: {self._chunk_count} chunks")
 
         except Exception as e:
             raise LanceDBError(
@@ -1808,7 +1808,7 @@ class archillesRAG:
 
         filter_msg = f" ({', '.join(filters)})" if filters else ""
         print(f"QUERY [{mode.upper()}]: \"{query_text}\"{filter_msg}")
-        print(f"  Searching {self.store.count()} chunks...\n")
+        print(f"  Searching {self._chunk_count} chunks...\n")
 
         # Oversample to allow for diversity filtering
         # If max_per_book is set, we need to fetch more results than top_k
