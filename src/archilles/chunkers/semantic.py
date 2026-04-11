@@ -159,19 +159,26 @@ class SemanticChunker(TextChunker):
         overlap = self.config.chunk_overlap
         min_size = self.config.min_chunk_size
 
-        paragraphs = self.PARAGRAPH_BREAK.split(text)
-        paragraphs = [p.strip() for p in paragraphs if p.strip()]
+        # Build (text, start_offset) pairs directly from split positions
+        # to avoid O(n) text.find() per paragraph.
+        raw_paragraphs: list[tuple[str, int]] = []
+        prev_end = 0
+        for m in self.PARAGRAPH_BREAK.finditer(text):
+            seg = text[prev_end:m.start()].strip()
+            if seg:
+                # start offset = first non-whitespace char in the segment
+                raw_paragraphs.append((seg, prev_end + (text[prev_end:m.start()].index(seg[0]) if seg else 0)))
+            prev_end = m.end()
+        # Trailing segment after last paragraph break
+        seg = text[prev_end:].strip()
+        if seg:
+            raw_paragraphs.append((seg, prev_end + (text[prev_end:].index(seg[0]) if seg else 0)))
 
         chunks: List[TextChunk] = []
         current_chunk_text = ""
         current_start = 0
-        text_position = 0
 
-        for para in paragraphs:
-            para_start = text.find(para, text_position)
-            if para_start == -1:
-                para_start = text_position
-            text_position = para_start + len(para)
+        for para, para_start in raw_paragraphs:
 
             separator = "\n\n" if current_chunk_text else ""
             potential_text = current_chunk_text + separator + para
