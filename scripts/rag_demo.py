@@ -229,6 +229,94 @@ class archillesRAG:
         if book_metadata.get('tags'):
             chunk_data['tags'] = self._format_tags(book_metadata['tags'])
 
+    _CHUNK_META_KEYS = [
+        ('page', 'page_number'), ('page_label', 'page_label'),
+        ('chapter', 'chapter'), ('section', 'section'),
+        ('section_title', 'section_title'), ('section_type', 'section_type'),
+        ('language', 'language'),
+    ]
+
+    def _apply_hierarchical_chunking(self, extracted, book_id: str, book_metadata: Dict[str, Any], book_path: Path) -> None:
+        """Replace extracted.chunks with hierarchical parent/child chunks (in-place)."""
+        from src.extractors.base import BaseExtractor
+        from src.extractors.models import ChunkMetadata
+
+        chunker = type('HierarchicalChunker', (BaseExtractor,), {
+            'extract': lambda self, fp: None,
+            'supports': lambda self, fp: True
+        })(chunk_size=512, overlap=100)
+
+        base_meta = ChunkMetadata(
+            book_id=book_metadata.get('calibre_id'),
+            title=book_metadata.get('title'),
+            author=book_metadata.get('author'),
+            year=book_metadata.get('year'),
+            source_file=str(book_path),
+        )
+
+        extracted.chunks = chunker._create_hierarchical_chunks(
+            text=extracted.full_text,
+            book_id=book_id,
+            base_metadata=base_meta,
+            parent_size=2048,
+            parent_overlap=400,
+            child_size=512,
+            child_overlap=100,
+            window_chars=500,
+        )
+
+    def _build_chunk_dicts(
+        self,
+        extracted,
+        book_id: str,
+        book_metadata: Dict[str, Any],
+        indexed_at: str,
+        meta_hash: str,
+    ) -> List[Dict[str, Any]]:
+        """Build LanceDB chunk dicts from extracted chunks.
+
+        Shared by index_book and prepare_book to avoid duplication.
+        """
+        chunks = []
+        for i, chunk in enumerate(extracted.chunks):
+            chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', ChunkType.CONTENT)
+
+            chunk_data = {
+                'id': chunk_id,
+                'text': chunk['text'],
+                'book_id': book_id,
+                'book_title': extracted.metadata.file_path.stem,
+                'chunk_index': i,
+                'chunk_type': chunk_type,
+                'format': extracted.metadata.detected_format,
+                'indexed_at': indexed_at,
+            }
+
+            chunk_meta = chunk.get('metadata', {})
+            for field in ('char_start', 'char_end'):
+                if chunk_meta.get(field) is not None:
+                    chunk_data[field] = chunk_meta[field]
+            if chunk.get('window_text'):
+                chunk_data['window_text'] = chunk['window_text']
+
+            if chunk.get('parent_id') is not None:
+                chunk_data['parent_id'] = chunk['parent_id']
+
+            self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
+
+            if meta_hash:
+                chunk_data['metadata_hash'] = meta_hash
+
+            chunk_data['source_file'] = str(extracted.metadata.file_path)
+
+            for src_key, dst_key in self._CHUNK_META_KEYS:
+                if chunk_meta.get(src_key):
+                    chunk_data[dst_key] = chunk_meta[src_key]
+
+            chunks.append(chunk_data)
+        return chunks
+
     @staticmethod
     def _build_annotation_text(annot: Dict[str, Any]) -> str:
         """
@@ -952,32 +1040,7 @@ class archillesRAG:
                     print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
 
         if self.hierarchical and extracted.full_text:
-            from src.extractors.base import BaseExtractor
-            from src.extractors.models import ChunkMetadata
-
-            chunker = type('HierarchicalChunker', (BaseExtractor,), {
-                'extract': lambda self, fp: None,
-                'supports': lambda self, fp: True
-            })(chunk_size=512, overlap=100)
-
-            base_meta = ChunkMetadata(
-                book_id=book_metadata.get('calibre_id'),
-                title=book_metadata.get('title'),
-                author=book_metadata.get('author'),
-                year=book_metadata.get('year'),
-                source_file=str(book_path),
-            )
-
-            extracted.chunks = chunker._create_hierarchical_chunks(
-                text=extracted.full_text,
-                book_id=book_id,
-                base_metadata=base_meta,
-                parent_size=2048,
-                parent_overlap=400,
-                child_size=512,
-                child_overlap=100,
-                window_chars=500
-            )
+            self._apply_hierarchical_chunking(extracted, book_id, book_metadata, book_path)
             parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.PARENT)
             child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.CHILD)
             print(f"  Extract: {parent_count}p+{child_count}c chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
@@ -1009,60 +1072,9 @@ class archillesRAG:
         start_time = time.time()
 
         # Prepare chunks with metadata
-        # Pre-compute values that are identical for every chunk in this book
         indexed_at = datetime.now().isoformat()
         meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
-
-        chunks = []
-        for i, chunk in enumerate(extracted.chunks):
-            # Use hierarchical chunk_id if available, otherwise generate
-            chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
-            chunk_type = chunk.get('metadata', {}).get('chunk_type', ChunkType.CONTENT)
-
-            chunk_data = {
-                'id': chunk_id,
-                'text': chunk['text'],
-                'book_id': book_id,
-                'book_title': extracted.metadata.file_path.stem,
-                'chunk_index': i,
-                'chunk_type': chunk_type,
-                'format': extracted.metadata.detected_format,
-                'indexed_at': indexed_at,
-            }
-
-            # Copy optional fields from chunk metadata
-            chunk_meta = chunk.get('metadata', {})
-            for field in ('char_start', 'char_end'):
-                if chunk_meta.get(field) is not None:
-                    chunk_data[field] = chunk_meta[field]
-            if chunk.get('window_text'):
-                chunk_data['window_text'] = chunk['window_text']
-
-            # Parent-Child hierarchy
-            if chunk.get('parent_id') is not None:
-                chunk_data['parent_id'] = chunk['parent_id']
-
-            # Add book metadata
-            self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
-
-            # Add metadata hash for change detection
-            if meta_hash:
-                chunk_data['metadata_hash'] = meta_hash
-
-            # Add source file path
-            chunk_data['source_file'] = str(extracted.metadata.file_path)
-
-            # Copy page, section, and language info from chunk metadata
-            for src_key, dst_key in [
-                ('page', 'page_number'), ('page_label', 'page_label'),
-                ('chapter', 'chapter'), ('section', 'section'),
-                ('section_title', 'section_title'), ('section_type', 'section_type'),
-                ('language', 'language'),
-            ]:
-                if chunk_meta.get(src_key):
-                    chunk_data[dst_key] = chunk_meta[src_key]
-
-            chunks.append(chunk_data)
+        chunks = self._build_chunk_dicts(extracted, book_id, book_metadata, indexed_at, meta_hash)
 
         # Collect extra embedding arrays for comments/annotations
         extra_embedding_arrays = []
@@ -1213,32 +1225,7 @@ class archillesRAG:
 
         # Handle hierarchical chunking if requested
         if self.hierarchical and extracted.full_text:
-            from src.extractors.base import BaseExtractor
-            from src.extractors.models import ChunkMetadata
-
-            chunker = type('HierarchicalChunker', (BaseExtractor,), {
-                'extract': lambda self, fp: None,
-                'supports': lambda self, fp: True
-            })(chunk_size=512, overlap=100)
-
-            base_meta = ChunkMetadata(
-                book_id=book_metadata.get('calibre_id'),
-                title=book_metadata.get('title'),
-                author=book_metadata.get('author'),
-                year=book_metadata.get('year'),
-                source_file=str(book_path),
-            )
-
-            extracted.chunks = chunker._create_hierarchical_chunks(
-                text=extracted.full_text,
-                book_id=book_id,
-                base_metadata=base_meta,
-                parent_size=2048,
-                parent_overlap=400,
-                child_size=512,
-                child_overlap=100,
-                window_chars=500
-            )
+            self._apply_hierarchical_chunking(extracted, book_id, book_metadata, book_path)
 
         print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
 
@@ -1262,54 +1249,10 @@ class archillesRAG:
                     wpp = total_words // total_pages
                     print(f"  \u26a0\ufe0f  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages \u2014 likely mostly scanned. Re-index with --enable-ocr.")
 
-        # Step 2: Build chunk dicts (same as index_book, without embeddings)
-        # Pre-compute values that are identical for every chunk in this book
+        # Step 2: Build chunk dicts (shared with index_book)
         indexed_at = datetime.now().isoformat()
         meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
-
-        chunks = []
-        for i, chunk in enumerate(extracted.chunks):
-            chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
-            chunk_type = chunk.get('metadata', {}).get('chunk_type', ChunkType.CONTENT)
-
-            chunk_data = {
-                'id': chunk_id,
-                'text': chunk['text'],
-                'book_id': book_id,
-                'book_title': extracted.metadata.file_path.stem,
-                'chunk_index': i,
-                'chunk_type': chunk_type,
-                'format': extracted.metadata.detected_format,
-                'indexed_at': indexed_at,
-            }
-
-            chunk_meta = chunk.get('metadata', {})
-            for field in ('char_start', 'char_end'):
-                if chunk_meta.get(field) is not None:
-                    chunk_data[field] = chunk_meta[field]
-            if chunk.get('window_text'):
-                chunk_data['window_text'] = chunk['window_text']
-
-            if chunk.get('parent_id') is not None:
-                chunk_data['parent_id'] = chunk['parent_id']
-
-            self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
-
-            if meta_hash:
-                chunk_data['metadata_hash'] = meta_hash
-
-            chunk_data['source_file'] = str(extracted.metadata.file_path)
-
-            for src_key, dst_key in [
-                ('page', 'page_number'), ('page_label', 'page_label'),
-                ('chapter', 'chapter'), ('section', 'section'),
-                ('section_title', 'section_title'), ('section_type', 'section_type'),
-                ('language', 'language'),
-            ]:
-                if chunk_meta.get(src_key):
-                    chunk_data[dst_key] = chunk_meta[src_key]
-
-            chunks.append(chunk_data)
+        chunks = self._build_chunk_dicts(extracted, book_id, book_metadata, indexed_at, meta_hash)
 
         # Step 2b: Add Calibre comments as structured chunk(s) (if available)
         has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
