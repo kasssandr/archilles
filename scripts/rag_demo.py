@@ -1898,16 +1898,16 @@ class archillesRAG:
         """
         Exact phrase matching (case-insensitive).
 
-        Uses LanceDB FTS with a quoted-phrase query to get candidates,
-        then post-filters for whitespace-normalized exact match.
+        Uses LanceDB FTS with individual words to get candidates,
+        then post-filters for whitespace-normalized exact phrase match.
         """
         resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
-        # Use FTS quoted-phrase query — Tantivy matches token order
-        # Fetch more candidates than top_k since post-filter may drop some
+        # Use FTS with individual words as pre-filter — much smaller candidate
+        # set than get_all(), but avoids Tantivy phrase-query tokenization issues
         candidates = self.store.fts_search(
-            query_text=f'"{query_text}"',
-            top_k=top_k * 5,
+            query_text=query_text,
+            top_k=top_k * 10,
             book_id=resolved_book_id,
             calibre_id=calibre_id,
             source_id=source_id,
