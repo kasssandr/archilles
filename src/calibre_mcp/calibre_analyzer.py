@@ -39,17 +39,6 @@ class CalibreAnalyzer:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.conn.close()
 
-    def _get_publisher(self, book_id: int) -> str:
-        """Get the publisher name for a book, or empty string if none."""
-        cursor = self.conn.execute("""
-            SELECT p.name
-            FROM publishers p
-            JOIN books_publishers_link bpl ON p.id = bpl.publisher
-            WHERE bpl.book = ?
-        """, (book_id,))
-        row = cursor.fetchone()
-        return row['name'] if row else ''
-
     def get_total_books(self):
         """Get total number of books in the library"""
         cursor = self.conn.execute("SELECT COUNT(*) as count FROM books")
@@ -198,59 +187,95 @@ class CalibreAnalyzer:
         return results
 
     def get_book_details(self, book_id):
-        """Get detailed information about a specific book"""
-        # Get basic book info
-        query = """
-        SELECT id, title, pubdate, path, has_cover
-        FROM books WHERE id = ?
+        """Get detailed information about a specific book."""
+        results = self._get_books_batch([book_id])
+        return results.get(book_id)
+
+    def _get_books_batch(self, book_ids: list[int]) -> dict[int, dict]:
+        """Fetch full details for multiple books in 5 queries (not 4×N).
+
+        Returns a dict mapping book_id → details dict.
         """
-        cursor = self.conn.execute(query, (book_id,))
-        book = cursor.fetchone()
-        if not book:
-            return None
+        if not book_ids:
+            return {}
 
-        book_dict = dict(book)
+        placeholders = ",".join("?" * len(book_ids))
 
-        # Get authors
-        query = """
-        SELECT authors.name
-        FROM authors
-        JOIN books_authors_link ON authors.id = books_authors_link.author
-        WHERE books_authors_link.book = ?
-        ORDER BY books_authors_link.id
-        """
-        cursor = self.conn.execute(query, (book_id,))
-        book_dict['authors'] = [row['name'] for row in cursor.fetchall()]
+        # 1. Basic info
+        cursor = self.conn.execute(
+            f"SELECT id, title, pubdate, path, has_cover FROM books WHERE id IN ({placeholders})",
+            book_ids,
+        )
+        books: dict[int, dict] = {}
+        for row in cursor.fetchall():
+            d = dict(row)
+            d["authors"] = []
+            d["tags"] = []
+            d["identifiers"] = {}
+            d["formats"] = []
+            books[d["id"]] = d
 
-        # Get tags
-        query = """
-        SELECT tags.name
-        FROM tags
-        JOIN books_tags_link ON tags.id = books_tags_link.tag
-        WHERE books_tags_link.book = ?
-        """
-        cursor = self.conn.execute(query, (book_id,))
-        book_dict['tags'] = [row['name'] for row in cursor.fetchall()]
+        if not books:
+            return {}
 
-        # Get identifiers (ISBN, etc.)
-        query = """
-        SELECT type, val
-        FROM identifiers
-        WHERE book = ?
-        """
-        cursor = self.conn.execute(query, (book_id,))
-        book_dict['identifiers'] = {row['type']: row['val'] for row in cursor.fetchall()}
+        # 2. Authors
+        cursor = self.conn.execute(
+            f"""SELECT bal.book, a.name
+                FROM authors a
+                JOIN books_authors_link bal ON a.id = bal.author
+                WHERE bal.book IN ({placeholders})
+                ORDER BY bal.book, bal.id""",
+            book_ids,
+        )
+        for row in cursor.fetchall():
+            if row["book"] in books:
+                books[row["book"]]["authors"].append(row["name"])
 
-        # Get formats
-        query = """
-        SELECT format, name
-        FROM data
-        WHERE book = ?
-        """
-        cursor = self.conn.execute(query, (book_id,))
-        book_dict['formats'] = [row['format'] for row in cursor.fetchall()]
+        # 3. Tags
+        cursor = self.conn.execute(
+            f"""SELECT btl.book, t.name
+                FROM tags t
+                JOIN books_tags_link btl ON t.id = btl.tag
+                WHERE btl.book IN ({placeholders})""",
+            book_ids,
+        )
+        for row in cursor.fetchall():
+            if row["book"] in books:
+                books[row["book"]]["tags"].append(row["name"])
 
-        return book_dict
+        # 4. Identifiers
+        cursor = self.conn.execute(
+            f"SELECT book, type, val FROM identifiers WHERE book IN ({placeholders})",
+            book_ids,
+        )
+        for row in cursor.fetchall():
+            if row["book"] in books:
+                books[row["book"]]["identifiers"][row["type"]] = row["val"]
+
+        # 5. Formats
+        cursor = self.conn.execute(
+            f"SELECT book, format FROM data WHERE book IN ({placeholders})",
+            book_ids,
+        )
+        for row in cursor.fetchall():
+            if row["book"] in books:
+                books[row["book"]]["formats"].append(row["format"])
+
+        return books
+
+    def _get_publishers_batch(self, book_ids: list[int]) -> dict[int, str]:
+        """Fetch publisher names for multiple books in one query."""
+        if not book_ids:
+            return {}
+        placeholders = ",".join("?" * len(book_ids))
+        cursor = self.conn.execute(
+            f"""SELECT bpl.book, p.name
+                FROM publishers p
+                JOIN books_publishers_link bpl ON p.id = bpl.publisher
+                WHERE bpl.book IN ({placeholders})""",
+            book_ids,
+        )
+        return {row["book"]: row["name"] for row in cursor.fetchall()}
 
     def normalize_title(self, title):
         """Normalize title for comparison (remove articles, punctuation, lowercase)."""
@@ -284,8 +309,10 @@ class CalibreAnalyzer:
         """
         duplicates = []
 
+        # Collect all book_ids first, then batch-fetch details once
+        groups: list[tuple[str, str, list[int]]] = []  # (match_type, match_value, ids)
+
         if method == 'isbn':
-            # Find duplicates by ISBN
             query = """
             SELECT i1.book as book1, i2.book as book2, i1.val as isbn
             FROM identifiers i1
@@ -294,23 +321,14 @@ class CalibreAnalyzer:
             AND i1.type IN ('isbn', 'isbn13', 'isbn10')
             """
             cursor = self.conn.execute(query)
-            isbn_duplicates = defaultdict(list)
+            isbn_map = defaultdict(set)
             for row in cursor.fetchall():
-                isbn_duplicates[row['isbn']].extend([row['book1'], row['book2']])
-
-            for isbn, book_ids in isbn_duplicates.items():
-                book_ids = list(set(book_ids))  # Remove duplicates
-                if len(book_ids) > 1:
-                    books = [self.get_book_details(book_id) for book_id in book_ids]
-                    duplicates.append({
-                        'match_type': 'isbn',
-                        'match_value': isbn,
-                        'books': books,
-                        'count': len(books)
-                    })
+                isbn_map[row['isbn']].update([row['book1'], row['book2']])
+            for isbn, ids in isbn_map.items():
+                if len(ids) > 1:
+                    groups.append(('isbn', isbn, sorted(ids)))
 
         elif method == 'exact_title':
-            # Find exact title matches
             query = """
             SELECT title, GROUP_CONCAT(id) as book_ids
             FROM books
@@ -319,17 +337,10 @@ class CalibreAnalyzer:
             """
             cursor = self.conn.execute(query)
             for row in cursor.fetchall():
-                book_ids = [int(x) for x in row['book_ids'].split(',')]
-                books = [self.get_book_details(book_id) for book_id in book_ids]
-                duplicates.append({
-                    'match_type': 'exact_title',
-                    'match_value': row['title'],
-                    'books': books,
-                    'count': len(books)
-                })
+                ids = [int(x) for x in row['book_ids'].split(',')]
+                groups.append(('exact_title', row['title'], ids))
 
         elif method == 'title_author':
-            # Find duplicates by normalized title + author
             query = """
             SELECT
                 b.id,
@@ -341,29 +352,19 @@ class CalibreAnalyzer:
             GROUP BY b.id
             """
             cursor = self.conn.execute(query)
-
-            # Group by normalized title and author
             title_author_map = defaultdict(list)
             for row in cursor.fetchall():
                 normalized_title = self.normalize_title(row['title'])
                 authors = row['authors'] if row['authors'] else ''
-                # Sort authors for consistent comparison
                 author_list = sorted([a.strip().lower() for a in authors.split('|')])
                 key = (normalized_title, tuple(author_list))
                 title_author_map[key].append(row['id'])
+            for (norm_title, authors), ids in title_author_map.items():
+                if len(ids) > 1:
+                    groups.append(('title_author', f"{norm_title} by {', '.join(authors)}", ids))
 
-            for (norm_title, authors), book_ids in title_author_map.items():
-                if len(book_ids) > 1:
-                    books = [self.get_book_details(book_id) for book_id in book_ids]
-                    duplicates.append({
-                        'match_type': 'title_author',
-                        'match_value': f"{norm_title} by {', '.join(authors)}",
-                        'books': books,
-                        'count': len(books)
-                    })
-
-        # Get books tagged with "Doublette"
-        doublette_books = []
+        # Doublette-tagged books
+        doublette_ids: list[int] = []
         if include_doublette_tag:
             query = """
             SELECT b.id
@@ -374,7 +375,25 @@ class CalibreAnalyzer:
             """
             cursor = self.conn.execute(query)
             doublette_ids = [row['id'] for row in cursor.fetchall()]
-            doublette_books = [self.get_book_details(book_id) for book_id in doublette_ids]
+
+        # Single batch fetch for ALL referenced book_ids
+        all_ids = set(doublette_ids)
+        for _, _, ids in groups:
+            all_ids.update(ids)
+        details = self._get_books_batch(sorted(all_ids))
+
+        # Build result
+        duplicates = []
+        for match_type, match_value, ids in groups:
+            books = [details[bid] for bid in ids if bid in details]
+            duplicates.append({
+                'match_type': match_type,
+                'match_value': match_value,
+                'books': books,
+                'count': len(books),
+            })
+
+        doublette_books = [details[bid] for bid in doublette_ids if bid in details]
 
         return {
             'method': method,
@@ -382,7 +401,7 @@ class CalibreAnalyzer:
             'total_duplicate_groups': len(duplicates),
             'total_duplicate_books': sum(d['count'] for d in duplicates),
             'doublette_tagged_books': doublette_books,
-            'doublette_count': len(doublette_books)
+            'doublette_count': len(doublette_books),
         }
 
     def add_doublette_tag(self, book_id):
@@ -479,14 +498,16 @@ class CalibreAnalyzer:
         cursor = self.conn.execute(query, params)
         book_ids = [row['id'] for row in cursor.fetchall()]
 
-        # Get full details for each book
-        books = [self.get_book_details(book_id) for book_id in book_ids]
+        # Batch fetch details + publishers for all matched books
+        details = self._get_books_batch(book_ids)
+        publishers = self._get_publishers_batch(book_ids)
+        books = [details[bid] for bid in book_ids if bid in details]
 
         exporters = {
             'bibtex': self._export_bibtex,
             'ris': self._export_ris,
             'endnote': self._export_endnote,
-            'json': lambda b: json.dumps(b, indent=2, ensure_ascii=False),
+            'json': lambda b, _p: json.dumps(b, indent=2, ensure_ascii=False),
             'csv': self._export_csv,
         }
 
@@ -494,7 +515,7 @@ class CalibreAnalyzer:
         if not exporter:
             return {'error': f'Unsupported format: {format}'}
 
-        exported = exporter(books)
+        exported = exporter(books, publishers)
 
         return {
             'format': format,
@@ -508,12 +529,11 @@ class CalibreAnalyzer:
             'data': exported
         }
 
-    def _export_bibtex(self, books):
+    def _export_bibtex(self, books, publishers: dict[int, str]):
         """Export books in BibTeX format"""
         entries = []
 
         for book in books:
-            # Generate citation key (Author_Year_Title)
             author_part = book['authors'][0].split()[-1] if book['authors'] else 'Unknown'
             year_part = book['pubdate'][:4] if book['pubdate'] else 'NODATE'
             title_part = ''.join(c for c in book['title'][:20] if c.isalnum())
@@ -529,7 +549,7 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"  year = {{{book['pubdate'][:4]}}},\n"
 
-            publisher = self._get_publisher(book['id'])
+            publisher = publishers.get(book['id'], '')
             if publisher:
                 entry += f"  publisher = {{{publisher}}},\n"
 
@@ -545,7 +565,7 @@ class CalibreAnalyzer:
 
         return '\n'.join(entries)
 
-    def _export_ris(self, books):
+    def _export_ris(self, books, publishers: dict[int, str]):
         """Export books in RIS format"""
         entries = []
 
@@ -559,7 +579,7 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"PY  - {book['pubdate'][:4]}\n"
 
-            publisher = self._get_publisher(book['id'])
+            publisher = publishers.get(book['id'], '')
             if publisher:
                 entry += f"PB  - {publisher}\n"
 
@@ -574,7 +594,7 @@ class CalibreAnalyzer:
 
         return '\n'.join(entries)
 
-    def _export_endnote(self, books):
+    def _export_endnote(self, books, publishers: dict[int, str]):
         """Export books in EndNote format"""
         entries = []
 
@@ -588,7 +608,7 @@ class CalibreAnalyzer:
             if book['pubdate']:
                 entry += f"%D {book['pubdate'][:4]}\n"
 
-            publisher = self._get_publisher(book['id'])
+            publisher = publishers.get(book['id'], '')
             if publisher:
                 entry += f"%I {publisher}\n"
 
@@ -602,7 +622,7 @@ class CalibreAnalyzer:
 
         return '\n'.join(entries)
 
-    def _export_csv(self, books):
+    def _export_csv(self, books, publishers: dict[int, str]):
         """Export books in CSV format"""
         import csv
         from io import StringIO
@@ -612,14 +632,12 @@ class CalibreAnalyzer:
         writer.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
 
         for book in books:
-            publisher_name = self._get_publisher(book['id'])
-
             writer.writerow([
                 book['id'],
                 book['title'],
                 '; '.join(book['authors']),
                 book['pubdate'][:4] if book['pubdate'] else '',
-                publisher_name,
+                publishers.get(book['id'], ''),
                 book['identifiers'].get('isbn', ''),
                 '; '.join(book['tags']),
                 '; '.join(book['formats'])
@@ -690,42 +708,21 @@ class CalibreAnalyzer:
 
         cursor = self.conn.execute(query, params)
         rows = cursor.fetchall()
+        book_ids = [row['id'] for row in rows]
 
-        # Build result list with full metadata
+        # Batch fetch authors and tags (2 queries instead of 2×N)
+        details = self._get_books_batch(book_ids)
+
         books = []
         for row in rows:
-            book_id = row['id']
-
-            # Get all authors for this book
-            author_query = """
-            SELECT a.name
-            FROM authors a
-            JOIN books_authors_link bal ON a.id = bal.author
-            WHERE bal.book = ?
-            ORDER BY bal.id
-            """
-            author_cursor = self.conn.execute(author_query, (book_id,))
-            book_authors = [r['name'] for r in author_cursor.fetchall()]
-
-            # Get all tags for this book
-            tag_query = """
-            SELECT t.name
-            FROM tags t
-            JOIN books_tags_link btl ON t.id = btl.tag
-            WHERE btl.book = ?
-            ORDER BY t.name
-            """
-            tag_cursor = self.conn.execute(tag_query, (book_id,))
-            book_tags = [r['name'] for r in tag_cursor.fetchall()]
-
+            d = details.get(row['id'], {})
             year = row['pubdate'][:4] if row['pubdate'] else None
-
             books.append({
-                'calibre_id': book_id,
+                'calibre_id': row['id'],
                 'title': row['title'],
-                'authors': book_authors,
+                'authors': d.get('authors', []),
                 'year': year,
-                'tags': book_tags
+                'tags': d.get('tags', []),
             })
 
         return {
