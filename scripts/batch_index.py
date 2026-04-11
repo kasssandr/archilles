@@ -72,6 +72,7 @@ from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
 # Hardware-adaptive profile system
+from src.archilles.config import get_library_path
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
@@ -83,28 +84,6 @@ PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 # --include-excluded is passed explicitly.
 DEFAULT_EXCLUDED_TAGS = ['exclude', 'Übersetzung']
 
-
-def get_library_path() -> Path:
-    """Get library path from environment variable.
-
-    Accepts ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH (legacy).
-
-    Raises:
-        SystemExit: If neither variable is set
-    """
-    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
-    if not library_path:
-        print("\n" + "="*60)
-        print("ERROR: Library path not set")
-        print("="*60 + "\n")
-        print("Please set one of these environment variables:\n")
-        print("  Windows (PowerShell):")
-        print('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n')
-        print("  Linux/macOS:")
-        print('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n')
-        print("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n")
-        sys.exit(1)
-    return Path(library_path)
 
 
 

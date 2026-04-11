@@ -23,6 +23,7 @@ from pathlib import Path
 
 # ── project imports ──────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from src.archilles.config import get_library_path
 from src.archilles.constants import ChunkType
 from src.calibre_db import CalibreDB          # parse_html_comment, clean_html
 
@@ -368,12 +369,9 @@ def main():
         sys.exit(1)
 
     # Resolve Calibre library path
-    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
-    if not library_path:
-        print("Set ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH environment variable.")
-        sys.exit(1)
+    library_path = get_library_path()
 
-    calibre_db_path = Path(library_path) / 'metadata.db'
+    calibre_db_path = library_path / 'metadata.db'
     if not calibre_db_path.exists():
         print(f"Calibre database not found: {calibre_db_path}")
         sys.exit(1)

@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import lancedb
 
+from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.constants import ChunkType
 
 
@@ -37,22 +38,6 @@ from src.archilles.constants import ChunkType
 # Config / path helpers
 # ---------------------------------------------------------------------------
 
-def get_library_path() -> Path:
-    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
-    if not library_path:
-        print("ERROR: ARCHILLES_LIBRARY_PATH (or CALIBRE_LIBRARY_PATH) not set.")
-        sys.exit(1)
-    return Path(library_path)
-
-
-def get_rag_db_path(library_path: Path) -> str:
-    config_path = library_path / ".archilles" / "config.json"
-    if config_path.exists():
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        if 'rag_db_path' in config:
-            return config['rag_db_path']
-    return str(library_path / ".archilles" / "rag_db")
 
 
 # ---------------------------------------------------------------------------

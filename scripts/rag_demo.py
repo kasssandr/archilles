@@ -43,6 +43,7 @@ import numpy as np
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.constants import ChunkType, SectionType
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
@@ -2652,7 +2653,8 @@ def _handle_import_annotations(args):
     file_path = args.path
 
     # Resolve library path for Calibre DB matching
-    library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
+    library_path = get_library_path(required=False)
+    library_path = str(library_path) if library_path else None
 
     # 1. Parse annotations
     print(f"\n{'='*60}")
@@ -2913,20 +2915,7 @@ Examples:
 
     # Determine default database path if not specified
     if args.db_path is None:
-        library_path = os.environ.get('ARCHILLES_LIBRARY_PATH') or os.environ.get('CALIBRE_LIBRARY_PATH')
-        if not library_path:
-            print("\n" + "="*60)
-            print("ERROR: Library path not set")
-            print("="*60 + "\n")
-            print("Please set one of these environment variables:\n")
-            print("  Windows (PowerShell):")
-            print('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n')
-            print("  Linux/macOS:")
-            print('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n')
-            print("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n")
-            print("Or specify the database path directly with --db-path\n")
-            sys.exit(1)
-        args.db_path = str(Path(library_path) / ".archilles" / "rag_db")
+        args.db_path = get_rag_db_path()
         print(f"📚 Using default RAG database: {args.db_path}")
 
     try:

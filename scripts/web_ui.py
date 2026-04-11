@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from src.archilles.config import get_library_path
 from src.archilles.constants import ChunkType, SectionType
 
 import streamlit as st
@@ -36,13 +37,13 @@ def load_service():
     """Load ARCHILLES service (cached for performance)."""
     from src.service import ArchillesService
 
-    library_path = os.getenv('ARCHILLES_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY')
+    library_path = get_library_path(required=False)
     if not library_path:
         st.error("ARCHILLES_LIBRARY_PATH nicht gesetzt!")
         st.info('PowerShell: `$env:ARCHILLES_LIBRARY_PATH = "C:\\Pfad\\zur\\Library"`')
         st.stop()
 
-    db_path = str(Path(library_path) / ".archilles" / "rag_db")
+    db_path = str(library_path / ".archilles" / "rag_db")
 
     if not Path(db_path).exists():
         st.error(f"Database not found: {db_path}")
