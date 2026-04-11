@@ -4,15 +4,16 @@ ARCHILLES Chunker Registry
 Central registry for discovering and selecting text chunkers.
 """
 
-from typing import Dict, List, Optional
+from typing import Optional
 import logging
 
+from src.archilles.registry import BaseRegistry
 from .base import TextChunker, ChunkerConfig
 
 logger = logging.getLogger(__name__)
 
 
-class ChunkerRegistry:
+class ChunkerRegistry(BaseRegistry[TextChunker]):
     """
     Registry for text chunkers.
 
@@ -20,51 +21,7 @@ class ChunkerRegistry:
     methods to select the appropriate chunker for a task.
     """
 
-    def __init__(self):
-        self._chunkers: Dict[str, TextChunker] = {}
-
-    def register(self, chunker: TextChunker) -> None:
-        """
-        Register a chunker instance.
-
-        Args:
-            chunker: Chunker instance to register
-
-        Raises:
-            ValueError: If a chunker with this name is already registered
-        """
-        if chunker.name in self._chunkers:
-            raise ValueError(f"Chunker '{chunker.name}' is already registered")
-
-        self._chunkers[chunker.name] = chunker
-        logger.debug(f"Registered chunker: {chunker.name}")
-
-    def unregister(self, name: str) -> bool:
-        """
-        Remove a chunker from the registry.
-
-        Args:
-            name: Name of chunker to remove
-
-        Returns:
-            True if chunker was removed, False if not found
-        """
-        if name in self._chunkers:
-            del self._chunkers[name]
-            return True
-        return False
-
-    def get(self, name: str) -> Optional[TextChunker]:
-        """
-        Get a chunker by name.
-
-        Args:
-            name: Chunker name
-
-        Returns:
-            Chunker instance or None if not found
-        """
-        return self._chunkers.get(name)
+    _label = "chunker"
 
     def get_default(self) -> Optional[TextChunker]:
         """
@@ -73,15 +30,11 @@ class ChunkerRegistry:
         Returns:
             Default chunker or None if registry is empty
         """
-        if "semantic" in self._chunkers:
-            return self._chunkers["semantic"]
-        if self._chunkers:
-            return next(iter(self._chunkers.values()))
-        return None
+        return self.get("semantic") or next(iter(self), None)
 
-    def list_chunkers(self) -> List[str]:
+    def list_chunkers(self) -> list[str]:
         """Get list of registered chunker names."""
-        return list(self._chunkers.keys())
+        return self.list_names()
 
     def print_info(self) -> None:
         """Print information about registered chunkers."""
@@ -90,10 +43,11 @@ class ChunkerRegistry:
         print("  REGISTERED CHUNKERS")
         print("=" * 64)
 
-        if not self._chunkers:
+        if not self:
             print("  No chunkers registered.")
         else:
-            for name, chunker in sorted(self._chunkers.items()):
+            for name in sorted(self.list_names()):
+                chunker = self.get(name)
                 cfg = chunker.config
                 print(f"\n  [{name}]")
                 print(f"    Description: {chunker.description}")
@@ -139,7 +93,7 @@ def get_chunker(name: str) -> Optional[TextChunker]:
     return _global_registry.get(name)
 
 
-def list_chunkers() -> List[str]:
+def list_chunkers() -> list[str]:
     """Get list of registered chunker names."""
     return _global_registry.list_chunkers()
 

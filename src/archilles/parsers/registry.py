@@ -10,15 +10,16 @@ Features:
 """
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 import logging
 
+from src.archilles.registry import BaseRegistry
 from .base import DocumentParser, DocumentType
 
 logger = logging.getLogger(__name__)
 
 
-class ParserRegistry:
+class ParserRegistry(BaseRegistry[DocumentParser]):
     """
     Registry for document parsers.
 
@@ -26,51 +27,11 @@ class ParserRegistry:
     methods to select the best parser for a given file.
     """
 
-    def __init__(self):
-        self._parsers: Dict[str, DocumentParser] = {}
+    _label = "parser"
 
     def register(self, parser: DocumentParser) -> None:
-        """
-        Register a parser instance.
-
-        Args:
-            parser: Parser instance to register
-
-        Raises:
-            ValueError: If a parser with this name is already registered
-        """
-        if parser.name in self._parsers:
-            raise ValueError(f"Parser '{parser.name}' is already registered")
-
-        self._parsers[parser.name] = parser
+        super().register(parser)
         logger.debug(f"Registered parser: {parser.name} v{parser.version}")
-
-    def unregister(self, name: str) -> bool:
-        """
-        Remove a parser from the registry.
-
-        Args:
-            name: Name of parser to remove
-
-        Returns:
-            True if parser was removed, False if not found
-        """
-        if name in self._parsers:
-            del self._parsers[name]
-            return True
-        return False
-
-    def get(self, name: str) -> Optional[DocumentParser]:
-        """
-        Get a parser by name.
-
-        Args:
-            name: Parser name
-
-        Returns:
-            Parser instance or None if not found
-        """
-        return self._parsers.get(name)
 
     def get_for_file(self, file_path: Path) -> Optional[DocumentParser]:
         """
@@ -86,7 +47,7 @@ class ParserRegistry:
         """
         extension = Path(file_path).suffix.lower()
         candidates = [
-            p for p in self._parsers.values()
+            p for p in self
             if p.capabilities.supports_extension(extension)
         ]
         return self._best_by_quality(candidates)
@@ -102,26 +63,26 @@ class ParserRegistry:
             Best matching parser, or None if no parser supports this type
         """
         candidates = [
-            p for p in self._parsers.values()
+            p for p in self
             if p.capabilities.supports_type(doc_type)
         ]
         return self._best_by_quality(candidates)
 
     @staticmethod
-    def _best_by_quality(candidates: List[DocumentParser]) -> Optional[DocumentParser]:
+    def _best_by_quality(candidates: list[DocumentParser]) -> Optional[DocumentParser]:
         """Return the candidate with the highest quality_tier, or None."""
         if not candidates:
             return None
         return max(candidates, key=lambda p: p.capabilities.quality_tier)
 
-    def list_parsers(self) -> List[str]:
+    def list_parsers(self) -> list[str]:
         """Get list of registered parser names."""
-        return list(self._parsers.keys())
+        return self.list_names()
 
-    def list_supported_extensions(self) -> List[str]:
+    def list_supported_extensions(self) -> list[str]:
         """Get list of all supported file extensions."""
         extensions = set()
-        for parser in self._parsers.values():
+        for parser in self:
             extensions.update(parser.capabilities.supported_extensions)
         return sorted(extensions)
 
@@ -132,10 +93,11 @@ class ParserRegistry:
         print("  REGISTERED PARSERS")
         print("=" * 64)
 
-        if not self._parsers:
+        if not self:
             print("  No parsers registered.")
         else:
-            for name, parser in sorted(self._parsers.items()):
+            for name in sorted(self.list_names()):
+                parser = self.get(name)
                 caps = parser.capabilities
                 exts = ", ".join(sorted(caps.supported_extensions))
                 print(f"\n  [{name}] v{parser.version}")
@@ -196,7 +158,7 @@ def get_parser(name_or_path) -> Optional[DocumentParser]:
     return None
 
 
-def list_parsers() -> List[str]:
+def list_parsers() -> list[str]:
     """Get list of registered parser names."""
     return _global_registry.list_parsers()
 

@@ -9,15 +9,16 @@ Features:
 - Quality/speed-based selection
 """
 
-from typing import Dict, List, Optional
+from typing import Optional
 import logging
 
+from src.archilles.registry import BaseRegistry
 from .base import TextEmbedder, DeviceType
 
 logger = logging.getLogger(__name__)
 
 
-class EmbedderRegistry:
+class EmbedderRegistry(BaseRegistry[TextEmbedder]):
     """
     Registry for text embedders.
 
@@ -25,51 +26,7 @@ class EmbedderRegistry:
     methods to select the best embedder for given requirements.
     """
 
-    def __init__(self):
-        self._embedders: Dict[str, TextEmbedder] = {}
-
-    def register(self, embedder: TextEmbedder) -> None:
-        """
-        Register an embedder instance.
-
-        Args:
-            embedder: Embedder instance to register
-
-        Raises:
-            ValueError: If an embedder with this name is already registered
-        """
-        if embedder.name in self._embedders:
-            raise ValueError(f"Embedder '{embedder.name}' is already registered")
-
-        self._embedders[embedder.name] = embedder
-        logger.debug(f"Registered embedder: {embedder.name}")
-
-    def unregister(self, name: str) -> bool:
-        """
-        Remove an embedder from the registry.
-
-        Args:
-            name: Name of embedder to remove
-
-        Returns:
-            True if embedder was removed, False if not found
-        """
-        if name in self._embedders:
-            del self._embedders[name]
-            return True
-        return False
-
-    def get(self, name: str) -> Optional[TextEmbedder]:
-        """
-        Get an embedder by name.
-
-        Args:
-            name: Embedder name
-
-        Returns:
-            Embedder instance or None if not found
-        """
-        return self._embedders.get(name)
+    _label = "embedder"
 
     def get_by_dimension(self, dimension: int) -> Optional[TextEmbedder]:
         """
@@ -81,12 +38,12 @@ class EmbedderRegistry:
         Returns:
             Matching embedder, or None if not found
         """
-        for embedder in self._embedders.values():
+        for embedder in self:
             if embedder.capabilities.embedding_dimension == dimension:
                 return embedder
         return None
 
-    def get_for_device(self, device: DeviceType) -> List[TextEmbedder]:
+    def get_for_device(self, device: DeviceType) -> list[TextEmbedder]:
         """
         Get embedders that support a specific device.
 
@@ -97,7 +54,7 @@ class EmbedderRegistry:
             List of compatible embedders
         """
         if device in ("cpu", "auto"):
-            return list(self._embedders.values())
+            return list(self)
 
         device_support = {"cuda": "supports_cuda", "mps": "supports_mps"}
         attr = device_support.get(device)
@@ -105,7 +62,7 @@ class EmbedderRegistry:
             return []
 
         return [
-            e for e in self._embedders.values()
+            e for e in self
             if getattr(e.capabilities, attr, False)
         ]
 
@@ -116,13 +73,9 @@ class EmbedderRegistry:
         Returns:
             Embedder with highest quality_tier, or None if empty
         """
-        if not self._embedders:
+        if not self:
             return None
-
-        return max(
-            self._embedders.values(),
-            key=lambda e: e.capabilities.quality_tier
-        )
+        return max(self, key=lambda e: e.capabilities.quality_tier)
 
     def get_best_for_speed(self) -> Optional[TextEmbedder]:
         """
@@ -131,17 +84,13 @@ class EmbedderRegistry:
         Returns:
             Embedder with highest speed_tier, or None if empty
         """
-        if not self._embedders:
+        if not self:
             return None
+        return max(self, key=lambda e: e.capabilities.speed_tier)
 
-        return max(
-            self._embedders.values(),
-            key=lambda e: e.capabilities.speed_tier
-        )
-
-    def list_embedders(self) -> List[str]:
+    def list_embedders(self) -> list[str]:
         """Get list of registered embedder names."""
-        return list(self._embedders.keys())
+        return self.list_names()
 
     def print_info(self) -> None:
         """Print information about registered embedders."""
@@ -150,10 +99,11 @@ class EmbedderRegistry:
         print("  REGISTERED EMBEDDERS")
         print("=" * 64)
 
-        if not self._embedders:
+        if not self:
             print("  No embedders registered.")
         else:
-            for name, embedder in sorted(self._embedders.items()):
+            for name in sorted(self.list_names()):
+                embedder = self.get(name)
                 caps = embedder.capabilities
                 print(f"\n  [{name}]")
                 print(f"    Model: {caps.model_name}")
@@ -206,7 +156,7 @@ def get_embedder(name: str) -> Optional[TextEmbedder]:
     return _global_registry.get(name)
 
 
-def list_embedders() -> List[str]:
+def list_embedders() -> list[str]:
     """Get list of registered embedder names."""
     return _global_registry.list_embedders()
 
