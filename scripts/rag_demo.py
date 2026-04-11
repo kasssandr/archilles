@@ -45,6 +45,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.constants import ChunkType, SectionType
+from src.service.archilles_service import diversify_results
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
 from src.storage import LanceDBStore
@@ -1848,31 +1849,8 @@ class archillesRAG:
 
         # Diversify results by book (max N results per book)
         if max_per_book < 999 and len(results) > 0:
-            diversified_results = []
-            book_counts = {}  # Track how many results per book
-
-            for result in results:
-                book_id_val = result['metadata'].get('book_id', 'unknown')
-
-                # Count current results from this book
-                current_count = book_counts.get(book_id_val, 0)
-
-                # Add result if under limit
-                if current_count < max_per_book:
-                    diversified_results.append(result)
-                    book_counts[book_id_val] = current_count + 1
-
-                # Stop when we have enough results
-                if len(diversified_results) >= top_k:
-                    break
-
-            # Re-rank after diversification
-            for i, result in enumerate(diversified_results):
-                result['rank'] = i + 1
-
-            results = diversified_results
+            results = diversify_results(results, max_per_book, top_k)
         else:
-            # No diversification - just truncate to top_k
             results = results[:top_k]
 
         # Apply minimum similarity threshold (for semantic/hybrid modes)

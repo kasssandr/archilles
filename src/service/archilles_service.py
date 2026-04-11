@@ -32,6 +32,31 @@ def _redirect_stdout_to_stderr():
         sys.stdout = old_stdout
 
 
+def diversify_results(
+    results: list[dict[str, Any]],
+    max_per_book: int,
+    top_k: int,
+) -> list[dict[str, Any]]:
+    """Limit results to *max_per_book* per book, keeping top-ranked first."""
+    diversified: list[dict[str, Any]] = []
+    book_counts: dict[str, int] = {}
+
+    for r in results:
+        metadata = r.get("metadata", {})
+        bid = metadata.get("book_id", r.get("book_id", "unknown"))
+        count = book_counts.get(bid, 0)
+        if count < max_per_book:
+            diversified.append(r)
+            book_counts[bid] = count + 1
+        if len(diversified) >= top_k:
+            break
+
+    for i, r in enumerate(diversified):
+        r["rank"] = i + 1
+
+    return diversified
+
+
 class ArchillesService:
     """Central service facade for ARCHILLES RAG system."""
 
@@ -313,22 +338,4 @@ class ArchillesService:
         max_per_book: int,
         top_k: int,
     ) -> list[dict[str, Any]]:
-        """Apply per-book diversification to reranked results."""
-        diversified = []
-        book_counts: Dict[str, int] = {}
-
-        for r in results:
-            metadata = r.get("metadata", {})
-            bid = metadata.get("book_id", r.get("book_id", "unknown"))
-            count = book_counts.get(bid, 0)
-            if count < max_per_book:
-                diversified.append(r)
-                book_counts[bid] = count + 1
-            if len(diversified) >= top_k:
-                break
-
-        # Re-assign ranks
-        for i, r in enumerate(diversified):
-            r["rank"] = i + 1
-
-        return diversified
+        return diversify_results(results, max_per_book, top_k)
