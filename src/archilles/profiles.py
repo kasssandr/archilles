@@ -23,8 +23,6 @@ from typing import Literal, Dict, Any
 from datetime import datetime
 import json
 
-from .hardware import get_best_device
-
 ProfileName = Literal["minimal", "balanced", "maximal"]
 
 
@@ -60,40 +58,52 @@ class IndexingProfile:
         return cls(**data)
 
 
-# Shared settings for all profiles (all use BGE-M3 for consistent quality)
-# Device is detected automatically: CUDA > MPS (Apple Silicon) > CPU
-_COMMON = dict(
-    embedding_model="BAAI/bge-m3",
-    embedding_device=get_best_device(),
-    chunk_size=512,
-    chunk_overlap=128,
-    embedding_dimension=1024,
-    max_tokens_per_chunk=8192,
-)
+# Lazy-initialised: calling get_best_device() at import time pulls in torch,
+# which is expensive (~2s) and unnecessary for non-embedding code paths.
+_PROFILES: Dict[ProfileName, IndexingProfile] | None = None
 
-PROFILES: Dict[ProfileName, IndexingProfile] = {
-    "minimal": IndexingProfile(
-        name="minimal",
-        batch_size=8,
-        max_parallel_docs=2,
-        description="For 4-6 GB GPUs, Apple Silicon (MPS), or CPU-only. Full quality, ~2–15 min/book.",
-        **_COMMON,
-    ),
-    "balanced": IndexingProfile(
-        name="balanced",
-        batch_size=32,
-        max_parallel_docs=4,
-        description="For 8-12GB GPUs (RTX 3060, RTX 2070). Full quality, ~30s/book.",
-        **_COMMON,
-    ),
-    "maximal": IndexingProfile(
-        name="maximal",
-        batch_size=64,
-        max_parallel_docs=8,
-        description="For 16GB+ GPUs (RTX 3090, RTX 4080). Full quality, ~15s/book.",
-        **_COMMON,
-    ),
-}
+
+def _build_profiles() -> Dict[ProfileName, IndexingProfile]:
+    from .hardware import get_best_device
+
+    common = dict(
+        embedding_model="BAAI/bge-m3",
+        embedding_device=get_best_device(),
+        chunk_size=512,
+        chunk_overlap=128,
+        embedding_dimension=1024,
+        max_tokens_per_chunk=8192,
+    )
+    return {
+        "minimal": IndexingProfile(
+            name="minimal",
+            batch_size=8,
+            max_parallel_docs=2,
+            description="For 4-6 GB GPUs, Apple Silicon (MPS), or CPU-only. Full quality, ~2–15 min/book.",
+            **common,
+        ),
+        "balanced": IndexingProfile(
+            name="balanced",
+            batch_size=32,
+            max_parallel_docs=4,
+            description="For 8-12GB GPUs (RTX 3060, RTX 2070). Full quality, ~30s/book.",
+            **common,
+        ),
+        "maximal": IndexingProfile(
+            name="maximal",
+            batch_size=64,
+            max_parallel_docs=8,
+            description="For 16GB+ GPUs (RTX 3090, RTX 4080). Full quality, ~15s/book.",
+            **common,
+        ),
+    }
+
+
+def _get_profiles() -> Dict[ProfileName, IndexingProfile]:
+    global _PROFILES
+    if _PROFILES is None:
+        _PROFILES = _build_profiles()
+    return _PROFILES
 
 
 def get_profile(name: ProfileName) -> IndexingProfile:
@@ -109,11 +119,12 @@ def get_profile(name: ProfileName) -> IndexingProfile:
     Raises:
         KeyError: If profile name is not recognized
     """
-    if name not in PROFILES:
+    profiles = _get_profiles()
+    if name not in profiles:
         raise KeyError(
-            f"Unknown profile: {name}. Valid profiles: {list(PROFILES.keys())}"
+            f"Unknown profile: {name}. Valid profiles: {list(profiles.keys())}"
         )
-    return PROFILES[name]
+    return profiles[name]
 
 
 def list_profiles() -> None:
@@ -124,7 +135,7 @@ def list_profiles() -> None:
     print("=" * 70)
     print()
 
-    for name, profile in PROFILES.items():
+    for name, profile in _get_profiles().items():
         print(f"  [{name.upper()}]")
         print(f"    {profile.description}")
         print(f"    Model: {profile.embedding_model}")

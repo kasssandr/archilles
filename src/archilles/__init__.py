@@ -6,12 +6,11 @@ for the ARCHILLES RAG system.
 """
 
 from .hardware import HardwareProfile, detect_hardware
-from .profiles import IndexingProfile, PROFILES, get_profile
+from .profiles import IndexingProfile, get_profile
 
 __all__ = [
     'HardwareProfile',
     'detect_hardware',
     'IndexingProfile',
-    'PROFILES',
     'get_profile',
 ]
