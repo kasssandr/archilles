@@ -1086,17 +1086,14 @@ class archillesRAG:
             annotations = annot_result.get('annotations', [])
             if annotations:
                 annot_hash = self._compute_annotation_hash(annotations)
-                annot_count = len(annotations)
 
+                # Build annotation chunks and collect texts for batched embedding
+                annot_texts = []
+                annot_chunks_pending = []
                 for idx, annot in enumerate(annotations):
                     annot_text = self._build_annotation_text(annot)
                     if not annot_text:
                         continue
-
-                    # Generate embedding
-                    annot_embedding = self.embedding_model.encode(
-                        annot_text, show_progress_bar=False, convert_to_numpy=True
-                    )
 
                     annot_chunk = {
                         'id': f"{book_id}_annot_{idx}",
@@ -1114,9 +1111,18 @@ class archillesRAG:
                         'metadata_hash': meta_hash,
                     }
                     self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
+                    annot_texts.append(annot_text)
+                    annot_chunks_pending.append(annot_chunk)
 
-                    chunks.append(annot_chunk)
-                    embeddings.append(annot_embedding.tolist())
+                # Batch-encode all annotation texts at once
+                if annot_texts:
+                    annot_embeddings = self.embedding_model.encode(
+                        annot_texts, show_progress_bar=False, convert_to_numpy=True
+                    )
+                    chunks.extend(annot_chunks_pending)
+                    embeddings.extend(annot_embeddings.tolist())
+
+                annot_count = len(annot_texts)
 
         except Exception as e:
             print(f"  ⚠ Annotation extraction failed (non-fatal): {e}")
