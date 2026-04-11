@@ -1007,6 +1007,10 @@ class archillesRAG:
         start_time = time.time()
 
         # Prepare chunks with metadata
+        # Pre-compute values that are identical for every chunk in this book
+        indexed_at = datetime.now().isoformat()
+        meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
+
         chunks = []
         for i, chunk in enumerate(extracted.chunks):
             # Use hierarchical chunk_id if available, otherwise generate
@@ -1021,7 +1025,7 @@ class archillesRAG:
                 'chunk_index': i,
                 'chunk_type': chunk_type,
                 'format': extracted.metadata.detected_format,
-                'indexed_at': datetime.now().isoformat(),
+                'indexed_at': indexed_at,
             }
 
             # Copy optional fields from chunk metadata
@@ -1040,8 +1044,8 @@ class archillesRAG:
             self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
 
             # Add metadata hash for change detection
-            if book_metadata:
-                chunk_data['metadata_hash'] = self._compute_metadata_hash(book_metadata)
+            if meta_hash:
+                chunk_data['metadata_hash'] = meta_hash
 
             # Add source file path
             chunk_data['source_file'] = str(extracted.metadata.file_path)
@@ -1061,7 +1065,6 @@ class archillesRAG:
         # Add Calibre comments as structured chunk(s) (if available)
         has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
         if has_comment:
-            meta_hash = self._compute_metadata_hash(book_metadata)
             comment_chunks, comment_embeddings = self._build_comment_chunks(
                 book_metadata=book_metadata,
                 book_id=book_id,
@@ -1107,8 +1110,8 @@ class archillesRAG:
                         'annotation_hash': annot_hash,
                         'page_number': annot.get('page', 0) or 0,
                         'format': extracted.metadata.detected_format,
-                        'indexed_at': datetime.now().isoformat(),
-                        'metadata_hash': self._compute_metadata_hash(book_metadata) if book_metadata else '',
+                        'indexed_at': indexed_at,
+                        'metadata_hash': meta_hash,
                     }
                     self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
 
@@ -1246,7 +1249,11 @@ class archillesRAG:
                     wpp = total_words // total_pages
                     print(f"  \u26a0\ufe0f  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages \u2014 likely mostly scanned. Re-index with --enable-ocr.")
 
-        # Step 2: Build chunk dicts (same as index_book lines 1009-1052, without embeddings)
+        # Step 2: Build chunk dicts (same as index_book, without embeddings)
+        # Pre-compute values that are identical for every chunk in this book
+        indexed_at = datetime.now().isoformat()
+        meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
+
         chunks = []
         for i, chunk in enumerate(extracted.chunks):
             chunk_id = chunk.get('chunk_id', f"{book_id}_chunk_{i}")
@@ -1260,7 +1267,7 @@ class archillesRAG:
                 'chunk_index': i,
                 'chunk_type': chunk_type,
                 'format': extracted.metadata.detected_format,
-                'indexed_at': datetime.now().isoformat(),
+                'indexed_at': indexed_at,
             }
 
             chunk_meta = chunk.get('metadata', {})
@@ -1275,8 +1282,8 @@ class archillesRAG:
 
             self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
 
-            if book_metadata:
-                chunk_data['metadata_hash'] = self._compute_metadata_hash(book_metadata)
+            if meta_hash:
+                chunk_data['metadata_hash'] = meta_hash
 
             chunk_data['source_file'] = str(extracted.metadata.file_path)
 
@@ -1294,7 +1301,6 @@ class archillesRAG:
         # Step 2b: Add Calibre comments as structured chunk(s) (if available)
         has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
         if has_comment:
-            meta_hash = self._compute_metadata_hash(book_metadata)
             comment_chunks, _ = self._build_comment_chunks(
                 book_metadata=book_metadata,
                 book_id=book_id,
