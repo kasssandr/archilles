@@ -31,7 +31,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import ClassVar, Optional, List, Dict, Any
 import uuid
 import logging
 
@@ -66,6 +66,8 @@ class IndexingCheckpoint:
     allowing the process to resume after interruption.
     """
 
+    SAVE_INTERVAL: ClassVar[int] = 50  # flush to disk every N chunks
+
     checkpoint_path: Path
     session_id: str = ""
     profile: str = ""
@@ -80,6 +82,7 @@ class IndexingCheckpoint:
     def __post_init__(self):
         """Convert path to Path object if needed."""
         self.checkpoint_path = Path(self.checkpoint_path)
+        self._dirty = False
 
     @classmethod
     def create_new(
@@ -160,8 +163,9 @@ class IndexingCheckpoint:
             return None
 
     def save(self) -> None:
-        """Save checkpoint to file."""
+        """Save checkpoint to file (atomic via temp-file rename)."""
         self.last_updated = datetime.now().isoformat()
+        self._dirty = False
 
         data = {
             'session_id': self.session_id,
@@ -179,7 +183,7 @@ class IndexingCheckpoint:
         temp_path = self.checkpoint_path.with_suffix('.tmp')
         with open(temp_path, 'w') as f:
             json.dump(data, f, indent=2)
-        temp_path.rename(self.checkpoint_path)
+        temp_path.replace(self.checkpoint_path)
 
     def start_book(self, book_id: str, total_chunks: int = 0) -> None:
         """
@@ -203,6 +207,9 @@ class IndexingCheckpoint:
         Update progress within current book.
 
         Call this periodically during long indexing operations.
+        Writes to disk every ``SAVE_INTERVAL`` chunks (default 50) to
+        avoid excessive I/O.  State transitions (complete/fail/skip)
+        always flush immediately.
 
         Args:
             chunks_done: Number of chunks processed so far
@@ -212,7 +219,16 @@ class IndexingCheckpoint:
             self.current_book.chunks_done = chunks_done
             if total_chunks is not None:
                 self.current_book.total_chunks = total_chunks
+            if chunks_done % self.SAVE_INTERVAL == 0 or self.current_book.is_complete:
+                self.save()
+            else:
+                self._dirty = True
+
+    def flush(self) -> None:
+        """Write pending changes to disk if dirty."""
+        if self._dirty:
             self.save()
+            self._dirty = False
 
     def complete_book(self, book_id: str, chunk_count: int = 0) -> None:
         """
