@@ -462,9 +462,10 @@ class archillesRAG:
         """
         Universal metadata extraction with Calibre integration.
 
-        Priority:
-        1. File metadata (EPUB/PDF embedded metadata)
-        2. Calibre database (fallback for ISBN, etc.)
+        Priority: Calibre metadata (user-curated) wins over file-embedded
+        metadata.  File metadata (PDF/EPUB) is only read when Calibre has
+        no title/author — avoids reopening the file that the extractor
+        will parse anyway.
 
         Args:
             file_path: Path to book file
@@ -472,25 +473,25 @@ class archillesRAG:
         Returns:
             Dictionary with metadata + isbn_source tracking
         """
-        file_ext = file_path.suffix.lower()
-
-        # Extract from file first
-        if file_ext == '.pdf':
-            file_metadata = self._extract_pdf_metadata(file_path)
-        elif file_ext == '.epub':
-            file_metadata = self._extract_epub_metadata(file_path)
-        else:
-            file_metadata = {}
-
-        # Try Calibre database for missing fields (especially ISBN)
+        # Try Calibre database first (cheap SQLite read)
         calibre_metadata = self._extract_calibre_metadata(file_path)
 
-        # Merge: Calibre metadata takes priority (user-curated), file fills gaps
-        merged = {}
+        # Only open the file for metadata if Calibre didn't provide title+author
+        has_core = calibre_metadata.get('title') and calibre_metadata.get('author')
+        if has_core:
+            file_metadata = {}
+        else:
+            file_ext = file_path.suffix.lower()
+            if file_ext == '.pdf':
+                file_metadata = self._extract_pdf_metadata(file_path)
+            elif file_ext == '.epub':
+                file_metadata = self._extract_epub_metadata(file_path)
+            else:
+                file_metadata = {}
 
-        # File metadata first (fallback)
+        # Merge: file metadata as fallback, Calibre overwrites
+        merged = {}
         merged.update(file_metadata)
-        # Calibre metadata second (preferred - overwrites file metadata)
         merged.update(calibre_metadata)
 
         # Track ISBN source
