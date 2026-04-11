@@ -201,12 +201,13 @@ class ModularPipeline:
     @staticmethod
     def _try_create_pymupdf_parser() -> Optional[DocumentParser]:
         try:
-            from .parsers.pymupdf_parser import PyMuPDFParser, PYMUPDF_AVAILABLE
-            if PYMUPDF_AVAILABLE:
-                return PyMuPDFParser()
+            from .parsers.pymupdf_parser import PYMUPDF_AVAILABLE
+            if not PYMUPDF_AVAILABLE:
+                return None
+            from .parsers.pymupdf_parser import PyMuPDFParser
+            return PyMuPDFParser()
         except ImportError:
-            pass
-        return None
+            return None
 
     @staticmethod
     def _try_create_epub_parser() -> Optional[DocumentParser]:
@@ -214,8 +215,7 @@ class ModularPipeline:
             from .parsers.epub_parser import EPUBParser
             return EPUBParser()
         except ImportError:
-            pass
-        return None
+            return None
 
     def _get_embedder(self) -> TextEmbedder:
         """Get or create embedder (lazy loading)."""
