@@ -192,7 +192,7 @@ class LanceDBStore:
 
         try:
             logger.info("Creating FTS index on text column...")
-            self.table.create_fts_index("text", replace=True)
+            self.table.create_fts_index("text", replace=True, with_position=True)
             logger.info("FTS index created successfully")
         except Exception as e:
             logger.warning(f"Could not create FTS index: {e}")
