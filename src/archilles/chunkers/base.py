@@ -154,21 +154,30 @@ class TextChunker(ABC):
         # Chunk the combined text
         chunks = self.chunk(combined_text, source_file)
 
-        # Map chunks back to pages
+        # Map chunks back to pages using a two-pointer merge.
+        # Both chunks and page_boundaries are sorted by start_char,
+        # so we advance a page pointer instead of rescanning all pages.
+        page_idx = 0
+        n_pages = len(page_boundaries)
         for chunk in chunks:
-            chunk_start = chunk.start_char
-            chunk_end = chunk.end_char
+            # Advance past pages that end before this chunk starts
+            while page_idx < n_pages and page_boundaries[page_idx][1] <= chunk.start_char:
+                page_idx += 1
 
-            # Find which pages this chunk spans
-            pages_covered = []
-            for start, end, page_num in page_boundaries:
-                # Check if chunk overlaps with this page
-                if chunk_start < end and chunk_end > start:
-                    pages_covered.append(page_num)
+            # Collect pages overlapping [chunk.start_char, chunk.end_char)
+            first_page = None
+            last_page = None
+            j = page_idx
+            while j < n_pages and page_boundaries[j][0] < chunk.end_char:
+                pg = page_boundaries[j][2]
+                if first_page is None:
+                    first_page = pg
+                last_page = pg
+                j += 1
 
-            if pages_covered:
-                chunk.page_start = min(pages_covered)
-                chunk.page_end = max(pages_covered)
+            if first_page is not None:
+                chunk.page_start = first_page
+                chunk.page_end = last_page
 
         return chunks
 
