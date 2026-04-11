@@ -988,7 +988,7 @@ class archillesRAG:
         start_time = time.time()
 
         texts = [chunk['text'] for chunk in extracted.chunks]
-        embeddings = []
+        embedding_batches = []
 
         # Batch process for speed (batch_size determined by profile)
         for i in tqdm(range(0, len(texts), self.batch_size), desc="    Embedding"):
@@ -998,10 +998,12 @@ class archillesRAG:
                 show_progress_bar=False,
                 convert_to_numpy=True
             )
-            embeddings.extend(batch_embeddings.tolist())
+            embedding_batches.append(batch_embeddings)
+
+        embeddings_array = np.concatenate(embedding_batches) if embedding_batches else np.array([])
 
         embed_time = time.time() - start_time
-        print(f"  Embed:   {len(embeddings)} vectors ({embed_time:.1f}s)")
+        print(f"  Embed:   {len(embeddings_array)} vectors ({embed_time:.1f}s)")
 
         # Step 3: Index in LanceDB
         start_time = time.time()
@@ -1062,6 +1064,9 @@ class archillesRAG:
 
             chunks.append(chunk_data)
 
+        # Collect extra embedding arrays for comments/annotations
+        extra_embedding_arrays = []
+
         # Add Calibre comments as structured chunk(s) (if available)
         has_comment = bool(book_metadata and (book_metadata.get('comments') or book_metadata.get('comments_html')))
         if has_comment:
@@ -1072,7 +1077,8 @@ class archillesRAG:
                 metadata_hash=meta_hash,
             )
             chunks.extend(comment_chunks)
-            embeddings.extend(comment_embeddings)
+            if comment_embeddings:
+                extra_embedding_arrays.append(np.array(comment_embeddings))
 
         # Add user annotations (highlights, notes from Calibre Viewer + PDF)
         annot_count = 0
@@ -1116,11 +1122,11 @@ class archillesRAG:
 
                 # Batch-encode all annotation texts at once
                 if annot_texts:
-                    annot_embeddings = self.embedding_model.encode(
+                    annot_emb = self.embedding_model.encode(
                         annot_texts, show_progress_bar=False, convert_to_numpy=True
                     )
                     chunks.extend(annot_chunks_pending)
-                    embeddings.extend(annot_embeddings.tolist())
+                    extra_embedding_arrays.append(annot_emb)
 
                 annot_count = len(annot_texts)
 
@@ -1128,8 +1134,9 @@ class archillesRAG:
             print(f"  ⚠ Annotation extraction failed (non-fatal): {e}")
             annot_count = 0
 
-        # Convert embeddings to numpy array
-        embeddings_array = np.array(embeddings)
+        # Concatenate all embedding arrays (content + comments + annotations)
+        all_arrays = [embeddings_array] + extra_embedding_arrays if len(embeddings_array) else extra_embedding_arrays
+        embeddings_array = np.concatenate(all_arrays) if all_arrays else np.array([])
 
         # Add to LanceDB
         num_indexed = self.store.add_chunks(chunks, embeddings_array)
