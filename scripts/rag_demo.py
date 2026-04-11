@@ -1898,44 +1898,30 @@ class archillesRAG:
         """
         Exact phrase matching (case-insensitive).
 
-        Finds documents that contain the EXACT phrase, not just the words.
-        Critical for Latin phrases like "evangelista et a presbyteris".
-
-        IMPORTANT: Normalizes whitespace to handle line breaks!
+        Uses LanceDB FTS with a quoted-phrase query to get candidates,
+        then post-filters for whitespace-normalized exact match.
         """
         resolved_book_id, calibre_id, source_id = self._resolve_book_id(book_id)
 
-        # Fetch chunks to search through
-        all_chunks = self.store.get_all(limit=10000)
+        # Use FTS quoted-phrase query — Tantivy matches token order
+        # Fetch more candidates than top_k since post-filter may drop some
+        candidates = self.store.fts_search(
+            query_text=f'"{query_text}"',
+            top_k=top_k * 5,
+            book_id=resolved_book_id,
+            calibre_id=calibre_id,
+            source_id=source_id,
+            chunk_type=chunk_type_filter,
+            language=language,
+        )
 
-        # Normalize query
+        # Post-filter: whitespace-normalized exact phrase match
         query_normalized = re.sub(r'\s+', ' ', query_text.lower().strip())
-
-        # Find exact matches
         matches = []
-        for chunk in all_chunks:
-            # Apply filters
-            if language:
-                langs = [l.strip() for l in language.split(',')] if ',' in language else [language]
-                if chunk.get('language') not in langs:
-                    continue
-
-            if resolved_book_id and chunk.get('book_id') != resolved_book_id:
-                continue
-
-            if source_id and str(chunk.get('source_id', '')) != source_id and chunk.get('calibre_id') != calibre_id:
-                continue
-            elif calibre_id and not source_id and chunk.get('calibre_id') != calibre_id:
-                continue
-
-            if chunk_type_filter and chunk.get('chunk_type') != chunk_type_filter:
-                continue
-
-            # Normalize document text
+        for chunk in candidates:
             doc_text = chunk.get('text', '')
             doc_normalized = re.sub(r'\s+', ' ', doc_text.lower())
 
-            # Check for exact phrase
             if query_normalized in doc_normalized:
                 count = doc_normalized.count(query_normalized)
                 matches.append({
@@ -1946,10 +1932,8 @@ class archillesRAG:
                     'similarity': min(count / 10.0, 1.0),
                 })
 
-        # Sort by score
         matches.sort(key=lambda x: x['score'], reverse=True)
 
-        # Assign ranks
         for i, match in enumerate(matches[:top_k]):
             match['rank'] = i + 1
 
