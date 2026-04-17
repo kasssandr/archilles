@@ -587,6 +587,69 @@ class CalibreMCPServer:
             }
 
 
+    def watchdog_scan_tool(
+        self,
+        dry_run: bool = False,
+        queue_new: bool = True,
+        index_new: bool = False,
+    ) -> dict[str, Any]:
+        """
+        MCP Tool: Scan the Calibre library for changes and sync into LanceDB.
+
+        Detects three change types without opening book files:
+          new_books          — in Calibre but not yet indexed
+          metadata_changed   — title / author / tags / comments / publisher changed
+          annotations_changed — highlights or notes changed
+
+        Delta updates (metadata + annotations) are applied automatically unless
+        dry_run=True.  New books are written to index_queue.json for later
+        batch indexing, or indexed immediately when index_new=True.
+
+        Designed to be called from a Claude Routine (e.g. every 2 hours) to
+        keep LanceDB automatically in sync with an evolving Calibre library.
+
+        Args:
+            dry_run:   Report changes only; do not modify LanceDB or the queue.
+            queue_new: Write newly discovered Calibre IDs to index_queue.json.
+            index_new: Index new books immediately (slow: ~90s/book with embeddings).
+
+        Returns:
+            Dictionary with scan results: counts, changed IDs, timing, errors.
+        """
+        if not self.library_path:
+            return {
+                'error': 'Library path not configured',
+                'help': 'Set ARCHILLES_LIBRARY_PATH environment variable',
+            }
+        if not self._archilles_dir:
+            return {'error': 'Archilles directory not resolved'}
+
+        try:
+            from src.archilles.watchdog import WatchdogScanner
+            scanner = WatchdogScanner(
+                library_path=self.library_path,
+                db_path=self.db_path or str(self._archilles_dir / "rag_db"),
+                archilles_dir=self._archilles_dir,
+            )
+            results = scanner.scan(
+                dry_run=dry_run,
+                queue_new=queue_new,
+                index_new=index_new,
+            )
+            # Add human-readable summary for the Routine output
+            results['summary'] = (
+                f"Scanned {results['scanned']} books: "
+                f"{len(results['new_books'])} new, "
+                f"{len(results['metadata_changed'])} metadata changed, "
+                f"{len(results['annotations_changed'])} annotations changed, "
+                f"{results['delta_updates']} updates applied in {results['total_time']}s"
+            )
+            return results
+        except Exception as exc:
+            logger.error("watchdog_scan failed: %s", exc, exc_info=True)
+            return {'error': str(exc)}
+
+
 def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
     """
     Create MCP tool definitions for the server.
@@ -891,6 +954,35 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     }
                 },
                 'required': ['action']
+            }
+        },
+        {
+            'name': 'watchdog_scan',
+            'description': (
+                'Scan the Calibre library for changes and automatically sync them into LanceDB. '
+                'Detects new books, metadata changes (title/tags/comments), and annotation changes '
+                'without opening book files. Delta updates are applied instantly; new books are queued. '
+                'Call this tool from a Claude Routine (e.g. every 2 hours) to keep the index current.'
+            ),
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'dry_run': {
+                        'type': 'boolean',
+                        'description': 'Report changes only without modifying LanceDB or the queue (default: false)',
+                        'default': False
+                    },
+                    'queue_new': {
+                        'type': 'boolean',
+                        'description': 'Write newly discovered Calibre IDs to index_queue.json for later indexing (default: true)',
+                        'default': True
+                    },
+                    'index_new': {
+                        'type': 'boolean',
+                        'description': 'Index new books immediately with full embeddings — slow, ~90s per book (default: false)',
+                        'default': False
+                    }
+                }
             }
         }
     ]
