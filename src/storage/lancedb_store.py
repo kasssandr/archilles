@@ -762,6 +762,55 @@ class LanceDBStore:
         available = [c for c in columns if c in df.columns]
         return df[available].to_dict(orient='records')
 
+    def get_hashes_for_indexed_books(self) -> dict[int, dict[str, str]]:
+        """Return {calibre_id: {metadata_hash, annotation_hash, book_id}} for all indexed books.
+
+        Uses efficient column projection — only reads the hash columns, not text/vector.
+        One representative row per calibre_id (the first content chunk found).
+        """
+        if self.table is None:
+            return {}
+
+        columns = ['calibre_id', 'book_id', 'metadata_hash', 'annotation_hash', 'chunk_type']
+
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            projection = [c for c in columns if c in existing]
+            arrow_table = lance_dataset.to_table(columns=projection)
+            rows = arrow_table.to_pandas().to_dict(orient='records')
+        except Exception:
+            try:
+                df = self.table.search().select(columns).limit(10_000_000).to_pandas()
+                available = [c for c in columns if c in df.columns]
+                rows = df[available].to_dict(orient='records')
+            except Exception:
+                df = self.table.to_pandas()
+                available = [c for c in columns if c in df.columns]
+                rows = df[available].to_dict(orient='records')
+
+        result: dict[int, dict[str, str]] = {}
+        for row in rows:
+            cid = row.get('calibre_id')
+            if not cid:
+                continue
+            cid = int(cid)
+            if cid in result:
+                # Prefer content chunks over annotation chunks for metadata_hash
+                if row.get('chunk_type') in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT):
+                    result[cid]['metadata_hash'] = row.get('metadata_hash') or result[cid].get('metadata_hash', '')
+            else:
+                result[cid] = {
+                    'book_id': str(row.get('book_id') or ''),
+                    'metadata_hash': str(row.get('metadata_hash') or ''),
+                    'annotation_hash': str(row.get('annotation_hash') or ''),
+                }
+            # Capture annotation hash from annotation chunks
+            if row.get('chunk_type') == ChunkType.ANNOTATION and row.get('annotation_hash'):
+                result[cid]['annotation_hash'] = str(row['annotation_hash'])
+
+        return result
+
     def get_all(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """
         Get all chunks (with pagination).
