@@ -18,6 +18,7 @@ Called from:
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import time
 from datetime import datetime
@@ -38,12 +39,29 @@ def _discover_formats(book_path: Path) -> list[dict[str, str]]:
     ]
 
 
+def _clean_html(html_text: str) -> str:
+    """Strip HTML tags from Calibre comments, mirroring CalibreDB.clean_html()."""
+    if not html_text:
+        return ""
+    text = re.sub(r'<[^>]+>', '', html_text)
+    text = text.replace('&nbsp;', ' ')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&quot;', '"')
+    text = text.replace('&#39;', "'")
+    return re.sub(r'\s+', ' ', text).strip()
+
+
 def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
     """
     Read the fields used by _compute_metadata_hash directly from Calibre's SQLite.
 
     Returns {calibre_id: {title, author, tags, comments, publisher}} for every
     book in the library.  No book files are opened — pure SQLite I/O.
+
+    Author format matches CalibreAdapter: names joined with ' & ' in link-insertion
+    order.  Comments are HTML-stripped to match CalibreDB.clean_html().
     """
     db_path = library_path / "metadata.db"
     if not db_path.exists():
@@ -57,14 +75,22 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
                 books.id,
                 books.title,
                 books.path,
-                GROUP_CONCAT(DISTINCT authors.name) AS author,
-                comments.text AS comments,
+                (
+                    SELECT GROUP_CONCAT(a2.name, ' & ')
+                    FROM (
+                        SELECT a2.name
+                        FROM authors a2
+                        INNER JOIN books_authors_link bal2
+                            ON a2.id = bal2.author
+                        WHERE bal2.book = books.id
+                        ORDER BY bal2.id
+                    ) a2
+                ) AS author,
+                comments.text                       AS comments,
                 GROUP_CONCAT(DISTINCT tags.name)    AS tags,
                 publishers.name                     AS publisher
             FROM books
             LEFT JOIN comments              ON books.id = comments.book
-            LEFT JOIN books_authors_link    ON books.id = books_authors_link.book
-            LEFT JOIN authors               ON books_authors_link.author = authors.id
             LEFT JOIN books_tags_link       ON books.id = books_tags_link.book
             LEFT JOIN tags                  ON books_tags_link.tag = tags.id
             LEFT JOIN books_publishers_link ON books.id = books_publishers_link.book
@@ -77,13 +103,12 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
     result = {}
     for row in rows:
         cid = int(row['id'])
-        # tags from GROUP_CONCAT arrive as a comma-separated string; sort for determinism
         raw_tags = row['tags'] or ''
         tags_list = sorted(t.strip() for t in raw_tags.split(',') if t.strip())
         result[cid] = {
             'title':     row['title'] or '',
             'author':    row['author'] or '',
-            'comments':  row['comments'] or '',
+            'comments':  _clean_html(row['comments'] or ''),
             'tags':      tags_list,
             'publisher': row['publisher'] or '',
             'path':      str(library_path / row['path']),
@@ -179,12 +204,14 @@ class WatchdogScanner:
                 continue
 
             stored = indexed_hashes[cid]
+            stored_meta_hash = stored.get('metadata_hash', '')
             current_meta_hash = _compute_metadata_hash(meta)
-            meta_changed = current_meta_hash != stored.get('metadata_hash', '')
+            meta_changed = bool(stored_meta_hash) and current_meta_hash != stored_meta_hash
 
-            annot_changed = self._annotation_changed(
+            stored_annot_hash = stored.get('annotation_hash', '')
+            annot_changed = bool(stored_annot_hash) and self._annotation_changed(
                 file_path=Path(formats[0]['path']),
-                stored_hash=stored.get('annotation_hash', ''),
+                stored_hash=stored_annot_hash,
             )
 
             if meta_changed:
