@@ -193,9 +193,105 @@ Check this file if something isn't working — it captures all startup errors, s
 
 ---
 
-## Other MCP Clients
+## Remote MCP Clients (SSE Transport)
 
-Archilles should work with any MCP-compatible client (e.g., Cursor, VS Code with MCP extension). The configuration format may vary slightly. The key elements are always the same: point `command` to your Python executable, `args` to `mcp_server.py`, and set `ARCHILLES_LIBRARY_PATH`.
+Claude Desktop spawns the MCP server as a subprocess and communicates over **stdio**. Other clients — ChatGPT Desktop, OpenAI Codex, Cursor, VS Code, and any tool that expects a URL rather than a command — communicate over **HTTP/SSE** instead.
+
+Archilles supports both. The SSE mode runs a local HTTP server that any MCP-compatible client can connect to by URL.
+
+### Starting the SSE Server
+
+```bash
+# Default: localhost on port 8765
+python mcp_server.py --transport sse
+
+# Custom port (e.g. for a second instance)
+python mcp_server.py --transport sse --port 8766
+```
+
+The server binds exclusively to `127.0.0.1` — it is never reachable from other machines.
+
+Once running, the server is available at:
+- **SSE endpoint:** `http://127.0.0.1:8765/sse`
+- **Message endpoint:** `http://127.0.0.1:8765/messages/`
+
+### Connecting ChatGPT Desktop
+
+1. Open ChatGPT Desktop → Settings → Connected apps / MCP servers
+2. Add a new server and enter the SSE URL: `http://127.0.0.1:8765/sse`
+3. Save. ChatGPT will list all Archilles tools and you can use them in any conversation.
+
+### Connecting via Config File (SSE Mode)
+
+You can also set the SSE transport permanently in `.archilles/config.json` inside your Calibre library, so you don't need to pass `--transport sse` every time:
+
+```json
+{
+  "adapter": "calibre",
+  "library_path": "D:\\Calibre-Bibliothek",
+  "instance_name": "archilles-bib",
+  "transport": {
+    "mode": "sse",
+    "host": "127.0.0.1",
+    "port": 8765
+  }
+}
+```
+
+CLI flags take priority over the config file. `--transport stdio` always starts in stdio mode regardless of config.
+
+### Optional Authentication
+
+If you want a shared secret (useful when multiple users share a machine), add `auth_token` to the transport block:
+
+```json
+{
+  "transport": {
+    "mode": "sse",
+    "host": "127.0.0.1",
+    "port": 8765,
+    "auth_token": "your-shared-secret"
+  }
+}
+```
+
+Clients must then include the header `Authorization: Bearer your-shared-secret` with every request. If no token is set, all localhost requests are accepted.
+
+### Running Multiple Instances in Parallel
+
+Each Archilles instance (e.g. one for your main library, one for a work archive) can run simultaneously — one over stdio, one over SSE, or both over SSE on different ports:
+
+```bash
+# Instance 1: Claude Desktop uses stdio (no change to its config)
+# Instance 2: second library over SSE on port 8766
+ARCHILLES_LIBRARY_PATH="D:\Work-Archive" python mcp_server.py --transport sse --port 8766
+```
+
+### Port Already in Use
+
+If port 8765 is taken, the server exits with a clear message:
+
+```
+ERROR: Port 8765 is already in use. Use --port to choose another.
+```
+
+Pick any free port and pass it via `--port`.
+
+### Windows Firewall
+
+On first start, Windows may show a firewall dialog asking whether to allow Python network access. Since the server only binds to `127.0.0.1`, you can safely click **"Allow access"** — it never accepts connections from outside your machine. If you click "Block", SSE mode will not work; open Windows Firewall settings and add an exception for your Python executable.
+
+### stdio vs. SSE — Which to Use?
+
+| Client | Transport |
+|--------|-----------|
+| Claude Desktop | **stdio** (keep existing config) |
+| ChatGPT Desktop | SSE |
+| OpenAI Codex | SSE |
+| Cursor / VS Code MCP extension | SSE |
+| Any client that expects a URL | SSE |
+
+Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop working if you change its config.
 
 ---
 
