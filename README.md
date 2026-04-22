@@ -44,7 +44,7 @@ All data stays on your machine. No cloud uploads, no telemetry, no tracking. You
 ### 🔗 **MCP-Native**
 Seamless integration with Claude Desktop and other MCP-compatible tools. Your AI assistant can search your library directly.
 
-> **Currently recommended:** [Claude Desktop](https://claude.ai/download) (free tier available). Support for ChatGPT, OpenAI Codex, and other HTTP/SSE-based MCP clients is in active development.
+> Works with **Claude Desktop** (stdio) and **ChatGPT Desktop, OpenAI Codex, Cursor** and any other MCP client that connects via URL (SSE transport). See [MCP Integration Guide →](docs/MCP_GUIDE.md)
 
 ### 📚 **Calibre-Integrated**
 Reads directly from your Calibre library structure. Extracts metadata, tags, comments, annotations, and custom fields automatically.
@@ -91,7 +91,7 @@ Archilles gives you the semantic search capabilities of modern RAG systems while
 ### Prerequisites
 - Python 3.11 or 3.12 (3.13+ not yet tested)
 - [Calibre](https://calibre-ebook.com/) with your book library
-- (Optional) [Claude Desktop](https://claude.ai/download) for MCP integration *(recommended — free tier available; ChatGPT/Codex support in development)*
+- (Optional) An MCP-compatible client: [Claude Desktop](https://claude.ai/download) (stdio), or ChatGPT Desktop / Codex / Cursor via SSE
 
 ### Installation
 
@@ -317,7 +317,6 @@ Search through your collection of primary sources and secondary literature simul
 ### Coming in v1.0
 
 🚧 **Planned improvements:**
-- HTTP/SSE transport (MCP over the network — ChatGPT, OpenAI Codex, and other HTTP-based clients)
 - Incremental indexing (index new books without full re-index of the collection)
 - Docling-based Markdown extraction (structured output from complex academic PDFs)
 - VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)

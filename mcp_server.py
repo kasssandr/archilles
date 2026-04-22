@@ -63,16 +63,21 @@ TOOL_MAP = {
 }
 
 
-async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
-    """Handle an MCP request by dispatching to the appropriate server method."""
+def _dispatch_tool(server: CalibreMCPServer, tool_name: str, params: dict) -> dict:
+    """Dispatch a tool call synchronously. Safe to run in a thread pool."""
+    method_name = TOOL_MAP.get(tool_name)
+    if not method_name:
+        return {'error': f'Unknown tool: {tool_name}'}
     try:
-        method_name = TOOL_MAP.get(method)
-        if not method_name:
-            return {'error': f'Unknown method: {method}'}
         return getattr(server, method_name)(**params)
     except Exception as e:
-        logger.error(f"Error handling request {method}: {e}", exc_info=True)
+        logger.error(f"Error in tool {tool_name}: {e}", exc_info=True)
         return {'error': str(e)}
+
+
+async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
+    """Handle an MCP request by dispatching to the appropriate server method."""
+    return _dispatch_tool(server, method, params)
 
 
 async def stdio_server(server: CalibreMCPServer):
@@ -168,9 +173,109 @@ async def stdio_server(server: CalibreMCPServer):
             sys.stdout.flush()
 
 
+async def sse_server(
+    server: CalibreMCPServer,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    auth_token: str | None = None,
+):
+    """Run MCP server with SSE transport (for ChatGPT, Codex and other HTTP clients)."""
+    import mcp.server as mcp_sdk
+    import mcp.types as types
+    from mcp.server.sse import SseServerTransport
+    from starlette.applications import Starlette
+    from starlette.requests import Request
+    from starlette.responses import Response
+    from starlette.routing import Route
+    import uvicorn
+
+    logger.info(f"Starting ARCHILLES MCP Server (SSE mode) on {host}:{port}")
+
+    mcp_srv = mcp_sdk.Server(server.instance_name)
+
+    sdk_tools = [
+        types.Tool(
+            name=t["name"],
+            description=t["description"],
+            inputSchema=t["inputSchema"],
+        )
+        for t in create_mcp_tools(server)
+    ]
+
+    @mcp_srv.list_tools()
+    async def list_tools():
+        return sdk_tools
+
+    @mcp_srv.call_tool()
+    async def call_tool(name: str, arguments: dict | None):
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: _dispatch_tool(server, name, arguments or {})
+        )
+        return [
+            types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, ensure_ascii=False),
+            )
+        ]
+
+    sse_transport = SseServerTransport("/messages/")
+    init_options = mcp_srv.create_initialization_options()
+
+    def _check_auth(request: Request) -> Response | None:
+        if auth_token and request.headers.get("Authorization") != f"Bearer {auth_token}":
+            return Response("Unauthorized", status_code=401)
+        return None
+
+    async def handle_sse(request: Request):
+        if (err := _check_auth(request)):
+            return err
+        async with sse_transport.connect_sse(
+            request.scope, request.receive, request._send
+        ) as (read_stream, write_stream):
+            await mcp_srv.run(read_stream, write_stream, init_options)
+
+    async def handle_messages(request: Request):
+        if (err := _check_auth(request)):
+            return err
+        await sse_transport.handle_post_message(
+            request.scope, request.receive, request._send
+        )
+
+    app = Starlette(
+        routes=[
+            Route("/sse", endpoint=handle_sse),
+            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+        ]
+    )
+
+    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    userver = uvicorn.Server(config)
+    try:
+        await userver.serve()
+    except OSError as e:
+        if getattr(e, "errno", 0) in (98, 10048) or "address already in use" in str(e).lower():
+            logger.error(f"Port {port} is already in use.")
+            sys.stderr.write(f"\nERROR: Port {port} is already in use. Use --port to choose another.\n\n")
+            sys.exit(1)
+        raise
+
+
 def main():
     """Main entry point."""
+    import argparse
     import os
+
+    parser = argparse.ArgumentParser(description="ARCHILLES MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default=None,
+        help="Transport protocol (default: stdio, or from config.json)",
+    )
+    parser.add_argument("--host", default=None, help="SSE bind host (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=None, help="SSE port (default: 8765)")
+    args = parser.parse_args()
 
     # Accept both generic and Calibre-specific env vars
     library_path = os.getenv('ARCHILLES_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY_PATH')
@@ -243,7 +348,20 @@ def main():
     )
 
     logger.info(f"Server initialized: {instance_name} ({adapter.adapter_type if adapter else 'no adapter'})")
-    asyncio.run(stdio_server(server))
+
+    # Resolve transport from CLI args → config → default (stdio)
+    transport_cfg = config.get("transport", {})
+    transport_mode = args.transport or transport_cfg.get("mode", "stdio")
+    sse_host = args.host or transport_cfg.get("host", "127.0.0.1")
+    sse_port = args.port or transport_cfg.get("port", 8765)
+    sse_auth_token = transport_cfg.get("auth_token")
+
+    if transport_mode == "sse":
+        logger.info(f"Transport: SSE ({sse_host}:{sse_port})")
+        asyncio.run(sse_server(server, sse_host, sse_port, sse_auth_token))
+    else:
+        logger.info("Transport: stdio")
+        asyncio.run(stdio_server(server))
 
 
 if __name__ == '__main__':
