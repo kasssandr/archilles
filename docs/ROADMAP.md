@@ -62,6 +62,8 @@ Source Adapters: Neben Calibre werden jetzt auch Zotero-Bibliotheken, Obsidian-V
 
 Annotation-Import-System: Provider-basierte Architektur für den Import von Annotations (Highlights, Notizen, Lesezeichen) aus externen Leseumgebungen. Drei Provider implementiert (PDF, Calibre Viewer, Kindle `My Clippings.txt`). Book-Matcher für fuzzy Titel+Autor-Zuordnung zur Calibre-Bibliothek (rapidfuzz). CLI-Command `import-annotations` mit `--dry-run`. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
+HTTP/SSE-Transport (April 2026): `mcp_server.py` unterstützt jetzt beide MCP-Transports. `--transport stdio` (Default, unverändert für Claude Desktop) und `--transport sse` für ChatGPT Desktop, OpenAI Codex, Cursor und andere HTTP-basierte Clients. Host, Port und optionaler Bearer-Token konfigurierbar via CLI oder `config.json`-Block `transport`. Zwei parallele Instanzen auf verschiedenen Ports möglich. 11 Tests. Dokumentiert in [MCP Integration Guide](MCP_GUIDE.md).
+
 ---
 
 ## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
@@ -69,8 +71,6 @@ Annotation-Import-System: Provider-basierte Architektur für den Import von Anno
 **Fokus:** Das Fundament für den Community-Release legen und Archilles LLM-agnostisch machen.
 
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
-
-**HTTP/SSE-Transport für den MCP-Server (höchste Priorität):** Archilles spricht derzeit nur stdio-MCP — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT, OpenAI Codex und andere Cloud-basierte AI-Clients erwarten dagegen einen remote-erreichbaren HTTP/SSE-Endpunkt. Die Lösung: ein optionaler HTTP/SSE-Modus, der lokal auf dem eigenen Rechner läuft (localhost) und von MCP-kompatiblen Desktop-Clients direkt angesprochen werden kann. Das macht Archilles LLM-agnostisch — nutzbar mit Claude, ChatGPT, Codex und jedem zukünftigen MCP-kompatiblen Client. Die Implementierung ist mit FastMCP oder ähnlichen Python-Libraries überschaubar und erfordert keine Änderung an der Kernarchitektur.
 
 **Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
