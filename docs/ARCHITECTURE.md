@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** March 2026 (source adapters, TOC-aware PDF chunking, running footer removal, DialogueChunker)
+**Last updated:** April 2026 (HTTP/SSE transport for LLM-agnostic MCP access)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
@@ -266,7 +266,12 @@ The service handles lazy initialization (RAG loading deferred to first use), std
 
 #### MCP Server (`src/calibre_mcp/server.py`, entry point: `mcp_server.py`)
 
-The primary interface. Implements the Model Context Protocol for integration with Claude Desktop and other MCP-compatible AI assistants. Communication uses JSON-RPC 2.0 over stdio, with the entry point `mcp_server.py` in the project root.
+The primary interface. Implements the Model Context Protocol for integration with Claude Desktop and other MCP-compatible AI assistants. The entry point `mcp_server.py` supports two transports:
+
+- **stdio** (default): JSON-RPC 2.0 over stdin/stdout. Used by Claude Desktop, Gemini CLI, and any client that spawns the server as a subprocess. stdout is reserved exclusively for JSON-RPC; all logging goes to stderr and `~/.archilles/mcp_server.log`.
+- **SSE** (`--transport sse`): HTTP/Server-Sent Events via Starlette/Uvicorn, binding to `127.0.0.1` only. Used by ChatGPT Desktop, OpenAI Codex, Cursor, and other clients that connect by URL. Activate with `--transport sse [--host 127.0.0.1] [--port 8765]` or via the `transport` block in `.archilles/config.json`. An optional Bearer token (`transport.auth_token`) restricts access. Two instances can run in parallel on different ports.
+
+Both transports expose the same tools via the same `CalibreMCPServer` and `create_mcp_tools()`. The SSE path uses `mcp.server.Server` (low-level MCP SDK) with `mcp.server.sse.SseServerTransport`; tool dispatch runs in a thread pool (`run_in_executor`) because `ArchillesService` calls are synchronous.
 
 **Exposed tools** (10 tools via `create_mcp_tools()`):
 
@@ -394,7 +399,7 @@ ArchillesService.search()
 | EPUB extraction | ebooklib | With custom TOC parser |
 | OCR | Tesseract | Baseline; VLM upgrade path prepared |
 | Language detection | Lingua | 75+ languages, ISO 639-1 codes |
-| MCP protocol | JSON-RPC 2.0 / stdio | Claude Desktop integration |
+| MCP protocol | JSON-RPC 2.0 / stdio + HTTP/SSE | stdio for Claude Desktop; SSE for ChatGPT, Codex, Cursor |
 | Web UI | Streamlit | Companion interface |
 | Configuration | JSON | `.archilles/config.json` in library |
 | Runtime | Python 3.11+ | Cross-platform: macOS, Windows/WSL, Linux |
@@ -498,6 +503,10 @@ All configuration is stored in `.archilles/config.json` inside the user's Calibr
 | `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
 | `library_path` | (env var) | Override for ARCHILLES_LIBRARY_PATH |
+| `transport.mode` | `"stdio"` | MCP transport: `"stdio"` or `"sse"` |
+| `transport.host` | `"127.0.0.1"` | SSE bind address (localhost only) |
+| `transport.port` | `8765` | SSE listen port |
+| `transport.auth_token` | (none) | Optional Bearer token for SSE auth |
 
 Environment variables:
 

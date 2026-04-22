@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 9. April 2026 (ADR-022: Strategische Fokussierung — Infrastruktur-Layer, nicht Second Brain)
+**Letzte Überarbeitung:** 22. April 2026 (ADR-024: HTTP/SSE-Transport für LLM-Agnostik)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -430,7 +430,42 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 
 **Implementierung:** `batch_index.py:720-772`. Der aktive Adapter wird über `--source calibre|zotero|obsidian|folder` gewählt. Calibre bleibt der Default.
 
-**Offene Frage (Pending ADR):** Structure-Aware PDF Chunking. Eine Analyse vom 19. März 2026 (`BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) ergab, dass PDF-Chunks aktuell 0% chapter/section_title-Abdeckung haben, während EPUB-Chunks 96-100% erreichen. Ursache: Der PDF-TOC wird zwar extrahiert, aber nicht auf Chunks gemappt. Lösung: TOC-zu-Seite-Mapping, section_type-Verbesserung, Behandlung malformierter TOCs. Implementation steht aus; ein ADR folgt nach Umsetzung und Verifikation an 5 Testbüchern.
+**Folge-ADR:** → ADR-023: Structure-Aware PDF Chunking (implementiert März 2026)
+
+---
+
+### ADR-023: Structure-Aware PDF Chunking (März 2026)
+
+**Kontext:** Eine Analyse mit dem Chunk Inspector (19. März 2026, `BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) zeigte, dass PDF-Chunks 0% chapter/section_title-Abdeckung hatten, während EPUB-Chunks 96–100% erreichten. Der PDF-TOC wurde zwar extrahiert, aber nicht auf einzelne Chunks gemappt.
+
+**Entscheidung:** TOC-zu-Seite-Mapping in `pdf_extractor.py` mit Junk-TOC-Filterung; `section_type` und `section_title` werden aus TOC-Titeln abgeleitet und in `ChunkMetadata` geschrieben.
+
+**Begründung:** Strukturinformationen sind für zitierbare Retrievalergebnisse (Kapitelangabe, section_type-Filterung) unverzichtbar. Die EPUB-Pipeline hatte das Problem durch TOC-basiertes Parsing bereits gelöst; die PDF-Pipeline wurde auf denselben Stand gebracht. Die Filterung malformierter TOCs (zu kurze Titel, reine Zeichennummern) verhindert Rauschen in der Metadaten.
+
+**Implementierung:** `src/extractors/pdf_extractor.py` — `_build_page_toc_map()`, `_section_type_from_toc_title()`, `_create_chunks_with_pages()`. Verifikation an Testbüchern (Eunapios, Golden Bough); Reports in `reports/chunk_inspection/`.
+
+---
+
+### ADR-024: HTTP/SSE-Transport für den MCP-Server (April 2026)
+
+**Kontext:** ARCHILLES kommunizierte ausschließlich über stdio mit MCP-Clients — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT Desktop, OpenAI Codex, Cursor und andere HTTP-basierte Clients erwarten dagegen einen HTTP/SSE-Endpunkt. Ohne diesen Transport ist ARCHILLES faktisch an Claude gebunden.
+
+**Entscheidung:** Optionaler SSE-Transport über Starlette/Uvicorn, aktivierbar via `--transport sse [--host ...] [--port ...]` oder dem neuen `transport`-Block in `.archilles/config.json`. Stdio bleibt der Default; bestehende Claude-Desktop-Konfigurationen ändern sich nicht.
+
+**Implementierungsdetails:**
+- `mcp.server.Server` (low-level MCP SDK 1.21.2) übernimmt die Protokoll-Schicht (list_tools / call_tool)
+- `mcp.server.sse.SseServerTransport` liefert die SSE-Verbindung; Starlette als ASGI-Framework, Uvicorn als Server
+- Die bestehende `create_mcp_tools()`-Funktion bleibt unverändert; ihre dicts werden 1:1 in `mcp.types.Tool`-Objekte konvertiert
+- Tool-Dispatch nutzt weiterhin `TOOL_MAP` → `CalibreMCPServer`-Methoden; weil diese blockierend sind, werden sie via `asyncio.get_running_loop().run_in_executor()` in einem Thread-Pool ausgeführt
+- Optionaler Bearer-Token via `transport.auth_token`; Bind ausschließlich auf `127.0.0.1`, kein Remote-Access
+
+**Warum nicht FastMCP:** FastMCP hätte die gesamte Tool-Registrierung auf Decorator-Basis umgeschrieben. `mcp.server.Server` erlaubt, `create_mcp_tools()` und `TOOL_MAP` unverändert zu lassen und nur den Transport-Layer hinzuzufügen.
+
+**Konsequenzen:**
+- Zwei Instanzen parallel möglich: eine stdio für Claude Desktop, eine SSE für ChatGPT (über `--port 8766`)
+- Bei Port-Konflikt: klare Fehlermeldung mit Lösungshinweis, kein stummes Scheitern
+- Windows-Firewall-Dialog erscheint beim ersten Start — für localhost kein Sicherheitsrisiko
+- Event-Loop-Blocking bei langen RAG-Queries wird durch `run_in_executor()` verhindert
 
 ---
 
@@ -577,7 +612,6 @@ Die Entscheidungen folgen konsistent einigen Grundprinzipien, die das Projekt pr
 ---
 
 *Nächste geplante Aktualisierungen:*
-- *ADR-022: Structure-Aware PDF Chunking – steht aus nach Implementation und Verifikation (TOC-zu-Seite-Mapping; Vergleichsbasis: 0% vs. 96-100% section_title-Abdeckung bei EPUBs)*
 - *ADR für Cross-Encoder-Reranking (nach Benchmark gegen aktuelle Hybrid-Search)*
 - *ADR für Übersetzungs-Pipeline (NLLB lokal / MADLAD-400 API)*
 - *Ergebnis der LightRAG-Evaluation (geplant Q2 2026)*

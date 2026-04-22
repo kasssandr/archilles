@@ -50,7 +50,7 @@ Die Adapter-Architektur (ADR-021) und die MCP-Schnittstelle machen ARCHILLES zur
 
 **Status:** Kernfunktionalität produktionsreif, MCP-Server operativ.
 
-Die Basis steht. Der Core-Bestand (Leit-Literatur) mit 267 Titeln ist nahezu vollständig indexiert, und das System skaliert über die LanceDB-Architektur auf Millionen von Chunks. Die Zwei-Datenbanken-Architektur trennt sauber zwischen Buchinhalten (`archilles_books`) und Nutzerdaten (`archilles_meta` — Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte).
+Die Basis steht. Der gesamte Bibliotheksbestand ist indexiert; das System skaliert über die LanceDB-Architektur auf Millionen von Chunks. Der nächste Qualitätssprung ist die Einführung von Parent-Child-Abhängigkeiten im Index — vorbereitet, zur Einbettung auf externer GPU vorgesehen. Die Zwei-Datenbanken-Architektur trennt sauber zwischen Buchinhalten (`archilles_books`) und Nutzerdaten (`archilles_meta` — Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte).
 
 **Abgeschlossen:**
 
@@ -62,6 +62,8 @@ Source Adapters: Neben Calibre werden jetzt auch Zotero-Bibliotheken, Obsidian-V
 
 Annotation-Import-System: Provider-basierte Architektur für den Import von Annotations (Highlights, Notizen, Lesezeichen) aus externen Leseumgebungen. Drei Provider implementiert (PDF, Calibre Viewer, Kindle `My Clippings.txt`). Book-Matcher für fuzzy Titel+Autor-Zuordnung zur Calibre-Bibliothek (rapidfuzz). CLI-Command `import-annotations` mit `--dry-run`. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
+HTTP/SSE-Transport (April 2026): `mcp_server.py` unterstützt jetzt beide MCP-Transports. `--transport stdio` (Default, unverändert für Claude Desktop) und `--transport sse` für ChatGPT Desktop, OpenAI Codex, Cursor und andere HTTP-basierte Clients. Host, Port und optionaler Bearer-Token konfigurierbar via CLI oder `config.json`-Block `transport`. Zwei parallele Instanzen auf verschiedenen Ports möglich. 11 Tests. Dokumentiert in [MCP Integration Guide](MCP_GUIDE.md).
+
 ---
 
 ## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
@@ -70,11 +72,11 @@ Annotation-Import-System: Provider-basierte Architektur für den Import von Anno
 
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
 
-**HTTP/SSE-Transport für den MCP-Server (höchste Priorität):** Archilles spricht derzeit nur stdio-MCP — das Modell von Claude Desktop und Gemini CLI, bei dem der Server als lokaler Subprocess läuft. ChatGPT, OpenAI Codex und andere Cloud-basierte AI-Clients erwarten dagegen einen remote-erreichbaren HTTP/SSE-Endpunkt. Die Lösung: ein optionaler HTTP/SSE-Modus, der lokal auf dem eigenen Rechner läuft (localhost) und von MCP-kompatiblen Desktop-Clients direkt angesprochen werden kann. Das macht Archilles LLM-agnostisch — nutzbar mit Claude, ChatGPT, Codex und jedem zukünftigen MCP-kompatiblen Client. Die Implementierung ist mit FastMCP oder ähnlichen Python-Libraries überschaubar und erfordert keine Änderung an der Kernarchitektur.
-
 **Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
 **Benchmark-Suite für Bibliotheks-Retrieval (neu):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Benchmark wird vor dem Community-Release veröffentlicht und dient sowohl der internen Qualitätssicherung als auch der externen Kommunikation.
+
+**Calibre Watchdog (neu):** Automatische Synchronisation zwischen Calibre und LanceDB. Ein periodischer Scan-Prozess erkennt drei Änderungstypen: Metadaten-Änderungen (Comments, Tags, Rating — via `metadata_hash`-Vergleich, ADR-011), Annotations-Änderungen (via `annotation_hash`), und neu hinzugekommene Titel. Metadaten- und Annotations-Updates werden sofort via `index_book()` ausgeführt (~1–3s pro Buch); neue Bücher werden in eine Index-Queue geschrieben. Der Watchdog ist kein Daemon, sondern ein idempotenter Scan, aufrufbar via `scripts/watchdog.py` oder Windows Task Scheduler. Er ist die Voraussetzung für alle nachgelagerten Features, die auf aktuellem LanceDB-Bestand aufbauen. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
 
 Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
 
@@ -125,6 +127,8 @@ Das Archilles Lab (Obsidian-Vault über den ObsidianAdapter) bleibt als funktion
 **Fokus:** ARCHILLES in die Hände der Zielgruppe bringen.
 
 Open-Source-Veröffentlichung unter MIT-Lizenz. Domains sind gesichert (archilles.org, archilles.net, archilles.de). Die Zielgruppe sind technisch versierte Einzelforscher aus den Geisteswissenschaften — Geschichte, Literatur, Philosophie —, die große, kuratierte Calibre-Bibliotheken pflegen und Wert auf Privacy und lokale Datenkontrolle legen.
+
+**Wiki-Generator (neu):** Ein LLM-gestützter Generator, der aus dem indexierten Bestand ein navigierbares Markdown-Wiki destilliert. Pro Buch (ab konfigurierbarem Rating-Schwellwert) werden Metadaten, Comments, Annotationen und die semantisch dichtesten Content-Chunks zusammengeführt und vom LLM in strukturierte Buch-Seiten, Entitäten-Seiten (Personen, Konzepte, Orte) und Themen-Seiten mit `[[Wikilinks]]` destilliert. Obsidian-kompatibel, aber nicht Obsidian-abhängig. Inkrementelle Updates via Watchdog-Änderungsprotokoll. Der Wiki ist ein leichtgewichtiger Wissensgraph in Textform — die menschenlesbare Vorstufe des formalen Graph RAG in v2.0. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
 
 Community-Aufbau über akademische Kanäle: r/DigitalHumanities, r/AskHistorians, GitHub Discussions, DH-Discord-Server und spezialisierte Foren (MobileRead als Priorität wegen der Calibre-Community). Der ARCHILLATOR (Browser-basierter akademischer Textübersetzer) dient als Lead Magnet.
 
