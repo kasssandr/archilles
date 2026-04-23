@@ -369,12 +369,18 @@ class TestScannerClassification:
         assert new_ids == {2}
         assert 1 not in new_ids
 
-    def test_uebersetzung_tag_excluded_by_default(
+    def test_custom_excluded_tag_from_config(
         self, calibre_library: Path, scanner_factory,
     ):
+        """Users can extend exclusions by configuring custom tags (e.g.
+        a language-specific ``Übersetzung`` or ``draft``). The scanner
+        must honour whatever list the caller passes in."""
         _add_book(calibre_library, 1, "Die Ilias (Übersetzung)",
                   authors=["Homer"], tags=["Übersetzung"], with_file="x.epub")
-        scanner = scanner_factory(indexed_hashes={})
+        scanner = scanner_factory(
+            indexed_hashes={},
+            excluded=["exclude", "Übersetzung"],
+        )
         results = scanner.scan(dry_run=True)
         assert not results['new_books']
 
@@ -512,11 +518,12 @@ class TestCounters:
 # Default excluded tags constant stays stable (batch_index.py sibling)
 # ---------------------------------------------------------------------------
 
-def test_default_excluded_tags_match_batch_index():
-    # ``batch_index.py`` carries the same list; if one moves the other
-    # must follow. This guards the convention.
+def test_default_excluded_tags_single_source_of_truth():
+    # ``DEFAULT_EXCLUDED_TAGS`` lives in ``src.archilles.config``; both
+    # the watchdog and batch_index re-export the same list. If anyone
+    # redefines it locally, this guard catches the divergence.
     from scripts import batch_index
-    expected = getattr(batch_index, "DEFAULT_EXCLUDED_TAGS", None)
-    if expected is None:
-        pytest.skip("batch_index.DEFAULT_EXCLUDED_TAGS not exported")
-    assert set(DEFAULT_EXCLUDED_TAGS) == set(expected)
+    from src.archilles import config
+    assert DEFAULT_EXCLUDED_TAGS is config.DEFAULT_EXCLUDED_TAGS
+    assert batch_index.DEFAULT_EXCLUDED_TAGS is config.DEFAULT_EXCLUDED_TAGS
+    assert DEFAULT_EXCLUDED_TAGS == ['exclude']

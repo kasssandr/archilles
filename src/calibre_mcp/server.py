@@ -629,11 +629,13 @@ class CalibreMCPServer:
             return {'error': 'Archilles directory not resolved'}
 
         try:
+            from src.archilles.config import get_excluded_tags
             from src.archilles.watchdog import WatchdogScanner
             scanner = WatchdogScanner(
                 library_path=self.library_path,
                 db_path=self.rag_db_path,
                 archilles_dir=self._archilles_dir,
+                excluded_tags=get_excluded_tags(self.library_path),
             )
             results = scanner.scan(
                 dry_run=dry_run,

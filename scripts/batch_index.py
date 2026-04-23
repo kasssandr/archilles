@@ -49,7 +49,8 @@ Usage:
     python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
     python scripts/batch_index.py --all --filter-author "Tucholsky"
 
-    # Include books tagged "exclude" or "Übersetzung" (excluded by default)
+    # Include books normally excluded via the 'exclude' tag (or custom
+    # tags configured in .archilles/config.json → excluded_tags)
     python scripts/batch_index.py --tag "Leit-Literatur" --include-excluded
 """
 
@@ -72,17 +73,17 @@ from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
 # Hardware-adaptive profile system
-from src.archilles.config import get_library_path
+from src.archilles.config import (
+    DEFAULT_EXCLUDED_TAGS,
+    get_excluded_tags,
+    get_library_path,
+)
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
 
 # Preferred book formats in order of priority
 PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
-
-# Tags excluded by default — books carrying these tags are skipped unless
-# --include-excluded is passed explicitly.
-DEFAULT_EXCLUDED_TAGS = ['exclude', 'Übersetzung']
 
 
 
@@ -417,7 +418,7 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None,
         author_filter: Optional list of author name fragments; only books where at least one
                        author matches ANY of the fragments (partial, case-insensitive) are
                        returned.
-        exclude_tags: List of tags to exclude (e.g., ['exclude', 'Übersetzung'])
+        exclude_tags: List of tags to exclude (e.g., ['exclude', 'draft'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -490,7 +491,7 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
         min_rating: Minimum star rating (1-5, 0 = no filter). Mutually exclusive with rating.
         rating: Exact star rating to filter by (0 = no rating / NULL, 1-5 = exact star count).
                 Mutually exclusive with min_rating.
-        exclude_tags: List of tags to exclude (e.g., ['exclude', 'Übersetzung'])
+        exclude_tags: List of tags to exclude (e.g., ['exclude', 'draft'])
 
     Returns:
         List of book dictionaries with metadata and file paths
@@ -1390,8 +1391,8 @@ Examples:
   # Re-index old books (e.g., indexed before Dec 1st with old code)
   python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
 
-  # Exclude machine-translated books
-  python scripts/batch_index.py --tag "Leit-Literatur" --exclude-tag "DeepL" --exclude-tag "Übersetzung"
+  # Exclude drafts and custom-tagged books
+  python scripts/batch_index.py --tag "Leit-Literatur" --exclude-tag "draft" --exclude-tag "DeepL"
 
   # Filter by minimum rating (1-5 stars, inclusive)
   python scripts/batch_index.py --tag "Leit-Literatur" --min-rating 4
@@ -1436,8 +1437,11 @@ Profiles:
                         help='Exclude books with this tag (can be used multiple times). '
                              'Added on top of the default excludes.')
     parser.add_argument('--include-excluded', action='store_true',
-                        help=f'Override default tag exclusions ({", ".join(DEFAULT_EXCLUDED_TAGS)}) '
-                             'and include those books. User-specified --exclude-tag values still apply.')
+                        help='Override the configured tag exclusions '
+                             '(see .archilles/config.json → excluded_tags, '
+                             f'default: {", ".join(DEFAULT_EXCLUDED_TAGS)}) '
+                             'and include those books. User-specified '
+                             '--exclude-tag values still apply.')
 
     # Author filter — additional, not mutually exclusive with --tag / --all / --author
     parser.add_argument('--filter-author', action='append', dest='filter_authors', metavar='AUTHOR',
@@ -1568,8 +1572,9 @@ Profiles:
     rating = args.rating
     filter_authors = args.filter_authors
 
-    # Build effective exclude list: defaults + user additions, unless --include-excluded
-    base_excludes = [] if args.include_excluded else list(DEFAULT_EXCLUDED_TAGS)
+    # Build effective exclude list: config-based tags + user additions,
+    # unless --include-excluded drops the configured defaults entirely.
+    base_excludes = [] if args.include_excluded else get_excluded_tags(library_path)
     effective_excludes = base_excludes + (args.exclude_tags or [])
 
     if args.include_excluded:

@@ -122,7 +122,8 @@ def main() -> None:
     )
     parser.add_argument(
         '--include-excluded', action='store_true',
-        help='Process books tagged "exclude" or "Übersetzung" (skipped by default)'
+        help='Process books carrying any of the configured excluded tags '
+             '(see .archilles/config.json → excluded_tags, default: "exclude")'
     )
     parser.add_argument(
         '--json', dest='json_mode', action='store_true',
@@ -136,12 +137,12 @@ def main() -> None:
 
     library_path, db_path, archilles_dir = _resolve_paths()
 
-    from src.archilles.watchdog import DEFAULT_EXCLUDED_TAGS
+    from src.archilles.config import get_excluded_tags
     scanner = WatchdogScanner(
         library_path=library_path,
         db_path=db_path,
         archilles_dir=archilles_dir,
-        excluded_tags=[] if args.include_excluded else DEFAULT_EXCLUDED_TAGS,
+        excluded_tags=[] if args.include_excluded else get_excluded_tags(library_path),
     )
     if args.log_file:
         scanner.log_file = Path(args.log_file)

@@ -33,11 +33,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
 
+from src.archilles.config import get_excluded_tags, get_library_path
 from src.archilles.constants import ChunkType
 from src.storage.lancedb_store import LanceDBStore
 
-# Books with these tags are intentionally excluded from indexing — low chunk counts are expected
-INTENTIONALLY_EXCLUDED_TAGS = {'Übersetzung', 'exclude'}
+# Books with these tags are intentionally excluded from indexing — low
+# chunk counts are expected. Pulled from config so user-specific tags
+# (e.g. "draft", "Übersetzung") are honoured without code changes.
+try:
+    INTENTIONALLY_EXCLUDED_TAGS: set[str] = set(
+        get_excluded_tags(get_library_path(required=False))
+    )
+except Exception:
+    INTENTIONALLY_EXCLUDED_TAGS = {'exclude'}
 
 DEFAULT_DB_PATH = "D:/Calibre-Bibliothek/.archilles/rag_db"
 DEFAULT_THRESHOLD = 100  # words per page below which we flag a book
@@ -118,8 +126,9 @@ def find_scanned_books(
         ((pdf_df['max_page'] > 0) & (pdf_df['words_per_page'] < threshold))
     ].copy()
 
-    # Exclude books that carry an intentionally-excluded tag (Übersetzung, exclude).
-    # These are skipped during normal indexing on purpose — low counts are expected.
+    # Exclude books that carry an intentionally-excluded tag (see
+    # config.get_excluded_tags). These are skipped during normal
+    # indexing on purpose — low counts are expected.
     def has_excluded_tag(tags_str: str) -> bool:
         if not tags_str:
             return False
@@ -131,7 +140,8 @@ def find_scanned_books(
     flagged = flagged[~excluded_mask]
 
     if not silently_skipped.empty:
-        print(f"ℹ️  {len(silently_skipped)} book(s) skipped (tagged 'Übersetzung' or 'exclude' — intentionally not indexed):")
+        excluded_list = ', '.join(sorted(INTENTIONALLY_EXCLUDED_TAGS))
+        print(f"ℹ️  {len(silently_skipped)} book(s) skipped (tagged {excluded_list} — intentionally not indexed):")
         for _, row in silently_skipped.iterrows():
             print(f"   · {row['book_title']} [{row['tags']}]")
         print()
