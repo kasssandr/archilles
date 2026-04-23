@@ -143,6 +143,10 @@ def main() -> None:
         help='Index new books immediately (slow: ~90s/book with embeddings)'
     )
     parser.add_argument(
+        '--include-excluded', action='store_true',
+        help='Process books tagged "exclude" or "Übersetzung" (skipped by default)'
+    )
+    parser.add_argument(
         '--json', dest='json_mode', action='store_true',
         help='Output results as JSON (useful for scripting or Claude Routines)'
     )
@@ -154,10 +158,12 @@ def main() -> None:
 
     library_path, db_path, archilles_dir = _resolve_paths()
 
+    from src.archilles.watchdog import DEFAULT_EXCLUDED_TAGS
     scanner = WatchdogScanner(
         library_path=library_path,
         db_path=db_path,
         archilles_dir=archilles_dir,
+        excluded_tags=[] if args.include_excluded else DEFAULT_EXCLUDED_TAGS,
     )
     if args.log_file:
         scanner.log_file = Path(args.log_file)

@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 # Book formats in order of preference (mirrors batch_index.py)
 _PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 
+# Tags that exclude a book from indexing (mirrors batch_index.DEFAULT_EXCLUDED_TAGS)
+DEFAULT_EXCLUDED_TAGS = ['exclude', 'Übersetzung']
+
 
 def _discover_formats(book_path: Path) -> list[dict[str, str]]:
     return [
@@ -145,12 +148,21 @@ class WatchdogScanner:
     archilles_dir Path to the .archilles working directory (logs, queue, config)
     """
 
-    def __init__(self, library_path: Path, db_path: str, archilles_dir: Path):
+    def __init__(
+        self,
+        library_path: Path,
+        db_path: str,
+        archilles_dir: Path,
+        excluded_tags: list[str] | None = None,
+    ):
         self.library_path = library_path
         self.db_path = db_path
         self.archilles_dir = archilles_dir
         self.queue_file = archilles_dir / "index_queue.json"
         self.log_file = archilles_dir / "watchdog.log"
+        self.excluded_tags_lower: set[str] = {
+            t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
+        }
 
     # ------------------------------------------------------------------
     # Public API
@@ -190,6 +202,12 @@ class WatchdogScanner:
         indexed_hashes = self._load_indexed_hashes()
 
         for cid, meta in calibre_books.items():
+            # Skip books carrying excluded tags (e.g. 'exclude', 'Übersetzung')
+            if self.excluded_tags_lower and any(
+                t.lower() in self.excluded_tags_lower for t in meta.get('tags', [])
+            ):
+                continue
+
             book_path = Path(meta['path'])
             formats = _discover_formats(book_path)
             if not formats:
