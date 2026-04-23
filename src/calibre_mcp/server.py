@@ -605,8 +605,11 @@ class CalibreMCPServer:
         dry_run=True.  New books are written to index_queue.json for later
         batch indexing, or indexed immediately when index_new=True.
 
-        Designed to be called from a Claude Routine (e.g. every 2 hours) to
-        keep LanceDB automatically in sync with an evolving Calibre library.
+        Designed to be called from a Claude Routine (e.g. once a day or once
+        a week — whatever matches how often you edit your library) to keep
+        LanceDB automatically in sync with an evolving Calibre collection.
+        Non-Claude users can schedule scripts/watchdog.py via Windows Task
+        Scheduler or cron; see docs/MCP_GUIDE.md § "Keeping Your Index in Sync".
 
         Args:
             dry_run:   Report changes only; do not modify LanceDB or the queue.
@@ -966,7 +969,8 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                 'Scan the Calibre library for changes and automatically sync them into LanceDB. '
                 'Detects new books, metadata changes (title/tags/comments), and annotation changes '
                 'without opening book files. Delta updates are applied instantly; new books are queued. '
-                'Call this tool from a Claude Routine (e.g. every 2 hours) to keep the index current.'
+                'Call this tool from a Claude Routine (daily or weekly is usually enough) to keep '
+                'the index current without manual re-indexing.'
             ),
             'inputSchema': {
                 'type': 'object',
