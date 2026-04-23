@@ -789,25 +789,45 @@ class LanceDBStore:
                 available = [c for c in columns if c in df.columns]
                 rows = df[available].to_dict(orient='records')
 
+        def _clean(value: Any) -> str:
+            """Coerce LanceDB value to a string, treating NULL / NaN as empty.
+
+            Pandas loads NULL hash columns as ``float('nan')`` in older
+            databases, and ``nan or ''`` returns ``nan`` (truthy) — so a naive
+            ``str(value or '')`` would yield ``'nan'`` and produce false
+            positives on every subsequent hash comparison. Guard explicitly.
+            """
+            if value is None:
+                return ''
+            if isinstance(value, float) and value != value:  # NaN check
+                return ''
+            s = str(value)
+            return '' if s == 'nan' else s
+
         result: dict[int, dict[str, str]] = {}
         for row in rows:
             cid = row.get('calibre_id')
-            if not cid:
+            if cid is None or (isinstance(cid, float) and cid != cid):
                 continue
             cid = int(cid)
+            chunk_type = row.get('chunk_type')
+            new_meta = _clean(row.get('metadata_hash'))
+            new_annot = _clean(row.get('annotation_hash'))
+            new_book = _clean(row.get('book_id'))
+
             if cid in result:
                 # Prefer content chunks over annotation chunks for metadata_hash
-                if row.get('chunk_type') in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT):
-                    result[cid]['metadata_hash'] = row.get('metadata_hash') or result[cid].get('metadata_hash', '')
+                if chunk_type in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT) and new_meta:
+                    result[cid]['metadata_hash'] = new_meta
             else:
                 result[cid] = {
-                    'book_id': str(row.get('book_id') or ''),
-                    'metadata_hash': str(row.get('metadata_hash') or ''),
-                    'annotation_hash': str(row.get('annotation_hash') or ''),
+                    'book_id': new_book,
+                    'metadata_hash': new_meta,
+                    'annotation_hash': new_annot,
                 }
             # Capture annotation hash from annotation chunks
-            if row.get('chunk_type') == ChunkType.ANNOTATION and row.get('annotation_hash'):
-                result[cid]['annotation_hash'] = str(row['annotation_hash'])
+            if chunk_type == ChunkType.ANNOTATION and new_annot:
+                result[cid]['annotation_hash'] = new_annot
 
         return result
 

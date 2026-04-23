@@ -35,45 +35,20 @@ from pathlib import Path
 # Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.archilles.config import get_library_path
+from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.watchdog import WatchdogScanner
 
 
 def _resolve_paths() -> tuple[Path, str, Path]:
-    """Return (library_path, db_path, archilles_dir) from env / config."""
-    library_path_str = (
-        os.getenv('ARCHILLES_LIBRARY_PATH')
-        or os.getenv('CALIBRE_LIBRARY_PATH')
-    )
-    if not library_path_str:
-        try:
-            library_path_str = str(get_library_path())
-        except Exception:
-            pass
-    if not library_path_str:
-        print(
-            "ERROR: Library path not set.\n"
-            "Export ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    """Return ``(library_path, db_path, archilles_dir)`` from env / config.
 
-    library_path = Path(library_path_str)
+    Delegates to :func:`src.archilles.config.get_library_path` and
+    :func:`src.archilles.config.get_rag_db_path`; the legacy ``RAG_DB_PATH``
+    env var is still honoured for scripting back-compat.
+    """
+    library_path = get_library_path()  # exits with helpful message if unset
     archilles_dir = library_path / ".archilles"
-
-    config_path = archilles_dir / "config.json"
-    config: dict = {}
-    if config_path.exists():
-        try:
-            config = json.loads(config_path.read_text(encoding='utf-8'))
-        except Exception:
-            pass
-
-    db_path = (
-        os.getenv('RAG_DB_PATH')
-        or config.get('rag_db_path')
-        or str(archilles_dir / "rag_db")
-    )
+    db_path = os.getenv('RAG_DB_PATH') or get_rag_db_path(library_path)
     return library_path, db_path, archilles_dir
 
 
@@ -96,6 +71,9 @@ def _print_results(results: dict, json_mode: bool) -> None:
     print(f"  Unchanged:            {n_unch}")
     print(f"  Delta updates done:   {results['delta_updates']}"
           + (f" in {results['delta_time']}s" if results['delta_updates'] else ""))
+    if results.get('new_indexed'):
+        print(f"  New books indexed:    {results['new_indexed']}"
+              + f" in {results.get('new_indexed_time', 0)}s")
     if n_err:
         print(f"  Errors:               {n_err}")
         for e in results['errors']:

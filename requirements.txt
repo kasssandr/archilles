@@ -44,6 +44,15 @@ streamlit>=1.30.0  # Interactive web interface
 # Hardware detection
 psutil>=5.9.0  # CPU/RAM detection for hardware profiles
 
+# ===== MCP SERVER =====
+
+# Required for the SSE transport (ChatGPT Desktop, OpenAI Codex, Cursor).
+# The stdio transport works without the mcp SDK (raw JSON-RPC), so these are
+# only strictly needed when you start the server with `--transport sse`.
+mcp>=1.21.0            # MCP SDK: mcp.server, mcp.types, mcp.server.sse
+starlette>=0.37.0      # ASGI framework for the SSE endpoint
+uvicorn>=0.27.0        # ASGI server
+
 # OCR (optional, for scanned PDFs)
 pytesseract>=0.3.10  # Tesseract OCR wrapper
 Pillow>=10.1.0  # Image processing for OCR

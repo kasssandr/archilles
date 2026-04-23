@@ -73,6 +73,7 @@ meine_zitate.md
 test.md
 test_search.py
 *.txt
+!requirements*.txt
 .env
 
 # Internal development notes (not for public)

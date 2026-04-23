@@ -637,13 +637,17 @@ class CalibreMCPServer:
                 index_new=index_new,
             )
             # Add human-readable summary for the Routine output
-            results['summary'] = (
+            summary = (
                 f"Scanned {results['scanned']} books: "
                 f"{len(results['new_books'])} new, "
                 f"{len(results['metadata_changed'])} metadata changed, "
                 f"{len(results['annotations_changed'])} annotations changed, "
-                f"{results['delta_updates']} updates applied in {results['total_time']}s"
+                f"{results['delta_updates']} delta updates"
             )
+            if results.get('new_indexed'):
+                summary += f", {results['new_indexed']} new books indexed"
+            summary += f" in {results['total_time']}s"
+            results['summary'] = summary
             return results
         except Exception as exc:
             logger.error("watchdog_scan failed: %s", exc, exc_info=True)
