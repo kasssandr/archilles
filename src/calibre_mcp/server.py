@@ -77,9 +77,10 @@ class CalibreMCPServer:
         self.citation_config = citation_config
 
         self._archilles_dir = (Path(library_path) / ".archilles") if library_path else None
+        self.rag_db_path = rag_db_path or "./archilles_rag_db"
 
         self.service = ArchillesService(
-            db_path=rag_db_path or "./archilles_rag_db",
+            db_path=self.rag_db_path,
             enable_reranking=enable_reranking,
             reranker_device=reranker_device,
             citation_config=citation_config,
@@ -631,7 +632,7 @@ class CalibreMCPServer:
             from src.archilles.watchdog import WatchdogScanner
             scanner = WatchdogScanner(
                 library_path=self.library_path,
-                db_path=self.db_path or str(self._archilles_dir / "rag_db"),
+                db_path=self.rag_db_path,
                 archilles_dir=self._archilles_dir,
             )
             results = scanner.scan(
