@@ -120,10 +120,17 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
 
 
 def _compute_metadata_hash(meta: dict[str, Any]) -> str:
-    """Replicate archillesRAG._compute_metadata_hash without importing rag_demo."""
+    """Replicate ``archillesRAG._compute_metadata_hash`` without importing rag_demo.
+
+    Tags are sorted regardless of input type (list or comma-string) so the
+    hash is independent of Calibre's internal tag ordering — otherwise every
+    tag-reorder in Calibre would mis-classify the book as metadata_changed.
+    """
     tags = meta.get('tags', [])
     if isinstance(tags, str):
         tags = sorted(t.strip() for t in tags.split(',') if t.strip())
+    elif isinstance(tags, list):
+        tags = sorted(tags)
     relevant = {
         'comments':  meta.get('comments', ''),
         'tags':      tags,
@@ -190,8 +197,10 @@ class WatchdogScanner:
             'annotations_changed': [],
             'unchanged':           [],
             'errors':              [],
-            'delta_updates':       0,
+            'delta_updates':       0,    # count of Phase-2 updates (metadata / annotations)
             'delta_time':          0.0,
+            'new_indexed':         0,    # count of Phase-3 immediate new-book indexes
+            'new_indexed_time':    0.0,
             'scanned':             0,
         }
 
@@ -224,10 +233,16 @@ class WatchdogScanner:
             stored = indexed_hashes[cid]
             stored_meta_hash = stored.get('metadata_hash', '')
             current_meta_hash = _compute_metadata_hash(meta)
+            # Skip the comparison when no stored hash exists — we would produce
+            # false positives for books indexed before hash tracking was added.
+            # Use scripts/backfill_metadata_hash.py to populate missing hashes.
             meta_changed = bool(stored_meta_hash) and current_meta_hash != stored_meta_hash
 
+            # Bidirectional annotation check: empty→nonempty (new annotations on
+            # a previously unannotated book) AND nonempty→empty (annotations
+            # cleared) both count as changes.
             stored_annot_hash = stored.get('annotation_hash', '')
-            annot_changed = bool(stored_annot_hash) and self._annotation_changed(
+            annot_changed = self._annotation_changed(
                 file_path=Path(formats[0]['path']),
                 stored_hash=stored_annot_hash,
             )
@@ -281,7 +296,7 @@ class WatchdogScanner:
                         continue
                     try:
                         rag.index_book(formats[0]['path'], str(cid), force=False)
-                        results['delta_updates'] += 1
+                        results['new_indexed'] += 1
                     except Exception as exc:
                         logger.error(f"New-book indexing failed for calibre_id={cid}: {exc}")
                         results['errors'].append({'calibre_id': cid, 'error': str(exc)})
@@ -315,7 +330,18 @@ class WatchdogScanner:
         return archillesRAG(db_path=self.db_path)
 
     def _annotation_changed(self, file_path: Path, stored_hash: str) -> bool:
-        """Return True if the annotation hash for this book differs from what is stored."""
+        """Return True if the annotation hash for this book differs from what is stored.
+
+        Compares bidirectionally: ``_compute_annotation_hash`` returns ``''``
+        for an empty annotation list, so the comparison naturally detects both
+        ``stored='' → current='abc'`` (first-time annotations) and
+        ``stored='abc' → current=''`` (annotations cleared).
+
+        PDF-native annotations (Adobe/Foxit) are skipped via ``include_pdf=False``
+        — only Calibre Viewer JSON files are read. Failures are logged and
+        treated as "unchanged" so a transient error cannot spam the index
+        with false-positive updates.
+        """
         try:
             from src.calibre_mcp.annotations import get_combined_annotations
             from scripts.rag_demo import archillesRAG
@@ -329,8 +355,12 @@ class WatchdogScanner:
                 result.get('annotations', [])
             )
             return current_hash != stored_hash
-        except Exception:
-            return False  # assume unchanged on error
+        except Exception as exc:
+            logger.warning(
+                "Annotation check failed for %s: %s (assuming unchanged)",
+                file_path, exc,
+            )
+            return False
 
     def _queue_new_books(self, calibre_ids: list[int]) -> None:
         existing: list[int] = []
@@ -361,6 +391,8 @@ class WatchdogScanner:
             f"  errors: {len(results['errors'])}",
             f"  delta_updates: {results['delta_updates']}"
             + (f" completed in {results['delta_time']}s" if results['delta_updates'] else ""),
+            f"  new_indexed: {results.get('new_indexed', 0)}"
+            + (f" completed in {results.get('new_indexed_time', 0)}s" if results.get('new_indexed') else ""),
             "",
         ]
         self.archilles_dir.mkdir(parents=True, exist_ok=True)

@@ -91,6 +91,12 @@ def main() -> None:
     for i, (cid, info) in enumerate(to_process, 1):
         meta = calibre_meta[cid]
         book_id = info.get('book_id') or str(cid)
+        # Guard against SQL injection in the LanceDB where-clause. Current
+        # Calibre book_ids are numeric strings, but defence in depth is cheap.
+        if not book_id.isdigit():
+            print(f"  SKIP calibre_id={cid}: non-numeric book_id={book_id!r}")
+            errors += 1
+            continue
         try:
             new_hash = _compute_metadata_hash(meta)
             # Direct update — no count query afterwards

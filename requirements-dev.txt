@@ -1,0 +1,13 @@
+# ARCHILLES — Development Requirements
+# Install production deps + test/lint tooling:
+#   pip install -r requirements.txt -r requirements-dev.txt
+
+# Test framework
+pytest>=7.4.0
+
+# HTTP client used by tests/test_sse_transport.py
+httpx>=0.25.0
+
+# Formatting / linting (used in the `Code Quality` section of CLAUDE.md)
+black>=24.0.0
+flake8>=6.0.0
