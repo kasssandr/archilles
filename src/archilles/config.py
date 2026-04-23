@@ -58,3 +58,39 @@ def get_rag_db_path(library_path: Path | None = None) -> str:
             return str(Path(custom) if os.path.isabs(custom) else library_path / custom)
 
     return str(library_path / ".archilles" / "rag_db")
+
+
+# Tags that exclude a Calibre book from indexing. ``exclude`` is the only
+# universal convention shipped by default; users with language- or
+# workflow-specific tags (e.g. ``draft``, ``Übersetzung``) add them through
+# ``.archilles/config.json`` via the ``excluded_tags`` key.
+DEFAULT_EXCLUDED_TAGS: list[str] = ['exclude']
+
+
+def get_excluded_tags(library_path: Path | None = None) -> list[str]:
+    """Return the list of Calibre tags that exclude a book from indexing.
+
+    Reads ``excluded_tags`` from ``.archilles/config.json`` if present;
+    the config value **replaces** the defaults (symmetric with
+    ``rag_db_path``). Falls back to :data:`DEFAULT_EXCLUDED_TAGS`
+    (``['exclude']``) when no config file or key is present.
+
+    Example ``config.json``::
+
+        {
+          "excluded_tags": ["exclude", "draft", "Übersetzung"]
+        }
+    """
+    if library_path is None:
+        library_path = get_library_path()
+
+    config_path = library_path / ".archilles" / "config.json"
+    if config_path.exists():
+        import json
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        custom = config.get("excluded_tags")
+        if isinstance(custom, list):
+            return [str(t) for t in custom]
+
+    return list(DEFAULT_EXCLUDED_TAGS)
