@@ -295,6 +295,113 @@ Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop
 
 ---
 
+## Keeping Your Index in Sync
+
+Once your library is indexed, every book you edit, every tag you change, every highlight you add in Calibre is a divergence between Calibre and LanceDB. The **Watchdog** (`scripts/watchdog.py`) closes that gap: a fast scan that detects metadata and annotation changes via hash comparison, updates the LanceDB delta, and queues genuinely new books for the next batch-index run.
+
+A single scan touches no book files and usually finishes in a few seconds on a library of a few thousand titles. You only need to run it periodically — **daily or weekly is enough for most users; monthly is fine for libraries that don't change often**. Hourly schedules are overkill unless you're actively curating in Calibre all day.
+
+### Option A: Claude Routine (easiest if you use Claude)
+
+The MCP server exposes the scan as a tool called `watchdog_scan`. In Claude Desktop, create a Routine that calls it on your preferred schedule (Settings → Routines → New Routine → "Run tool `watchdog_scan`" → pick an interval). No shell, no scheduler, no configuration files.
+
+### Option B: Windows Task Scheduler
+
+For users who don't run Claude, or who prefer the OS-level scheduler:
+
+1. Open **Task Scheduler** (Win+R → `taskschd.msc`)
+2. **Create Basic Task…** → name it "Archilles Watchdog"
+3. **Trigger:** Daily (or Weekly / Monthly) at a quiet hour — e.g. 03:00 when you're not using the PC
+4. **Action:** Start a program
+   - **Program/script:** `C:\Path\To\Python\python.exe`
+   - **Arguments:** `C:\Path\To\archilles\scripts\watchdog.py --json`
+   - **Start in:** `C:\Path\To\archilles`
+5. On the final page, tick **"Open the Properties dialog when I click Finish"**, then under **Actions → Edit** add the environment variable via the **Run whether user is logged on or not** option, or supply it inline by wrapping the command in a small batch file:
+
+   ```bat
+   @echo off
+   set ARCHILLES_LIBRARY_PATH=D:\Your-Library
+   "C:\Path\To\Python\python.exe" "C:\Path\To\archilles\scripts\watchdog.py" --json >> "%TEMP%\archilles_watchdog.log" 2>&1
+   ```
+
+   Then point the task at the `.bat` file instead of `python.exe` directly.
+
+The scan writes a human-readable log to `<library>/.archilles/watchdog.log` regardless — the `%TEMP%` redirect above only captures the task's own stdout/stderr for debugging.
+
+### Option C: cron (Linux / macOS)
+
+```cron
+# Every night at 03:00
+0 3 * * * ARCHILLES_LIBRARY_PATH="/home/you/Calibre-Library" /usr/bin/python3 /home/you/archilles/scripts/watchdog.py --json >> /home/you/archilles-watchdog.log 2>&1
+
+# Once a week on Sundays at 04:00
+0 4 * * 0 ARCHILLES_LIBRARY_PATH="/home/you/Calibre-Library" /usr/bin/python3 /home/you/archilles/scripts/watchdog.py --json >> /home/you/archilles-watchdog.log 2>&1
+```
+
+Run `crontab -e` to edit your personal crontab. Use `which python3` and `which python` to find the correct interpreter path.
+
+### Option D: launchd (macOS, the native way)
+
+Create `~/Library/LaunchAgents/org.archilles.watchdog.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>                <string>org.archilles.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/you/archilles/scripts/watchdog.py</string>
+    <string>--json</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>ARCHILLES_LIBRARY_PATH</key>
+    <string>/Users/you/Calibre-Library</string>
+  </dict>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>               <integer>3</integer>
+    <key>Minute</key>             <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>      <string>/tmp/archilles-watchdog.log</string>
+  <key>StandardErrorPath</key>    <string>/tmp/archilles-watchdog.log</string>
+</dict>
+</plist>
+```
+
+Load it with `launchctl load ~/Library/LaunchAgents/org.archilles.watchdog.plist`. To remove it later, `launchctl unload …` then delete the file.
+
+### What the Watchdog Actually Does
+
+Each run produces a structured JSON report (with `--json`) and appends a human-readable summary to `<library>/.archilles/watchdog.log`:
+
+| Category | What triggers it | What happens |
+|----------|------------------|--------------|
+| **New books** | Book exists in Calibre but not in LanceDB | Written to `index_queue.json` for the next `batch_index.py` run |
+| **Metadata changed** | Title / author / tags / comments / publisher edited in Calibre | LanceDB updated in place (~1–3 s per book, no re-embedding) |
+| **Annotations changed** | Highlights or notes added / removed / edited | Annotation chunks re-indexed for the affected book |
+| **Unchanged** | No hash difference | Skipped (the common case) |
+
+New books are queued rather than indexed on the spot because embedding them takes ~90 s per book — you don't want your nightly scan to hold your machine for hours. Run `python scripts/batch_index.py` on your own schedule to drain the queue.
+
+The script exits with code `0` on success, `1` if any book failed — so external monitors can treat non-zero exits as a paging signal.
+
+### Choosing an Interval
+
+| How often you edit Calibre | Suggested schedule |
+|----------------------------|--------------------|
+| Daily research, frequent tagging / annotating | **Daily** (e.g. 03:00) |
+| Steady curation, a few edits per week | **Weekly** (e.g. Sunday 04:00) |
+| Mostly static collection, occasional additions | **Monthly** (e.g. 1st of the month) |
+| Active re-organisation session | Trigger manually: `python scripts/watchdog.py` |
+
+Intervals shorter than "daily" rarely help — metadata edits aren't time-critical, and running the scan more often doesn't speed up the next `batch_index.py` for new books.
+
+---
+
 ## Troubleshooting
 
 See [Troubleshooting Guide →](TROUBLESHOOTING.md) for MCP-specific issues including:
