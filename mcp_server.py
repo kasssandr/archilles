@@ -186,7 +186,7 @@ async def sse_server(
     from starlette.applications import Starlette
     from starlette.requests import Request
     from starlette.responses import Response
-    from starlette.routing import Route
+    from starlette.routing import Mount, Route
     import uvicorn
 
     logger.info(f"Starting ARCHILLES MCP Server (SSE mode) on {host}:{port}")
@@ -212,18 +212,29 @@ async def sse_server(
         result = await loop.run_in_executor(
             None, lambda: _dispatch_tool(server, name, arguments or {})
         )
-        return [
+        content = [
             types.TextContent(
                 type="text",
                 text=json.dumps(result, indent=2, ensure_ascii=False),
             )
         ]
+        is_error = isinstance(result, dict) and 'error' in result
+        return types.CallToolResult(content=content, isError=is_error)
 
     sse_transport = SseServerTransport("/messages/")
     init_options = mcp_srv.create_initialization_options()
 
     def _check_auth(request: Request) -> Response | None:
         if auth_token and request.headers.get("Authorization") != f"Bearer {auth_token}":
+            return Response("Unauthorized", status_code=401)
+        return None
+
+    def _check_auth_scope(scope) -> Response | None:
+        if not auth_token:
+            return None
+        headers = dict(scope.get("headers", []))
+        auth_hdr = headers.get(b"authorization", b"").decode()
+        if auth_hdr != f"Bearer {auth_token}":
             return Response("Unauthorized", status_code=401)
         return None
 
@@ -234,18 +245,29 @@ async def sse_server(
             request.scope, request.receive, request._send
         ) as (read_stream, write_stream):
             await mcp_srv.run(read_stream, write_stream, init_options)
+        # Starlette's Route wrapper awaits the handler's return value as an ASGI
+        # response, so we must return one even though the client has already
+        # disconnected by the time we get here.
+        return Response(status_code=204)
 
-    async def handle_messages(request: Request):
-        if (err := _check_auth(request)):
-            return err
-        await sse_transport.handle_post_message(
-            request.scope, request.receive, request._send
-        )
+    async def messages_app(scope, receive, send):
+        """ASGI wrapper for ``SseServerTransport.handle_post_message``.
+
+        Mounted (not Routed) so Starlette does not wrap it with
+        ``request_response()``: ``handle_post_message`` is already a full ASGI
+        app that writes its response via ``send`` and returns ``None`` —
+        letting Starlette's wrapper then ``await None(...)`` raises
+        ``TypeError: 'NoneType' object is not callable`` on every POST.
+        """
+        if (err := _check_auth_scope(scope)):
+            await err(scope, receive, send)
+            return
+        await sse_transport.handle_post_message(scope, receive, send)
 
     app = Starlette(
         routes=[
             Route("/sse", endpoint=handle_sse),
-            Route("/messages/", endpoint=handle_messages, methods=["POST"]),
+            Mount("/messages/", app=messages_app),
         ]
     )
 

@@ -337,8 +337,11 @@ class WatchdogScanner:
         ``stored='' → current='abc'`` (first-time annotations) and
         ``stored='abc' → current=''`` (annotations cleared).
 
-        PDF-native annotations (Adobe/Foxit) are skipped via ``include_pdf=False``
-        — only Calibre Viewer JSON files are read. Failures are logged and
+        PDF-native annotations (Adobe/Foxit) are included via ``include_pdf=True``
+        to match the indexer (``scripts/rag_demo.py``), which stores annotation
+        hashes computed over the combined Calibre-Viewer + PDF set. Using
+        ``include_pdf=False`` here would make every PDF with embedded
+        highlights look "changed" on every scan. Failures are logged and
         treated as "unchanged" so a transient error cannot spam the index
         with false-positive updates.
         """
@@ -347,7 +350,7 @@ class WatchdogScanner:
             from scripts.rag_demo import archillesRAG
             result = get_combined_annotations(
                 book_path=str(file_path),
-                include_pdf=False,   # skip PDF internals for speed; Calibre JSON is enough
+                include_pdf=True,
                 exclude_toc_markers=True,
                 min_length=20,
             )
