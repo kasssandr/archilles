@@ -90,3 +90,7 @@ ARCHILLES_USER_*.md
 # Runtime logs (belt-and-suspenders)
 server_stderr.log
 server_stdout.log
+
+# Prepare/Embed pipeline output (regenerated locally, large)
+prepared_chunks/
+prepared_chunks_test/
