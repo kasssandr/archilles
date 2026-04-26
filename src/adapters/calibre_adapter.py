@@ -5,6 +5,8 @@ This is a **wrapper**, not a replacement.  ``calibre_db.py`` stays untouched
 and continues to do the actual SQLite work.
 """
 
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -298,6 +300,94 @@ class CalibreAdapter(SourceAdapter):
             identifiers=identifiers,
             timestamps=timestamps,
         )
+
+    def compute_metadata_hash(self, doc_id: str) -> str:
+        """Hash over title/author/tags/comments/publisher — identical to watchdog._compute_metadata_hash.
+
+        Producing the same hash guarantees that LanceDB entries written by the
+        watchdog can be compared directly against adapter-computed hashes.
+        """
+        import sqlite3
+
+        db_path = self._library_path / "metadata.db"
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT title FROM books WHERE id = ?", (int(doc_id),)
+            ).fetchone()
+            if not row:
+                return ""
+
+            author_rows = conn.execute(
+                """
+                SELECT a.name FROM authors a
+                INNER JOIN books_authors_link bal ON a.id = bal.author
+                WHERE bal.book = ? ORDER BY bal.id
+                """,
+                (int(doc_id),),
+            ).fetchall()
+            author = " & ".join(r["name"] for r in author_rows)
+
+            tag_rows = conn.execute(
+                """
+                SELECT t.name FROM tags t
+                INNER JOIN books_tags_link btl ON t.id = btl.tag
+                WHERE btl.book = ?
+                """,
+                (int(doc_id),),
+            ).fetchall()
+            tags = sorted(r["name"] for r in tag_rows)
+
+            comment_row = conn.execute(
+                "SELECT text FROM comments WHERE book = ?", (int(doc_id),)
+            ).fetchone()
+            comments = (
+                CalibreDB.clean_html(comment_row["text"] or "")
+                if comment_row and comment_row["text"]
+                else ""
+            )
+
+            pub_row = conn.execute(
+                """
+                SELECT p.name FROM publishers p
+                INNER JOIN books_publishers_link bpl ON p.id = bpl.publisher
+                WHERE bpl.book = ?
+                """,
+                (int(doc_id),),
+            ).fetchone()
+            publisher = pub_row["name"] if pub_row else ""
+
+            relevant = {
+                "comments": comments,
+                "tags": tags,
+                "title": row["title"] or "",
+                "author": author,
+                "publisher": publisher,
+            }
+            return hashlib.md5(
+                json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        finally:
+            conn.close()
+
+    def compute_orphan_ids(self, lancedb_ids: set[str]) -> set[str]:
+        """Diff against ``SELECT id FROM books`` — narrow query, no joins.
+
+        ``list_documents()`` would build full DocumentMetadata for every book
+        (tags, authors, comments) which is wasteful for an ID-only diff.
+        IDs from LanceDB are normalised to ``str`` because legacy entries can
+        be stored as ints.
+        """
+        import sqlite3
+
+        conn = sqlite3.connect(self._library_path / "metadata.db")
+        try:
+            rows = conn.execute("SELECT id FROM books").fetchall()
+            current = {str(r[0]) for r in rows}
+        finally:
+            conn.close()
+        return {str(x) for x in lancedb_ids} - current
 
     def _book_data_to_metadata(
         self, book_data: dict, file_path: Path

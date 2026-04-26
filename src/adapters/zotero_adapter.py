@@ -6,6 +6,8 @@ layer that bypasses normal SQLite locking — writing while Zotero is running
 would corrupt the database.
 """
 
+import hashlib
+import json
 import logging
 import re
 import sqlite3
@@ -451,3 +453,56 @@ class ZoteroAdapter(SourceAdapter):
             return self._get_field(conn, item_row["itemID"], "abstractNote")
         finally:
             conn.close()
+
+    def compute_metadata_hash(self, doc_id: str) -> str:
+        """Hash over title/authors/tags/abstract/date for change detection.
+
+        Authors are sorted alphabetically so that reordering authors in
+        Zotero's UI does not trigger a false-positive watchdog update.
+        Use ``_get_creators()`` directly if insertion order matters.
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()
+            if not row:
+                return ""
+            item_id = row["itemID"]
+
+            fields = self._get_fields(conn, item_id, ["title", "abstractNote", "date"])
+            authors = self._get_creators(conn, item_id)
+            tags = self._get_tags(conn, item_id)
+
+            relevant = {
+                "title": fields.get("title", ""),
+                "authors": sorted(authors),
+                "tags": sorted(tags),
+                "abstract": fields.get("abstractNote", ""),
+                "date": fields.get("date", ""),
+            }
+            return hashlib.md5(
+                json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+        finally:
+            conn.close()
+
+    def compute_orphan_ids(self, lancedb_ids: set[str]) -> set[str]:
+        """Diff against ``items.key`` — same filters as ``list_documents()``.
+
+        Excluded item types (annotation/attachment/note) and trashed items
+        must match list_documents() exactly, otherwise children of an item
+        would be flagged as orphans on every cleanup pass.
+        """
+        excluded = ",".join(str(t) for t in _EXCLUDED_TYPE_IDS)
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                f"""
+                SELECT key FROM items
+                WHERE itemTypeID NOT IN ({excluded})
+                AND itemID NOT IN (SELECT itemID FROM deletedItems)
+                """
+            ).fetchall()
+            current = {r[0] for r in rows}
+        finally:
+            conn.close()
+        return {str(x) for x in lancedb_ids} - current

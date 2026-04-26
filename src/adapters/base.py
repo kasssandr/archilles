@@ -130,3 +130,27 @@ class SourceAdapter(ABC):
             if doc.file_path.resolve() == file_path:
                 return doc
         return None
+
+    def compute_metadata_hash(self, doc_id: str) -> str:
+        """Stable hash over a document's key metadata fields.
+
+        Used by the Watchdog to detect changes without opening book files.
+        Returns ``""`` if the document is not found or the adapter does not
+        support hash-based change detection.  Adapters should override this
+        with an efficient, source-specific implementation.
+        """
+        return ""
+
+    def compute_orphan_ids(self, lancedb_ids: set[str]) -> set[str]:
+        """Return the subset of ``lancedb_ids`` no longer present in the source.
+
+        Given the set of doc_ids currently held in LanceDB, the adapter compares
+        them against the live source and returns the difference — these are
+        orphan entries that should be removed during cleanup.
+
+        Returns the empty set if the adapter does not support orphan detection;
+        callers should interpret that as "no cleanup performed", not "all
+        clean".  Adapters should override this with an efficient,
+        source-specific implementation.
+        """
+        return set()
