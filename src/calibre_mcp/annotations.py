@@ -478,8 +478,8 @@ def get_combined_annotations(
     Returns:
         Dictionary with annotations and metadata
     """
-    from .annotation_providers.calibre_provider import CalibreViewerProvider
-    from .annotation_providers.pdf_provider import PdfAnnotationProvider
+    from src.archilles.annotation_providers.calibre_viewer_provider import CalibreViewerProvider
+    from src.archilles.annotation_providers.pdf_provider import PdfAnnotationProvider
 
     all_annotations = []
 

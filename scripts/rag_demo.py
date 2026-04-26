@@ -2571,7 +2571,7 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
 def _handle_import_annotations(args):
     """Handle the import-annotations subcommand (no RAG model needed)."""
-    from src.calibre_mcp.annotation_providers import create_default_registry
+    from src.archilles.annotation_providers import create_default_registry
     from src.calibre_mcp.book_matcher import BookMatcher
 
     source = args.source
