@@ -170,6 +170,17 @@ def master_config_path() -> Path:
     return Path.home() / ".archilles" / "config.json"
 
 
+def master_archilles_dir() -> Path:
+    """Directory holding master-level shared metadata (config, research interests).
+
+    Returns the parent of :func:`master_config_path` — defaults to
+    ``~/.archilles/`` and follows ``$ARCHILLES_CONFIG_PATH`` when set.
+    The directory is not created here; callers that intend to write should
+    do so themselves.
+    """
+    return master_config_path().parent
+
+
 def load_master_config(path: Path | None = None) -> MasterConfig | None:
     """Load and validate the unified master config.
 

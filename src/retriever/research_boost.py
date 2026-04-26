@@ -41,6 +41,49 @@ def save_research_interests(
     logger.info("Saved %d research interest keywords to %s", len(keywords), path)
 
 
+def load_effective_research_interests(
+    library_dir: str | Path | None,
+    master_dir: str | Path | None = None,
+) -> tuple[list[str], float]:
+    """Load research interests with master + library-local override.
+
+    Lookup order — a layer with non-empty keywords replaces the previous one:
+
+    1. ``<master_dir>/research_interests.json`` (defaults to
+       :func:`src.archilles.config.master_archilles_dir`)
+    2. ``<library_dir>/research_interests.json``  (per-source override)
+
+    Layers do not merge: when the user sets a Zotero-specific list, it
+    replaces the master list outright, since "boost everything" is rarely
+    the intention behind a per-source config.
+
+    Returns ``([], 0.0)`` if no layer has keywords. ``library_dir`` may be
+    ``None`` for the master-only case (e.g. an aggregated view with no
+    specific source context).
+    """
+    if master_dir is None:
+        try:
+            from src.archilles.config import master_archilles_dir
+            master_dir = master_archilles_dir()
+        except Exception:
+            master_dir = None
+
+    keywords: list[str] = []
+    boost: float = 0.0
+
+    if master_dir is not None:
+        m_kw, m_boost = load_research_interests(master_dir)
+        if m_kw:
+            keywords, boost = m_kw, m_boost
+
+    if library_dir is not None:
+        l_kw, l_boost = load_research_interests(library_dir)
+        if l_kw:
+            keywords, boost = l_kw, l_boost
+
+    return keywords, boost
+
+
 def apply_research_boost(
     results: list[dict],
     keywords: list[str],

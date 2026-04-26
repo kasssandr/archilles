@@ -278,8 +278,11 @@ class ArchillesService:
 
         if boost_research_interests and self._archilles_dir:
             try:
-                from src.retriever.research_boost import apply_research_boost, load_research_interests
-                keywords, boost_factor = load_research_interests(self._archilles_dir)
+                from src.retriever.research_boost import (
+                    apply_research_boost,
+                    load_effective_research_interests,
+                )
+                keywords, boost_factor = load_effective_research_interests(self._archilles_dir)
                 if keywords:
                     results = apply_research_boost(results, keywords, boost_factor)
                     logger.debug("Applied research boost (%d keywords)", len(keywords))
