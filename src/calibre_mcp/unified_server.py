@@ -10,52 +10,56 @@ LanceDB, and routes tool calls:
 - single-source tools dispatch via the ``source`` parameter (default =
   ``master.default_source``);
 - aggregation tools (search, list-style) fan out across all sources in
-  parallel and merge the results;
-- Calibre-only tools are gated behind :pyattr:`UnifiedMCPServer.calibre_sources`.
+  parallel and merge the results — search-tools merge by score, list-tools
+  concatenate with source markers;
+- Calibre-only tools (``detect_duplicates``, ``watchdog_scan``) are gated
+  behind :pyattr:`UnifiedMCPServer.calibre_sources` and require an explicit
+  ``source``;
+- ``set_research_interests`` reads/writes a master file when ``source`` is
+  ``None``, or the source-local file when set, and the search-time boost
+  layers them via ``load_effective_research_interests``.
 
 The legacy single-source :class:`CalibreMCPServer` is left untouched —
 ``mcp_server.py`` chooses between the two depending on whether a master
 config is present.
-
-This module currently provides only the dispatcher skeleton. Tool methods
-and the unified tool-schema generator live in a follow-up step.
 """
 
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from src.archilles.config import (
     MasterConfig,
     master_archilles_dir,
     resolve_source_config,
 )
-from src.calibre_mcp.server import CalibreMCPServer
+from src.calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 
 logger = logging.getLogger(__name__)
 
 
-class UnifiedMCPServer:
-    """Multi-source dispatcher for ARCHILLES MCP tools.
+# ── Tool classification (used by create_unified_tools) ────────────────────
 
-    Parameters
-    ----------
-    servers:
-        Mapping from source name to a fully-initialised inner server.
-    default_source:
-        Name of the source returned by :meth:`resolve_source` when called
-        with ``source=None``. Must be a key in *servers*. If ``None`` and
-        only one source is configured, that source becomes the default; if
-        ``None`` with multiple sources, single-item tool calls without an
-        explicit ``source`` argument will raise.
-    master_dir:
-        Directory holding master-level shared metadata (e.g.
-        ``research_interests.json``).
-    instance_name:
-        Human-readable server name for ``serverInfo`` in MCP handshakes.
-    """
+_REMOVED_TOOLS = {"get_doublette_tag_instruction"}
+_CALIBRE_ONLY_TOOLS = {"detect_duplicates", "watchdog_scan"}
+_PATH_INFERRED_TOOLS = {"get_book_annotations", "compute_annotation_hash"}
+_AGGREGATION_TOOLS = {
+    "search_books_with_citations",
+    "search_annotations",
+    "list_books_by_author",
+    "list_tags",
+    "list_annotated_books",
+    "export_bibliography",
+}
+# Tools that take an optional `source` parameter (default = master default_source).
+_SOURCE_OPTIONAL = _AGGREGATION_TOOLS | {"get_book_details", "set_research_interests"}
+
+
+class UnifiedMCPServer:
+    """Multi-source dispatcher for ARCHILLES MCP tools."""
 
     def __init__(
         self,
@@ -71,7 +75,6 @@ class UnifiedMCPServer:
                 f"default_source {default_source!r} not in {sorted(servers)}"
             )
         self.servers = servers
-        # Implicit default when exactly one source is configured.
         if default_source is None and len(servers) == 1:
             default_source = next(iter(servers))
         self.default_source = default_source
@@ -82,14 +85,7 @@ class UnifiedMCPServer:
 
     @classmethod
     def from_master_config(cls, master: MasterConfig) -> "UnifiedMCPServer":
-        """Build the unified server from a parsed :class:`MasterConfig`.
-
-        Each source is resolved via :func:`resolve_source_config` (master
-        globals → master.sources[name] → library-local override) and turned
-        into a :class:`CalibreMCPServer`. Sources whose adapter fails to
-        construct are logged and skipped, so a single misconfigured library
-        does not bring down the whole server.
-        """
+        """Build the unified server from a parsed :class:`MasterConfig`."""
         from src.adapters import create_adapter
 
         try:
@@ -130,10 +126,7 @@ class UnifiedMCPServer:
                 "No source could be initialised — check master config and adapters"
             )
 
-        # If master.default_source pointed at a source that failed to load,
-        # demote it to None and let __init__ pick the implicit default.
         default = master.default_source if master.default_source in servers else None
-
         return cls(
             servers=servers,
             default_source=default,
@@ -143,12 +136,7 @@ class UnifiedMCPServer:
     # ── Source resolution ────────────────────────────────────────────────
 
     def resolve_source(self, source: Optional[str]) -> CalibreMCPServer:
-        """Pick a server for a single-source tool call.
-
-        ``source=None`` returns the default source; passing an unknown name
-        raises :class:`KeyError` with the list of available sources, so the
-        caller can surface a helpful error to the LLM client.
-        """
+        """Pick a server for a single-source tool call."""
         if source is None:
             if self.default_source is None:
                 raise KeyError(
@@ -165,10 +153,8 @@ class UnifiedMCPServer:
     def resolve_source_for_path(self, book_path: str) -> Optional[str]:
         """Find which source a filesystem path belongs to.
 
-        Uses path-prefix matching against each source's ``library_path``.
-        On nested libraries the longest-prefix match wins. Returns ``None``
-        if no source covers the path; callers should treat that as a hard
-        error and surface it to the user.
+        Longest-prefix match against each source's ``library_path``.
+        Returns ``None`` if no source covers the path.
         """
         try:
             target = Path(book_path).resolve()
@@ -198,12 +184,7 @@ class UnifiedMCPServer:
 
     @property
     def calibre_sources(self) -> list[str]:
-        """Names of sources whose adapter is Calibre.
-
-        Used to gate Calibre-specific tools (``detect_duplicates``,
-        ``watchdog_scan``) — these are only registered in the MCP tool list
-        when at least one Calibre source is present.
-        """
+        """Names of sources whose adapter is Calibre."""
         return [
             name
             for name, srv in self.servers.items()
@@ -214,3 +195,645 @@ class UnifiedMCPServer:
     def source_names(self) -> list[str]:
         """Sorted list of all source names, for tool-schema enumerations."""
         return sorted(self.servers)
+
+    # ── Aggregation helper ───────────────────────────────────────────────
+
+    def _parallel_call(self, method_name: str, **kwargs) -> dict[str, Any]:
+        """Call ``method_name`` on every inner server in parallel.
+
+        Returns ``{source_name: result}``. An exception in one source is
+        captured as ``{'error': ...}`` for that source so a single failure
+        cannot break the aggregation.
+        """
+        def _one(item):
+            name, server = item
+            try:
+                method = getattr(server, method_name)
+                return name, method(**kwargs)
+            except Exception as e:
+                logger.exception("Tool %s failed in source %r", method_name, name)
+                return name, {"error": f"{method_name} failed: {e}"}
+
+        if not self.servers:
+            return {}
+        with ThreadPoolExecutor(max_workers=len(self.servers)) as ex:
+            return dict(ex.map(_one, self.servers.items()))
+
+    # ── Search tools (score-merge) ───────────────────────────────────────
+
+    def search_books_with_citations_tool(
+        self,
+        query: str,
+        top_k: int = 10,
+        mode: str = "hybrid",
+        language: Optional[str] = None,
+        tags: Optional[list[str]] = None,
+        expand_context: bool = False,
+        boost_research_interests: bool = True,
+        max_per_book: int = 3,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Multi-source search with central citation generation.
+
+        With ``source`` set, delegates to a single inner server (per-source
+        citations as today). Otherwise searches every source in parallel
+        via ``service.search`` (no per-source citation block), merges
+        results by score, and runs ONE ``create_claude_prompt`` over the
+        merged top_k. Each result carries a ``source`` field so the LLM
+        can disambiguate the citations.
+        """
+        if source is not None:
+            srv = self.resolve_source(source)
+            result = srv.search_books_with_citations_tool(
+                query=query, top_k=top_k, mode=mode, language=language,
+                tags=tags, expand_context=expand_context,
+                boost_research_interests=boost_research_interests,
+                max_per_book=max_per_book,
+            )
+            if isinstance(result, dict):
+                result["source"] = source
+            return result
+
+        def _search_one(item):
+            name, srv = item
+            if not srv._ensure_rag_initialized():
+                return name, []
+            try:
+                results = srv.service.search(
+                    query=query,
+                    mode=mode,
+                    top_k=max(top_k * 2, top_k),  # over-fetch per source
+                    language=language,
+                    tag_filter=tags,
+                    max_per_book=max_per_book,
+                )
+                if boost_research_interests and srv._archilles_dir:
+                    from src.retriever.research_boost import (
+                        apply_research_boost,
+                        load_effective_research_interests,
+                    )
+                    kw, bf = load_effective_research_interests(srv._archilles_dir)
+                    if kw:
+                        results = apply_research_boost(results, kw, bf)
+                for r in results:
+                    r["source"] = name
+                return name, results
+            except Exception:
+                logger.exception("search failed in source %r", name)
+                return name, []
+
+        with ThreadPoolExecutor(max_workers=len(self.servers)) as ex:
+            per_source = list(ex.map(_search_one, self.servers.items()))
+
+        merged: list = []
+        per_source_counts: dict[str, int] = {}
+        for name, results in per_source:
+            per_source_counts[name] = len(results)
+            merged.extend(results)
+
+        if not merged:
+            return {
+                "query": query,
+                "num_results": 0,
+                "message": "No results found across any source",
+                "per_source_counts": per_source_counts,
+            }
+
+        merged.sort(
+            key=lambda r: r.get("rerank_score", r.get("score", 0.0)),
+            reverse=True,
+        )
+        merged = merged[:top_k]
+        for i, r in enumerate(merged, 1):
+            r["rank"] = i
+
+        # Generate ONE citation block via the default-source's _rag instance.
+        # The Citation-Builder formats result dicts to XML — it does not need
+        # to live in the same library that produced the chunk.
+        try:
+            citation_srv = self.resolve_source(None)
+        except KeyError:
+            citation_srv = next(iter(self.servers.values()))
+        if not citation_srv._ensure_rag_initialized():
+            return {
+                "query": query,
+                "num_results": len(merged),
+                "per_source_counts": per_source_counts,
+                "raw_results": merged,
+                "warning": "Citation generation skipped — RAG not initialised in default source",
+            }
+
+        claude_prompt = citation_srv.service._rag.create_claude_prompt(
+            results=merged,
+            query_text=query,
+            expand_context=expand_context,
+            citation_config=citation_srv.citation_config,
+        )
+
+        return {
+            "query": query,
+            "num_results": len(merged),
+            "search_mode": mode,
+            "language_filter": language,
+            "per_source_counts": per_source_counts,
+            "system_prompt": claude_prompt["system"],
+            "user_prompt": claude_prompt["user"],
+            "usage_instructions": (
+                "Copy 'system_prompt' to the system field, then 'user_prompt' to the message. "
+                "Citations [doc_N] reference the documents — each carries its 'source' field."
+            ),
+            "raw_results": [
+                {
+                    "rank": r["rank"],
+                    "source": r.get("source"),
+                    "text_preview": r["text"][:200] + "..." if len(r.get("text", "")) > 200 else r.get("text", ""),
+                    "similarity": r.get("rerank_score", r.get("score", 0.0)),
+                    "metadata": {
+                        "author": r.get("metadata", {}).get("author"),
+                        "title": r.get("metadata", {}).get("book_title"),
+                        "year": r.get("metadata", {}).get("year"),
+                        "page": r.get("metadata", {}).get("page"),
+                    },
+                }
+                for r in merged
+            ],
+        }
+
+    def search_annotations_tool(
+        self,
+        query: str,
+        max_results: int = 30,
+        max_per_book: int = 5,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if source is not None:
+            srv = self.resolve_source(source)
+            res = srv.search_annotations_tool(
+                query=query, max_results=max_results, max_per_book=max_per_book,
+            )
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        per_source = self._parallel_call(
+            "search_annotations_tool",
+            query=query, max_results=max_results, max_per_book=max_per_book,
+        )
+
+        merged: list = []
+        per_source_counts: dict[str, int] = {}
+        for name, res in per_source.items():
+            if not isinstance(res, dict) or "error" in res:
+                per_source_counts[name] = 0
+                continue
+            results = res.get("results") or []
+            for r in results:
+                if isinstance(r, dict):
+                    r["source"] = name
+            merged.extend(results)
+            per_source_counts[name] = len(results)
+
+        merged.sort(
+            key=lambda r: r.get("rerank_score", r.get("score", r.get("similarity", 0.0))) if isinstance(r, dict) else 0.0,
+            reverse=True,
+        )
+        merged = merged[:max_results]
+
+        return {
+            "query": query,
+            "search_type": "semantic",
+            "result_count": len(merged),
+            "per_source_counts": per_source_counts,
+            "results": merged,
+        }
+
+    # ── List tools (concat) ──────────────────────────────────────────────
+
+    def list_books_by_author_tool(
+        self,
+        author: str,
+        tags: Optional[list[str]] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        sort_by: str = "title",
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if source is not None:
+            srv = self.resolve_source(source)
+            res = srv.list_books_by_author_tool(
+                author=author, tags=tags, year_from=year_from,
+                year_to=year_to, sort_by=sort_by,
+            )
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        per_source = self._parallel_call(
+            "list_books_by_author_tool",
+            author=author, tags=tags, year_from=year_from,
+            year_to=year_to, sort_by=sort_by,
+        )
+
+        all_books: list = []
+        per_source_counts: dict[str, int] = {}
+        for name, res in per_source.items():
+            if not isinstance(res, dict) or "error" in res:
+                per_source_counts[name] = 0
+                continue
+            books = res.get("books") or []
+            for b in books:
+                if isinstance(b, dict):
+                    b["source"] = name
+            all_books.extend(books)
+            per_source_counts[name] = len(books)
+
+        if sort_by == "year":
+            all_books.sort(key=lambda x: x.get("year") or 0, reverse=True)
+        else:
+            all_books.sort(key=lambda x: (x.get("title") or "").lower())
+
+        return {
+            "books": all_books,
+            "count": len(all_books),
+            "author_query": author,
+            "per_source_counts": per_source_counts,
+        }
+
+    def list_tags_tool(
+        self,
+        min_books: int = 1,
+        max_tags: int = 100,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if source is not None:
+            srv = self.resolve_source(source)
+            res = srv.list_tags_tool(min_books=min_books, max_tags=max_tags)
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        per_source = self._parallel_call(
+            "list_tags_tool", min_books=min_books, max_tags=max_tags,
+        )
+
+        all_tags: list = []
+        per_source_counts: dict[str, int] = {}
+        for name, res in per_source.items():
+            if not isinstance(res, dict) or "error" in res:
+                per_source_counts[name] = 0
+                continue
+            tags = res.get("tags") or []
+            for t in tags:
+                if isinstance(t, dict):
+                    t["source"] = name
+            all_tags.extend(tags)
+            per_source_counts[name] = len(tags)
+
+        all_tags.sort(key=lambda t: -t.get("book_count", 0))
+        limited = all_tags[:max_tags]
+
+        return {
+            "returned_tags": len(limited),
+            "tags": limited,
+            "per_source_counts": per_source_counts,
+            "usage": (
+                'Use these tag names in the "tags" parameter; '
+                'pass "source" to scope to one library.'
+            ),
+        }
+
+    def list_annotated_books_tool(
+        self,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if source is not None:
+            srv = self.resolve_source(source)
+            res = srv.list_annotated_books_tool()
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        per_source = self._parallel_call("list_annotated_books_tool")
+        all_books: list = []
+        per_source_counts: dict[str, int] = {}
+        for name, res in per_source.items():
+            if not isinstance(res, dict) or "error" in res:
+                per_source_counts[name] = 0
+                continue
+            books = res.get("books") or []
+            for b in books:
+                if isinstance(b, dict):
+                    b["source"] = name
+            all_books.extend(books)
+            per_source_counts[name] = len(books)
+
+        return {
+            "total_books": len(all_books),
+            "books": all_books,
+            "per_source_counts": per_source_counts,
+        }
+
+    def export_bibliography_tool(
+        self,
+        format: str = "bibtex",
+        author: Optional[str] = None,
+        tag: Optional[str] = None,
+        year_from: Optional[int] = None,
+        year_to: Optional[int] = None,
+        max_books: Optional[int] = None,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        if source is not None:
+            srv = self.resolve_source(source)
+            res = srv.export_bibliography_tool(
+                format=format, author=author, tag=tag,
+                year_from=year_from, year_to=year_to, max_books=max_books,
+            )
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        per_source = self._parallel_call(
+            "export_bibliography_tool",
+            format=format, author=author, tag=tag,
+            year_from=year_from, year_to=year_to, max_books=max_books,
+        )
+
+        chunks: list[str] = []
+        per_source_counts: dict[str, int] = {}
+        for name, res in per_source.items():
+            if not isinstance(res, dict) or "error" in res:
+                per_source_counts[name] = 0
+                continue
+            text = res.get("bibliography") or ""
+            count = res.get("count", 0)
+            per_source_counts[name] = count
+            if text:
+                chunks.append(f"% --- Source: {name} ({count} entries) ---\n{text}")
+
+        return {
+            "format": format,
+            "bibliography": "\n\n".join(chunks),
+            "count": sum(per_source_counts.values()),
+            "per_source_counts": per_source_counts,
+        }
+
+    # ── Single-source tools (path-inferred) ──────────────────────────────
+
+    def get_book_annotations_tool(self, book_path: str, **kwargs) -> dict[str, Any]:
+        source = self.resolve_source_for_path(book_path)
+        if source is None:
+            return {
+                "error": f"No source covers {book_path!r}",
+                "available_sources": self.source_names,
+            }
+        srv = self.servers[source]
+        res = srv.get_book_annotations_tool(book_path=book_path, **kwargs)
+        if isinstance(res, dict):
+            res["source"] = source
+        return res
+
+    def compute_hash_tool(self, book_path: str) -> dict[str, Any]:
+        source = self.resolve_source_for_path(book_path)
+        if source is None:
+            return {
+                "error": f"No source covers {book_path!r}",
+                "available_sources": self.source_names,
+            }
+        srv = self.servers[source]
+        res = srv.compute_hash_tool(book_path=book_path)
+        if isinstance(res, dict):
+            res["source"] = source
+        return res
+
+    # ── Single-source tool with `source` parameter ───────────────────────
+
+    def get_book_details_tool(
+        self,
+        book_id: int,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        try:
+            srv = self.resolve_source(source)
+        except KeyError as e:
+            return {"error": str(e), "available_sources": self.source_names}
+        res = srv.get_book_details_tool(book_id=book_id)
+        if isinstance(res, dict):
+            res["source"] = source if source is not None else self.default_source
+        return res
+
+    # ── Global state ─────────────────────────────────────────────────────
+
+    def set_research_interests_tool(
+        self,
+        keywords: Optional[list[str]] = None,
+        boost_factor: float = 0.15,
+        action: str = "set",
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """View or update research interests with master/source split.
+
+        ``source=None`` operates on the master file
+        (``master_dir/research_interests.json``); ``source='X'`` operates
+        on the source's library-local file. ``action='get'`` with a source
+        returns the EFFECTIVE merge so the user can see what actually
+        applies to that source's searches.
+        """
+        from src.retriever.research_boost import (
+            load_effective_research_interests,
+            load_research_interests,
+            save_research_interests,
+        )
+
+        if source is None:
+            target_dir: Path = self.master_dir
+            scope = "master"
+        else:
+            try:
+                srv = self.resolve_source(source)
+            except KeyError as e:
+                return {"error": str(e), "available_sources": self.source_names}
+            if srv._archilles_dir is None:
+                return {"error": f"Source {source!r} has no .archilles directory"}
+            target_dir = srv._archilles_dir
+            scope = source
+
+        try:
+            if action == "get":
+                if source is None:
+                    kw, bf = load_research_interests(target_dir)
+                    return {
+                        "action": "get",
+                        "scope": scope,
+                        "keywords": kw,
+                        "boost_factor": bf,
+                        "keyword_count": len(kw),
+                        "file": str(target_dir / "research_interests.json"),
+                    }
+                kw, bf = load_effective_research_interests(target_dir)
+                return {
+                    "action": "get",
+                    "scope": scope,
+                    "keywords": kw,
+                    "boost_factor": bf,
+                    "keyword_count": len(kw),
+                    "effective": True,
+                    "note": "Effective merge (master + library override) for this source.",
+                }
+
+            if action == "set":
+                if keywords is None:
+                    return {"error": 'keywords parameter required for action="set"'}
+                save_research_interests(target_dir, keywords, boost_factor)
+                return {
+                    "action": "set",
+                    "scope": scope,
+                    "keywords": keywords,
+                    "boost_factor": boost_factor,
+                    "keyword_count": len(keywords),
+                    "file": str(target_dir / "research_interests.json"),
+                    "message": (
+                        f"Saved {len(keywords)} keywords to {scope!r}. "
+                        "Boost will apply to future searches."
+                    ),
+                }
+
+            return {"error": f'Unknown action: {action!r}. Use "get" or "set".'}
+        except Exception as e:
+            logger.error("set_research_interests failed: %s", e, exc_info=True)
+            return {"error": str(e)}
+
+    # ── Calibre-only tools ───────────────────────────────────────────────
+
+    def detect_duplicates_tool(
+        self,
+        source: str,
+        method: str = "title_author",
+        include_doublette_tag: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            srv = self.resolve_source(source)
+        except KeyError as e:
+            return {"error": str(e), "available_sources": self.source_names}
+        if source not in self.calibre_sources:
+            atype = srv.adapter.adapter_type if srv.adapter else "non-Calibre"
+            return {
+                "error": (
+                    f"detect_duplicates is Calibre-only; {source!r} is a "
+                    f"{atype} source"
+                ),
+                "calibre_sources": self.calibre_sources,
+            }
+        res = srv.detect_duplicates_tool(
+            method=method, include_doublette_tag=include_doublette_tag,
+        )
+        if isinstance(res, dict):
+            res["source"] = source
+        return res
+
+    def watchdog_scan_tool(
+        self,
+        source: str,
+        dry_run: bool = False,
+        queue_new: bool = True,
+        index_new: bool = False,
+    ) -> dict[str, Any]:
+        try:
+            srv = self.resolve_source(source)
+        except KeyError as e:
+            return {"error": str(e), "available_sources": self.source_names}
+        if source not in self.calibre_sources:
+            atype = srv.adapter.adapter_type if srv.adapter else "non-Calibre"
+            return {
+                "error": (
+                    f"watchdog_scan is currently Calibre-only; {source!r} is a "
+                    f"{atype} source"
+                ),
+                "calibre_sources": self.calibre_sources,
+            }
+        res = srv.watchdog_scan_tool(
+            dry_run=dry_run, queue_new=queue_new, index_new=index_new,
+        )
+        if isinstance(res, dict):
+            res["source"] = source
+        return res
+
+
+# ── Tool-schema generator ────────────────────────────────────────────────
+
+def create_unified_tools(server: UnifiedMCPServer) -> list[dict]:
+    """Build tool schemas for the unified server.
+
+    Reuses the schemas from :func:`create_mcp_tools` so any change to the
+    single-server tool list is picked up automatically. Cross-source
+    machinery is applied here:
+
+    - ``get_doublette_tag_instruction``: removed.
+    - Calibre-only tools: gated behind ``calibre_sources``; if registered,
+      ``source`` becomes a required enum of Calibre sources.
+    - Path-inferred tools: untouched (source comes from ``book_path``).
+    - Aggregation and other source-optional tools: gain an optional
+      ``source`` enum across all sources, with semantics described in the
+      schema's description string.
+    """
+    seed = next(iter(server.servers.values()))
+    base_tools = create_mcp_tools(seed)
+    source_names = server.source_names
+    have_calibre = bool(server.calibre_sources)
+
+    out: list[dict] = []
+    for tool in base_tools:
+        name = tool["name"]
+        if name in _REMOVED_TOOLS:
+            continue
+        if name in _CALIBRE_ONLY_TOOLS and not have_calibre:
+            continue
+
+        if name in _CALIBRE_ONLY_TOOLS:
+            schema = dict(tool["inputSchema"])
+            props = dict(schema.get("properties") or {})
+            props["source"] = {
+                "type": "string",
+                "enum": server.calibre_sources,
+                "description": (
+                    "Calibre source name (required — this tool is Calibre-specific)."
+                ),
+            }
+            schema["properties"] = props
+            req_list = list(schema.get("required") or [])
+            if "source" not in req_list:
+                req_list.append("source")
+            schema["required"] = req_list
+            out.append(dict(tool, inputSchema=schema))
+            continue
+
+        if name in _PATH_INFERRED_TOOLS:
+            out.append(tool)
+            continue
+
+        if name in _SOURCE_OPTIONAL:
+            schema = dict(tool["inputSchema"])
+            props = dict(schema.get("properties") or {})
+            if name in _AGGREGATION_TOOLS:
+                description = (
+                    f"Optional: limit to one source. Available: {source_names}. "
+                    "Default = aggregate across all sources."
+                )
+            else:
+                default = server.default_source
+                description = (
+                    f"Optional source override. Available: {source_names}. "
+                    f"Default: {default!r}."
+                )
+            props["source"] = {
+                "type": "string",
+                "enum": source_names,
+                "description": description,
+            }
+            schema["properties"] = props
+            out.append(dict(tool, inputSchema=schema))
+            continue
+
+        out.append(tool)
+
+    return out
