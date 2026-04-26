@@ -33,6 +33,105 @@ from .annotations import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Standalone bibliography formatters
+# These work on normalized book dicts (adapter-agnostic) and are reused by
+# both the Calibre-path and the adapter-fallback of export_bibliography_tool.
+# Normalized book dict keys: id, title, authors (list), year (int|None),
+# publisher (str), identifiers (dict), tags (list), formats (list).
+# ---------------------------------------------------------------------------
+
+def _bib_bibtex(books: list[dict]) -> str:
+    import csv as _csv; del _csv  # noqa: imported by _bib_csv only
+    entries = []
+    for b in books:
+        last = b['authors'][0].split()[-1] if b['authors'] else 'Unknown'
+        yr = str(b['year']) if b['year'] else 'NODATE'
+        key = f"{''.join(c for c in b['title'][:20] if c.isalnum())}"
+        cite = f"{last}{yr}{key}"
+        e = f"@book{{{cite},\n  title = {{{b['title']}}},\n"
+        if b['authors']:
+            e += f"  author = {{{' and '.join(b['authors'])}}},\n"
+        if b['year']:
+            e += f"  year = {{{b['year']}}},\n"
+        if b.get('publisher'):
+            e += f"  publisher = {{{b['publisher']}}},\n"
+        if b.get('identifiers', {}).get('isbn'):
+            e += f"  isbn = {{{b['identifiers']['isbn']}}},\n"
+        if b.get('tags'):
+            e += f"  keywords = {{{', '.join(b['tags'])}}},\n"
+        e += "}"
+        entries.append(e)
+    return '\n\n'.join(entries)
+
+
+def _bib_ris(books: list[dict]) -> str:
+    entries = []
+    for b in books:
+        e = "TY  - BOOK\n"
+        e += f"TI  - {b['title']}\n"
+        for a in b['authors']:
+            e += f"AU  - {a}\n"
+        if b['year']:
+            e += f"PY  - {b['year']}\n"
+        if b.get('publisher'):
+            e += f"PB  - {b['publisher']}\n"
+        if b.get('identifiers', {}).get('isbn'):
+            e += f"SN  - {b['identifiers']['isbn']}\n"
+        for t in b.get('tags', []):
+            e += f"KW  - {t}\n"
+        e += "ER  - "
+        entries.append(e)
+    return '\n\n'.join(entries)
+
+
+def _bib_endnote(books: list[dict]) -> str:
+    entries = []
+    for b in books:
+        e = "%0 Book\n"
+        e += f"%T {b['title']}\n"
+        for a in b['authors']:
+            e += f"%A {a}\n"
+        if b['year']:
+            e += f"%D {b['year']}\n"
+        if b.get('publisher'):
+            e += f"%I {b['publisher']}\n"
+        if b.get('identifiers', {}).get('isbn'):
+            e += f"%@ {b['identifiers']['isbn']}\n"
+        for t in b.get('tags', []):
+            e += f"%K {t}\n"
+        entries.append(e)
+    return '\n\n'.join(entries)
+
+
+def _bib_csv(books: list[dict]) -> str:
+    import csv
+    from io import StringIO
+    out = StringIO()
+    w = csv.writer(out)
+    w.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
+    for b in books:
+        w.writerow([
+            b['id'],
+            b['title'],
+            '; '.join(b['authors']),
+            b['year'] or '',
+            b.get('publisher', ''),
+            b.get('identifiers', {}).get('isbn', ''),
+            '; '.join(b.get('tags', [])),
+            '; '.join(b.get('formats', [])),
+        ])
+    return out.getvalue()
+
+
+_BIB_FORMATTERS = {
+    'bibtex':  _bib_bibtex,
+    'ris':     _bib_ris,
+    'endnote': _bib_endnote,
+    'csv':     _bib_csv,
+}
+
+
 class CalibreMCPServer:
     """
     MCP Server for Calibre library integration.
@@ -278,23 +377,55 @@ class CalibreMCPServer:
 
     def get_book_details_tool(self, book_id: int) -> dict[str, Any]:
         """
-        MCP Tool: Get detailed information about a specific book.
+        MCP Tool: Get detailed information about a specific document.
+
+        Uses Calibre metadata.db when available; falls back to the SourceAdapter.
 
         Args:
-            book_id: Calibre book ID
+            book_id: Calibre book ID (or adapter doc_id for non-Calibre sources)
 
         Returns:
-            Dictionary with book details
+            Dictionary with book/document details
         """
-        if err := self._require_db():
-            return err
+        if self.db_path:
+            try:
+                with CalibreAnalyzer(self.db_path) as analyzer:
+                    book = analyzer.get_book_details(book_id)
+                    if not book:
+                        return {'error': f'Book with ID {book_id} not found'}
+                    return book
+            except Exception as e:
+                return {'error': f'Failed to get book details: {e}'}
 
+        if self.adapter:
+            return self._get_book_details_via_adapter(str(book_id))
+
+        return {
+            'error': 'No metadata source available',
+            'help': 'This tool requires a Calibre library with metadata.db or a configured adapter',
+        }
+
+    def _get_book_details_via_adapter(self, doc_id: str) -> dict[str, Any]:
         try:
-            with CalibreAnalyzer(self.db_path) as analyzer:
-                book = analyzer.get_book_details(book_id)
-                if not book:
-                    return {'error': f'Book with ID {book_id} not found'}
-                return book
+            doc = self.adapter.get_metadata(doc_id)
+            if not doc:
+                return {'error': f'Document with ID {doc_id} not found'}
+            return {
+                'id': doc.doc_id,
+                'title': doc.title,
+                'authors': doc.authors,
+                'pubdate': f"{doc.year}-01-01" if doc.year else None,
+                'year': doc.year,
+                'tags': doc.tags,
+                'language': doc.language,
+                'publisher': doc.publisher,
+                'series': doc.series,
+                'identifiers': doc.identifiers,
+                'comments': doc.comments,
+                'formats': [doc.file_format] if doc.file_format else [],
+                'file_path': str(doc.file_path) if doc.file_path else None,
+                'source': self.adapter.adapter_type,
+            }
         except Exception as e:
             return {'error': f'Failed to get book details: {e}'}
 
@@ -334,6 +465,7 @@ class CalibreMCPServer:
 
         Supports BibTeX, RIS, EndNote, JSON, and CSV formats.
         Books can be filtered by author, tag, and publication year.
+        Uses Calibre metadata.db when available; falls back to the SourceAdapter.
 
         Args:
             format: Export format - 'bibtex', 'ris', 'endnote', 'json', 'csv'
@@ -346,19 +478,84 @@ class CalibreMCPServer:
         Returns:
             Dictionary with exported bibliography data
         """
-        if err := self._require_db():
-            return err
+        if self.db_path:
+            try:
+                with CalibreAnalyzer(self.db_path) as analyzer:
+                    return analyzer.export_bibliography(
+                        format=format,
+                        author=author,
+                        tag=tag,
+                        year_from=year_from,
+                        year_to=year_to,
+                        max_books=max_books
+                    )
+            except Exception as e:
+                return {'error': f'Failed to export bibliography: {e}'}
 
+        if self.adapter:
+            return self._export_bibliography_via_adapter(
+                fmt=format, author=author, tag=tag,
+                year_from=year_from, year_to=year_to, max_books=max_books,
+            )
+
+        return {
+            'error': 'No metadata source available',
+            'help': 'This tool requires a Calibre library with metadata.db or a configured adapter',
+        }
+
+    def _export_bibliography_via_adapter(
+        self,
+        fmt: str,
+        author: Optional[str],
+        tag: Optional[str],
+        year_from: Optional[int],
+        year_to: Optional[int],
+        max_books: Optional[int],
+    ) -> dict[str, Any]:
         try:
-            with CalibreAnalyzer(self.db_path) as analyzer:
-                return analyzer.export_bibliography(
-                    format=format,
-                    author=author,
-                    tag=tag,
-                    year_from=year_from,
-                    year_to=year_to,
-                    max_books=max_books
-                )
+            docs = self.adapter.list_documents()
+            results = []
+            for doc in docs:
+                if author and not any(author.lower() in a.lower() for a in doc.authors):
+                    continue
+                if tag and not any(tag.lower() in t.lower() for t in doc.tags):
+                    continue
+                if year_from and (not doc.year or doc.year < year_from):
+                    continue
+                if year_to and (not doc.year or doc.year > year_to):
+                    continue
+                results.append(doc)
+            if max_books:
+                results = results[:max_books]
+
+            books = [
+                {
+                    'id': doc.doc_id,
+                    'title': doc.title,
+                    'authors': doc.authors,
+                    'year': doc.year,
+                    'publisher': doc.publisher,
+                    'identifiers': doc.identifiers,
+                    'tags': doc.tags,
+                    'formats': [doc.file_format] if doc.file_format else [],
+                }
+                for doc in results
+            ]
+
+            if fmt == 'json':
+                data = json.dumps(books, indent=2, ensure_ascii=False)
+            elif fmt in _BIB_FORMATTERS:
+                data = _BIB_FORMATTERS[fmt](books)
+            else:
+                return {'error': f'Unsupported format: {fmt}'}
+
+            return {
+                'format': fmt,
+                'book_count': len(books),
+                'filters': {'author': author, 'tag': tag, 'year_from': year_from, 'year_to': year_to},
+                'data': data,
+                'source': self.adapter.adapter_type,
+            }
         except Exception as e:
             return {'error': f'Failed to export bibliography: {e}'}
 
@@ -371,11 +568,10 @@ class CalibreMCPServer:
         sort_by: str = 'title'
     ) -> dict[str, Any]:
         """
-        MCP Tool: List all books by an author from the Calibre metadata database.
+        MCP Tool: List all books by an author.
 
-        Direct metadata query (not vector search). Reliable for finding all works
-        by an author, including short texts (articles, book chapters) where
-        vector search may miss results.
+        Uses Calibre metadata.db when available (Calibre instances); falls back
+        to the SourceAdapter for non-Calibre sources (Zotero, folder).
 
         Args:
             author: Author name (case-insensitive partial match, required)
@@ -387,18 +583,75 @@ class CalibreMCPServer:
         Returns:
             Dictionary with matched books and metadata
         """
-        if err := self._require_db():
-            return err
+        if self.db_path:
+            try:
+                with CalibreAnalyzer(self.db_path) as analyzer:
+                    return analyzer.list_books_by_author(
+                        author=author,
+                        tags=tags,
+                        year_from=year_from,
+                        year_to=year_to,
+                        sort_by=sort_by
+                    )
+            except Exception as e:
+                return {'error': f'Failed to list books by author: {e}'}
 
+        if self.adapter:
+            return self._list_books_by_author_via_adapter(
+                author=author, tags=tags, year_from=year_from,
+                year_to=year_to, sort_by=sort_by,
+            )
+
+        return {
+            'error': 'No metadata source available',
+            'help': 'This tool requires a Calibre library with metadata.db or a configured adapter',
+        }
+
+    def _list_books_by_author_via_adapter(
+        self,
+        author: str,
+        tags: Optional[list[str]],
+        year_from: Optional[int],
+        year_to: Optional[int],
+        sort_by: str,
+    ) -> dict[str, Any]:
+        """Adapter-based fallback for list_books_by_author (Zotero, folder, etc.)."""
+        author_lower = author.lower()
         try:
-            with CalibreAnalyzer(self.db_path) as analyzer:
-                return analyzer.list_books_by_author(
-                    author=author,
-                    tags=tags,
-                    year_from=year_from,
-                    year_to=year_to,
-                    sort_by=sort_by
-                )
+            docs = self.adapter.list_documents()
+            results = []
+            for doc in docs:
+                if not any(author_lower in a.lower() for a in doc.authors):
+                    continue
+                if tags:
+                    doc_tags_lower = [t.lower() for t in doc.tags]
+                    if not all(
+                        any(ft.lower() in dt for dt in doc_tags_lower)
+                        for ft in tags
+                    ):
+                        continue
+                if year_from and doc.year and doc.year < year_from:
+                    continue
+                if year_to and doc.year and doc.year > year_to:
+                    continue
+                results.append({
+                    'calibre_id': doc.doc_id,
+                    'title': doc.title,
+                    'author': ' & '.join(doc.authors),
+                    'year': doc.year,
+                    'tags': doc.tags,
+                    'publisher': doc.publisher,
+                })
+            if sort_by == 'year':
+                results.sort(key=lambda x: x.get('year') or 0, reverse=True)
+            else:
+                results.sort(key=lambda x: (x.get('title') or '').lower())
+            return {
+                'books': results,
+                'count': len(results),
+                'author_query': author,
+                'source': self.adapter.adapter_type,
+            }
         except Exception as e:
             return {'error': f'Failed to list books by author: {e}'}
 
@@ -408,7 +661,9 @@ class CalibreMCPServer:
         max_tags: int = 100
     ) -> dict[str, Any]:
         """
-        MCP Tool: List all tags in the Calibre library with book counts.
+        MCP Tool: List all tags with book counts.
+
+        Uses Calibre metadata.db when available; falls back to the SourceAdapter.
 
         Args:
             min_books: Only show tags with at least this many books (default: 1)
@@ -417,23 +672,50 @@ class CalibreMCPServer:
         Returns:
             Dictionary with tag list and statistics
         """
-        if err := self._require_db():
-            return err
+        if self.db_path:
+            try:
+                with CalibreAnalyzer(self.db_path) as analyzer:
+                    all_tags = analyzer.get_tags_stats()
+                    filtered = [t for t in all_tags if t['book_count'] >= min_books]
+                    limited = filtered[:max_tags]
+                    return {
+                        'total_tags': len(all_tags),
+                        'filtered_tags': len(filtered),
+                        'returned_tags': len(limited),
+                        'tags': limited,
+                        'usage': 'Use these tag names in the "tags" parameter of search_books_with_citations'
+                    }
+            except Exception as e:
+                return {'error': f'Failed to list tags: {e}'}
 
+        if self.adapter:
+            return self._list_tags_via_adapter(min_books, max_tags)
+
+        return {
+            'error': 'No metadata source available',
+            'help': 'This tool requires a Calibre library with metadata.db or a configured adapter',
+        }
+
+    def _list_tags_via_adapter(self, min_books: int, max_tags: int) -> dict[str, Any]:
         try:
-            with CalibreAnalyzer(self.db_path) as analyzer:
-                all_tags = analyzer.get_tags_stats()
-
-                filtered = [t for t in all_tags if t['book_count'] >= min_books]
-                limited = filtered[:max_tags]
-
-                return {
-                    'total_tags': len(all_tags),
-                    'filtered_tags': len(filtered),
-                    'returned_tags': len(limited),
-                    'tags': limited,
-                    'usage': 'Use these tag names in the "tags" parameter of search_books_with_citations'
-                }
+            tag_counts: dict[str, int] = {}
+            for doc in self.adapter.list_documents():
+                for tag in doc.tags:
+                    tag_counts[tag] = tag_counts.get(tag, 0) + 1
+            all_tags = [
+                {'name': tag, 'book_count': count}
+                for tag, count in sorted(tag_counts.items(), key=lambda x: -x[1])
+            ]
+            filtered = [t for t in all_tags if t['book_count'] >= min_books]
+            limited = filtered[:max_tags]
+            return {
+                'total_tags': len(all_tags),
+                'filtered_tags': len(filtered),
+                'returned_tags': len(limited),
+                'tags': limited,
+                'usage': 'Use these tag names in the "tags" parameter of search_books_with_citations',
+                'source': self.adapter.adapter_type,
+            }
         except Exception as e:
             return {'error': f'Failed to list tags: {e}'}
 
