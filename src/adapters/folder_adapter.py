@@ -258,6 +258,23 @@ class FolderAdapter(SourceAdapter):
             return None
         return self._ensure_cache().get(rel_posix)
 
+    def compute_metadata_hash(self, doc_id: str) -> str:
+        """Hash over file mtime and size — no file content opened."""
+        meta = self.get_metadata(doc_id)
+        if not meta or not meta.file_path:
+            return ""
+        try:
+            st = meta.file_path.stat()
+            payload = f"{st.st_mtime_ns}:{st.st_size}"
+            return hashlib.md5(payload.encode()).hexdigest()
+        except OSError:
+            return ""
+
+    def compute_orphan_ids(self, lancedb_ids: set[str]) -> set[str]:
+        """Diff against the cached scan — no extra disk traversal."""
+        current = {doc.doc_id for doc in self._ensure_cache().values()}
+        return {str(x) for x in lancedb_ids} - current
+
     def get_changed_files(self, since: str) -> list[DocumentMetadata]:
         """Return documents modified after the given ISO timestamp.
 
