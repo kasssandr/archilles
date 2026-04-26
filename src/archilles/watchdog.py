@@ -170,6 +170,7 @@ class WatchdogScanner:
         self.archilles_dir = archilles_dir
         self.queue_file = archilles_dir / "index_queue.json"
         self.log_file = archilles_dir / "watchdog.log"
+        self.checkpoint_file = archilles_dir / "index_new_checkpoint.json"
         self.excluded_tags_lower: set[str] = {
             t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
         }
@@ -264,7 +265,9 @@ class WatchdogScanner:
         if books_to_update and not dry_run:
             rag = self._load_rag()
             dt0 = time.time()
-            for cid in books_to_update:
+            books_to_update_list = sorted(books_to_update)
+            total_p2 = len(books_to_update_list)
+            for i, cid in enumerate(books_to_update_list, 1):
                 meta = calibre_books.get(cid)
                 if not meta:
                     continue
@@ -273,6 +276,7 @@ class WatchdogScanner:
                     continue
                 file_path = formats[0]['path']
                 book_id = str(cid)
+                print(f"\n[{i}/{total_p2}] {meta['title']}")
                 try:
                     rag.index_book(file_path, book_id, force=False)
                     results['delta_updates'] += 1
@@ -289,7 +293,14 @@ class WatchdogScanner:
             if index_new:
                 rag = self._load_rag()
                 ni0 = time.time()
-                for entry in results['new_books']:
+                saved_total, done_ids = self._load_checkpoint()
+                pending = [e for e in results['new_books'] if e['calibre_id'] not in done_ids]
+                already_done = len(done_ids)
+                total_p3 = max(saved_total, already_done + len(pending))
+                if already_done:
+                    print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
+                self._save_checkpoint(total_p3, done_ids)
+                for j, entry in enumerate(pending, 1):
                     cid = entry['calibre_id']
                     meta = calibre_books.get(cid)
                     if not meta:
@@ -297,12 +308,17 @@ class WatchdogScanner:
                     formats = _discover_formats(Path(meta['path']))
                     if not formats:
                         continue
+                    print(f"\n[{already_done + j}/{total_p3}] {entry['title']}")
                     try:
                         rag.index_book(formats[0]['path'], str(cid), force=False)
                         results['new_indexed'] += 1
+                        done_ids.add(cid)
+                        self._save_checkpoint(total_p3, done_ids)
                     except Exception as exc:
                         logger.error(f"New-book indexing failed for calibre_id={cid}: {exc}")
                         results['errors'].append({'calibre_id': cid, 'error': str(exc)})
+                if self.checkpoint_file.exists():
+                    self.checkpoint_file.unlink()
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
 
         results['total_time'] = round(time.time() - t0, 1)
@@ -378,6 +394,23 @@ class WatchdogScanner:
         merged = sorted(set(existing) | set(calibre_ids))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
         self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+
+    def _load_checkpoint(self) -> tuple[int, set[int]]:
+        """Return (total_at_start, done_ids) from a previous interrupted --index-new run."""
+        if not self.checkpoint_file.exists():
+            return 0, set()
+        try:
+            data = json.loads(self.checkpoint_file.read_text(encoding='utf-8'))
+            return data.get('total', 0), set(data.get('done', []))
+        except Exception:
+            return 0, set()
+
+    def _save_checkpoint(self, total: int, done: set[int]) -> None:
+        self.archilles_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_file.write_text(
+            json.dumps({'total': total, 'done': sorted(done)}, indent=2),
+            encoding='utf-8',
+        )
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
