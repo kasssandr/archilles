@@ -6,7 +6,15 @@ Detects three change types and dispatches accordingly:
   metadata_changed   title / author / tags / comments / publisher changed
   annotations_changed  highlights or notes changed
 
-The scan itself is fast: SQLite read + LanceDB hash lookup, no book files opened.
+Scan performance:
+  * Metadata changes: SQLite read + LanceDB hash lookup, no book files opened.
+  * Annotation changes: a (mtime_ns, size) signature for the book file and
+    the Calibre-Viewer JSON sidecar is cached at
+    ``<archilles_dir>/watchdog_annotation_cache.json``. On the *first* scan
+    every PDF with native highlights is opened once via PyMuPDF to seed the
+    cache; subsequent scans only reopen books whose signature changed, so
+    repeat scans on a stable library finish in seconds.
+
 Delta updates delegate to archillesRAG.index_book(), which already handles
 smart partial re-indexing (metadata-only, annotations-only, or both).
 
@@ -171,9 +179,12 @@ class WatchdogScanner:
         self.queue_file = archilles_dir / "index_queue.json"
         self.log_file = archilles_dir / "watchdog.log"
         self.checkpoint_file = archilles_dir / "index_new_checkpoint.json"
+        self.annotation_cache_file = archilles_dir / "watchdog_annotation_cache.json"
         self.excluded_tags_lower: set[str] = {
             t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
         }
+        self._annotation_cache: dict[str, dict[str, Any]] | None = None
+        self._annotation_cache_dirty = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -208,7 +219,10 @@ class WatchdogScanner:
             'scanned':             0,
         }
 
-        # ── Phase 1: fast scan — no book files opened ──────────────────
+        # ── Phase 1: fast scan ─────────────────────────────────────────
+        # Metadata path opens no files. Annotation path is cached by
+        # (mtime_ns, size) signature; only books whose signature changed
+        # since the last scan are reopened (see _annotation_changed).
         calibre_books = _calibre_metadata_for_hash(self.library_path)
         results['scanned'] = len(calibre_books)
 
@@ -324,6 +338,7 @@ class WatchdogScanner:
         results['total_time'] = round(time.time() - t0, 1)
 
         if not dry_run:
+            self._save_annotation_cache()
             self._write_log(results)
 
         return results
@@ -348,6 +363,64 @@ class WatchdogScanner:
         from scripts.rag_demo import archillesRAG
         return archillesRAG(db_path=self.db_path)
 
+    def _annotation_files_signature(self, file_path: Path) -> list[int]:
+        """Return a (book_mtime_ns, book_size, viewer_mtime_ns, viewer_size) tuple.
+
+        The signature covers both annotation sources used by
+        ``get_combined_annotations``: PDF-native annotations live inside the
+        book file itself, while Calibre-Viewer highlights live in a sidecar
+        JSON named after ``sha256(file_path)`` under
+        ``get_annotations_dir()``. Missing files contribute zeros.
+
+        Stored as a list (not tuple) so it round-trips through JSON.
+        """
+        from src.calibre_mcp.annotations import compute_book_hash, get_annotations_dir
+
+        try:
+            s = file_path.stat()
+            book_sig = (s.st_mtime_ns, s.st_size)
+        except OSError:
+            book_sig = (0, 0)
+
+        viewer_path = get_annotations_dir() / f"{compute_book_hash(str(file_path))}.json"
+        try:
+            s = viewer_path.stat()
+            viewer_sig = (s.st_mtime_ns, s.st_size)
+        except OSError:
+            viewer_sig = (0, 0)
+
+        return [book_sig[0], book_sig[1], viewer_sig[0], viewer_sig[1]]
+
+    def _load_annotation_cache(self) -> dict[str, dict[str, Any]]:
+        """Lazy-load the on-disk annotation cache (file → signature + computed hash)."""
+        if self._annotation_cache is not None:
+            return self._annotation_cache
+        if self.annotation_cache_file.exists():
+            try:
+                self._annotation_cache = json.loads(
+                    self.annotation_cache_file.read_text(encoding='utf-8')
+                )
+            except Exception as exc:
+                logger.warning(f"Could not read annotation cache (resetting): {exc}")
+                self._annotation_cache = {}
+        else:
+            self._annotation_cache = {}
+        return self._annotation_cache
+
+    def _save_annotation_cache(self) -> None:
+        """Persist the annotation cache when it has been mutated this run."""
+        if self._annotation_cache is None or not self._annotation_cache_dirty:
+            return
+        try:
+            self.archilles_dir.mkdir(parents=True, exist_ok=True)
+            self.annotation_cache_file.write_text(
+                json.dumps(self._annotation_cache, indent=2),
+                encoding='utf-8',
+            )
+            self._annotation_cache_dirty = False
+        except Exception as exc:
+            logger.warning(f"Could not save annotation cache: {exc}")
+
     def _annotation_changed(self, file_path: Path, stored_hash: str) -> bool:
         """Return True if the annotation hash for this book differs from what is stored.
 
@@ -356,14 +429,24 @@ class WatchdogScanner:
         ``stored='' → current='abc'`` (first-time annotations) and
         ``stored='abc' → current=''`` (annotations cleared).
 
-        PDF-native annotations (Adobe/Foxit) are included via ``include_pdf=True``
-        to match the indexer (``scripts/rag_demo.py``), which stores annotation
-        hashes computed over the combined Calibre-Viewer + PDF set. Using
-        ``include_pdf=False`` here would make every PDF with embedded
-        highlights look "changed" on every scan. Failures are logged and
-        treated as "unchanged" so a transient error cannot spam the index
-        with false-positive updates.
+        Fast path: a (mtime_ns, size) signature for both the book file and the
+        Calibre-Viewer JSON sidecar is cached on disk. When the signature
+        matches the previous scan, the cached annotation hash is reused
+        without opening the book. Cold path opens the book via
+        ``get_combined_annotations(..., include_pdf=True)``, which matches the
+        indexer's hash computation. Failures are logged and treated as
+        "unchanged" so a transient error cannot spam the index with
+        false-positive updates.
         """
+        cache = self._load_annotation_cache()
+        cache_key = str(file_path)
+        sig = self._annotation_files_signature(file_path)
+
+        cached = cache.get(cache_key)
+        if cached and cached.get('sig') == sig:
+            current_hash = cached.get('annotation_hash', '')
+            return current_hash != stored_hash
+
         try:
             from src.calibre_mcp.annotations import get_combined_annotations
             from scripts.rag_demo import archillesRAG
@@ -376,13 +459,16 @@ class WatchdogScanner:
             current_hash = archillesRAG._compute_annotation_hash(
                 result.get('annotations', [])
             )
-            return current_hash != stored_hash
         except Exception as exc:
             logger.warning(
                 "Annotation check failed for %s: %s (assuming unchanged)",
                 file_path, exc,
             )
             return False
+
+        cache[cache_key] = {'sig': sig, 'annotation_hash': current_hash}
+        self._annotation_cache_dirty = True
+        return current_hash != stored_hash
 
     def _queue_new_books(self, calibre_ids: list[int]) -> None:
         existing: list[int] = []

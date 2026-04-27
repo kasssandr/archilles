@@ -515,6 +515,152 @@ class TestCounters:
 
 
 # ---------------------------------------------------------------------------
+# Annotation cache (regression for the "scan opens every PDF every run" bug)
+# ---------------------------------------------------------------------------
+
+class TestAnnotationCache:
+    """Cold path opens the book once; warm path reuses cached signature."""
+
+    @pytest.fixture
+    def scanner(self, tmp_path: Path):
+        return WatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=tmp_path / ".archilles",
+        )
+
+    def test_first_call_opens_and_seeds_cache(self, tmp_path: Path, scanner):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": [{"text": "x"}]}
+            mock_hash.return_value = "abc123"
+
+            changed = scanner._annotation_changed(book, stored_hash="")
+
+        assert mock_get.call_count == 1
+        assert changed is True  # current 'abc123' != stored ''
+        assert str(book) in scanner._annotation_cache
+        assert scanner._annotation_cache[str(book)]["annotation_hash"] == "abc123"
+        assert scanner._annotation_cache_dirty is True
+
+    def test_warm_cache_skips_book_open(self, tmp_path: Path, scanner):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        # Cold call seeds cache
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": []}
+            mock_hash.return_value = "deadbeef"
+            scanner._annotation_changed(book, stored_hash="deadbeef")
+            assert mock_get.call_count == 1
+
+        # Second call with unchanged mtime/size must NOT open the book
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            changed = scanner._annotation_changed(book, stored_hash="deadbeef")
+            assert mock_get.call_count == 0
+            assert changed is False  # cached hash matches stored
+
+    def test_warm_cache_detects_change_against_old_stored_hash(
+        self, tmp_path: Path, scanner,
+    ):
+        """Cache hit but stored_hash is stale → still flag annotations_changed."""
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": [{"text": "x"}]}
+            mock_hash.return_value = "current-hash"
+            scanner._annotation_changed(book, stored_hash="current-hash")
+
+        # File hasn't changed but the index still has the *previous* hash
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get:
+            changed = scanner._annotation_changed(book, stored_hash="old-stored-hash")
+            assert mock_get.call_count == 0  # cache hit
+            assert changed is True  # cached 'current-hash' differs from old stored
+
+    def test_changed_size_invalidates_cache(self, tmp_path: Path, scanner):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": []}
+            mock_hash.return_value = "v1"
+            scanner._annotation_changed(book, stored_hash="v1")
+
+        # Rewrite the file with different content (forces new size)
+        book.write_bytes(b"%PDF-1.4 fake plus more bytes here to change size")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": [{"text": "new"}]}
+            mock_hash.return_value = "v2"
+            changed = scanner._annotation_changed(book, stored_hash="v1")
+            assert mock_get.call_count == 1  # reopened
+            assert changed is True
+
+    def test_cache_persists_across_scanner_instances(
+        self, tmp_path: Path, scanner,
+    ):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": []}
+            mock_hash.return_value = "h"
+            scanner._annotation_changed(book, stored_hash="h")
+            scanner._save_annotation_cache()
+
+        assert scanner.annotation_cache_file.exists()
+
+        # Fresh scanner reads cache from disk
+        scanner2 = WatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=tmp_path / ".archilles",
+        )
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get:
+            scanner2._annotation_changed(book, stored_hash="h")
+            assert mock_get.call_count == 0  # cache hit — no PDF open
+
+    def test_corrupt_cache_falls_back_to_fresh(self, tmp_path: Path, scanner):
+        scanner.archilles_dir.mkdir(parents=True, exist_ok=True)
+        scanner.annotation_cache_file.write_text("not-json!!", encoding='utf-8')
+
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
+             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": []}
+            mock_hash.return_value = "x"
+            scanner._annotation_changed(book, stored_hash="x")
+            assert mock_get.call_count == 1
+            assert scanner._annotation_cache == {str(book): {
+                'sig': scanner._annotation_files_signature(book),
+                'annotation_hash': 'x',
+            }}
+
+    def test_extraction_failure_does_not_poison_cache(self, tmp_path: Path, scanner):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get:
+            mock_get.side_effect = RuntimeError("PDF parser blew up")
+            changed = scanner._annotation_changed(book, stored_hash="x")
+            assert changed is False  # treat-as-unchanged on error
+            # No cache entry written for the failure
+            assert str(book) not in scanner._annotation_cache
+
+
+# ---------------------------------------------------------------------------
 # Default excluded tags constant stays stable (batch_index.py sibling)
 # ---------------------------------------------------------------------------
 

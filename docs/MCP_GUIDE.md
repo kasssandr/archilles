@@ -299,7 +299,7 @@ Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop
 
 Once your library is indexed, every book you edit, every tag you change, every highlight you add in Calibre is a divergence between Calibre and LanceDB. The **Watchdog** (`scripts/watchdog.py`) closes that gap: a fast scan that detects metadata and annotation changes via hash comparison, updates the LanceDB delta, and queues genuinely new books for the next batch-index run.
 
-A single scan touches no book files and usually finishes in a few seconds on a library of a few thousand titles. You only need to run it periodically — **daily or weekly is enough for most users; monthly is fine for libraries that don't change often**. Hourly schedules are overkill unless you're actively curating in Calibre all day.
+After the first scan has seeded its annotation-signature cache, subsequent scans typically finish in a few seconds on a library of a few thousand titles — they reopen only the books whose file signature changed. The first scan itself is slower, because each PDF with embedded highlights is opened once to seed the cache. You only need to run the watchdog periodically — **daily or weekly is enough for most users; monthly is fine for libraries that don't change often**. Hourly schedules are overkill unless you're actively curating in Calibre all day.
 
 ### Option A: Claude Routine (easiest if you use Claude)
 
