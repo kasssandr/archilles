@@ -185,7 +185,7 @@ Then in Claude Desktop, you can use natural language — all 12 MCP tools are av
 As you add books, edit tags, or highlight passages in Calibre, the LanceDB index drifts out of date. The built-in **Watchdog** closes that gap automatically:
 
 - **Claude users** — create a Routine that calls the `watchdog_scan` MCP tool on whatever schedule fits (daily / weekly / monthly). No shell, no scheduler.
-- **Everyone else** — run `python scripts/watchdog.py` via Windows Task Scheduler, cron, or launchd. A full scan takes seconds on a few-thousand-book library.
+- **Everyone else** — run `python scripts/watchdog.py` via Windows Task Scheduler, cron, or launchd. After the first scan has seeded its annotation-signature cache, repeat scans take seconds on a few-thousand-book library.
 
 Daily or weekly is usually enough; hourly is overkill. See **[MCP Integration Guide → Keeping Your Index in Sync](docs/MCP_GUIDE.md#keeping-your-index-in-sync)** for concrete Task Scheduler / cron / launchd examples.
 

@@ -879,10 +879,16 @@ class CalibreMCPServer:
         """
         MCP Tool: Scan the Calibre library for changes and sync into LanceDB.
 
-        Detects three change types without opening book files:
+        Detects three change types:
           new_books          — in Calibre but not yet indexed
           metadata_changed   — title / author / tags / comments / publisher changed
           annotations_changed — highlights or notes changed
+
+        Metadata detection runs entirely on SQLite + LanceDB hash lookups
+        (no book files opened). Annotation detection caches a (mtime, size)
+        signature per book; the first scan opens each annotated PDF once to
+        seed the cache, and subsequent scans only reopen books whose
+        signature changed.
 
         Delta updates (metadata + annotations) are applied automatically unless
         dry_run=True.  New books are written to index_queue.json for later
@@ -1252,10 +1258,12 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
             'name': 'watchdog_scan',
             'description': (
                 'Scan the Calibre library for changes and automatically sync them into LanceDB. '
-                'Detects new books, metadata changes (title/tags/comments), and annotation changes '
-                'without opening book files. Delta updates are applied instantly; new books are queued. '
-                'Call this tool from a Claude Routine (daily or weekly is usually enough) to keep '
-                'the index current without manual re-indexing.'
+                'Detects new books, metadata changes (title/tags/comments), and annotation changes. '
+                'Metadata detection runs purely on SQLite + LanceDB hash lookups; annotation '
+                'detection caches a (mtime, size) signature per book so repeat scans only '
+                "reopen books whose file signature changed. Delta updates are applied instantly; "
+                'new books are queued. Call this tool from a Claude Routine (daily or weekly is '
+                'usually enough) to keep the index current without manual re-indexing.'
             ),
             'inputSchema': {
                 'type': 'object',
