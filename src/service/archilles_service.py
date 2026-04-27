@@ -12,6 +12,7 @@ and optional cross-encoder reranking.
 
 import logging
 import sys
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Literal
@@ -21,15 +22,36 @@ from src.archilles.constants import ChunkType, SectionType
 logger = logging.getLogger(__name__)
 
 
+_redirect_lock = threading.Lock()
+_redirect_depth = 0
+_redirect_original_stdout: Any = None
+
+
 @contextmanager
 def _redirect_stdout_to_stderr():
-    """Temporarily redirect stdout to stderr (prevents MCP JSON-RPC corruption)."""
-    old_stdout = sys.stdout
-    sys.stdout = sys.stderr
+    """Temporarily redirect stdout to stderr (prevents MCP JSON-RPC corruption).
+
+    Thread-safe via refcount: the first concurrent enter captures and replaces
+    sys.stdout under a lock; subsequent enters increment the counter without
+    touching sys.stdout. The original is restored only when the last holder
+    exits. This keeps cross-source fan-out parallelism intact while preventing
+    the save/restore race that previously could leave stdout permanently
+    pointed at stderr.
+    """
+    global _redirect_depth, _redirect_original_stdout
+    with _redirect_lock:
+        if _redirect_depth == 0:
+            _redirect_original_stdout = sys.stdout
+            sys.stdout = sys.stderr
+        _redirect_depth += 1
     try:
         yield
     finally:
-        sys.stdout = old_stdout
+        with _redirect_lock:
+            _redirect_depth -= 1
+            if _redirect_depth == 0:
+                sys.stdout = _redirect_original_stdout
+                _redirect_original_stdout = None
 
 
 def diversify_results(
