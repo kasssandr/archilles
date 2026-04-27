@@ -40,11 +40,15 @@ from src.storage.lancedb_store import LanceDBStore
 # Books with these tags are intentionally excluded from indexing — low
 # chunk counts are expected. Pulled from config so user-specific tags
 # (e.g. "draft", "Übersetzung") are honoured without code changes.
-try:
-    INTENTIONALLY_EXCLUDED_TAGS: set[str] = set(
-        get_excluded_tags(get_library_path(required=False))
-    )
-except Exception:
+# Guard the resolution explicitly: get_library_path(required=False) returns
+# None when no env var is set, but get_excluded_tags(None) would fall back
+# to get_library_path() with required=True and call sys.exit(1) — which
+# bypasses an `except Exception` clause because SystemExit derives from
+# BaseException, killing the interpreter at module import time.
+_lib_path = get_library_path(required=False)
+if _lib_path is not None:
+    INTENTIONALLY_EXCLUDED_TAGS: set[str] = set(get_excluded_tags(_lib_path))
+else:
     INTENTIONALLY_EXCLUDED_TAGS = {'exclude'}
 
 DEFAULT_DB_PATH = "D:/Calibre-Bibliothek/.archilles/rag_db"

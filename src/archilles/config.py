@@ -90,7 +90,15 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
     Reads ``excluded_tags`` from ``.archilles/config.json`` if present;
     the config value **replaces** the defaults (symmetric with
     ``rag_db_path``). Falls back to :data:`DEFAULT_EXCLUDED_TAGS`
-    (``['exclude']``) when no config file or key is present.
+    (``['exclude']``) when no config file or key is present, or when no
+    library path is configured at all.
+
+    Passing ``library_path=None`` (the default) means "no library context";
+    the function then returns the defaults instead of resolving via
+    ``get_library_path()`` — that older behaviour would call ``sys.exit(1)``
+    if no environment variable was set, which is a hostile failure mode for
+    callers that already explicitly opted out of requiring a library
+    (e.g. ``get_library_path(required=False)``).
 
     Example ``config.json``::
 
@@ -99,7 +107,7 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
         }
     """
     if library_path is None:
-        library_path = get_library_path()
+        return list(DEFAULT_EXCLUDED_TAGS)
 
     config_path = library_path / ".archilles" / "config.json"
     if config_path.exists():
