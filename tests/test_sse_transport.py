@@ -5,7 +5,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -154,36 +154,35 @@ async def _sse_server_with_probe(port: int, auth_token=None, extra_headers=None)
 
     mock_tools: list = []
 
-    with patch("mcp_server.create_mcp_tools", return_value=mock_tools):
-        task = asyncio.create_task(
-            sse_server(server, host="127.0.0.1", port=port, auth_token=auth_token)
-        )
-        await asyncio.sleep(0.4)
+    task = asyncio.create_task(
+        sse_server(server, mock_tools, host="127.0.0.1", port=port, auth_token=auth_token)
+    )
+    await asyncio.sleep(0.4)
 
-        status = None
-        ct = ""
-        try:
-            async with httpx.AsyncClient() as client:
-                headers = extra_headers or {}
-                try:
-                    async with client.stream(
-                        "GET",
-                        f"http://127.0.0.1:{port}/sse",
-                        headers=headers,
-                        timeout=2.0,
-                    ) as resp:
-                        status = resp.status_code
-                        ct = resp.headers.get("content-type", "")
-                except httpx.ReadTimeout:
-                    pass  # SSE connection keeps streaming — timeout is OK
-        finally:
-            task.cancel()
+    status = None
+    ct = ""
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = extra_headers or {}
             try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+                async with client.stream(
+                    "GET",
+                    f"http://127.0.0.1:{port}/sse",
+                    headers=headers,
+                    timeout=2.0,
+                ) as resp:
+                    status = resp.status_code
+                    ct = resp.headers.get("content-type", "")
+            except httpx.ReadTimeout:
+                pass  # SSE connection keeps streaming — timeout is OK
+    finally:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
-        return status, ct
+    return status, ct
 
 
 def test_sse_server_tool_list():
