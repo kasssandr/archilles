@@ -41,6 +41,7 @@ import json
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
+from calibre_mcp.unified_server import UnifiedMCPServer, create_unified_tools
 
 # Restore stdout for JSON-RPC communication
 sys.stdout = _original_stdout
@@ -63,24 +64,34 @@ TOOL_MAP = {
 }
 
 
-def _dispatch_tool(server: CalibreMCPServer, tool_name: str, params: dict) -> dict:
-    """Dispatch a tool call synchronously. Safe to run in a thread pool."""
+def _dispatch_tool(server, tool_name: str, params: dict) -> dict:
+    """Dispatch a tool call synchronously. Safe to run in a thread pool.
+
+    ``server`` is either a :class:`CalibreMCPServer` (legacy single-source
+    mode) or a :class:`UnifiedMCPServer` (multi-source mode). Tools that
+    only exist on the legacy server (``get_doublette_tag_instruction``)
+    return a structured error in unified mode rather than raising
+    AttributeError.
+    """
     method_name = TOOL_MAP.get(tool_name)
     if not method_name:
         return {'error': f'Unknown tool: {tool_name}'}
+    method = getattr(server, method_name, None)
+    if method is None:
+        return {'error': f'Tool {tool_name!r} is not available in this server mode'}
     try:
-        return getattr(server, method_name)(**params)
+        return method(**params)
     except Exception as e:
         logger.error(f"Error in tool {tool_name}: {e}", exc_info=True)
         return {'error': str(e)}
 
 
-async def handle_request(server: CalibreMCPServer, method: str, params: dict) -> dict:
+async def handle_request(server, method: str, params: dict) -> dict:
     """Handle an MCP request by dispatching to the appropriate server method."""
     return _dispatch_tool(server, method, params)
 
 
-async def stdio_server(server: CalibreMCPServer):
+async def stdio_server(server, tools: list[dict]):
     """
     Run an MCP server using stdio transport.
 
@@ -94,7 +105,6 @@ async def stdio_server(server: CalibreMCPServer):
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(line_buffering=True)
 
-    tools = create_mcp_tools(server)
     logger.info(f"Registered {len(tools)} tools")
     for tool in tools:
         logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
@@ -174,7 +184,8 @@ async def stdio_server(server: CalibreMCPServer):
 
 
 async def sse_server(
-    server: CalibreMCPServer,
+    server,
+    tools: list[dict],
     host: str = "127.0.0.1",
     port: int = 8765,
     auth_token: str | None = None,
@@ -199,7 +210,7 @@ async def sse_server(
             description=t["description"],
             inputSchema=t["inputSchema"],
         )
-        for t in create_mcp_tools(server)
+        for t in tools
     ]
 
     @mcp_srv.list_tools()
@@ -284,7 +295,7 @@ async def sse_server(
 
 
 def main():
-    """Main entry point."""
+    """Main entry point — picks unified or legacy single-source mode."""
     import argparse
     import os
 
@@ -299,22 +310,68 @@ def main():
     parser.add_argument("--port", type=int, default=None, help="SSE port (default: 8765)")
     args = parser.parse_args()
 
-    # Accept both generic and Calibre-specific env vars
+    # ── Mode selection: master config wins over legacy single-source ──
+    from src.archilles.config import load_master_config, master_config_path
+
+    try:
+        master = load_master_config()
+    except (ValueError, json.JSONDecodeError) as e:
+        logger.error("Master config %s is malformed: %s", master_config_path(), e)
+        sys.stderr.write(f"\nERROR: Master config malformed: {e}\n\n")
+        sys.exit(1)
+
+    if master is not None:
+        server, tools, transport_cfg = _init_unified(master)
+    else:
+        server, tools, transport_cfg = _init_legacy_single_source()
+
+    # Resolve transport from CLI args → config → default (stdio)
+    transport_mode = args.transport or transport_cfg.get("mode", "stdio")
+    sse_host = args.host or transport_cfg.get("host", "127.0.0.1")
+    sse_port = args.port or transport_cfg.get("port", 8765)
+    sse_auth_token = transport_cfg.get("auth_token")
+
+    if transport_mode == "sse":
+        logger.info(f"Transport: SSE ({sse_host}:{sse_port})")
+        asyncio.run(sse_server(server, tools, sse_host, sse_port, sse_auth_token))
+    else:
+        logger.info("Transport: stdio")
+        asyncio.run(stdio_server(server, tools))
+
+
+def _init_unified(master):
+    """Build the unified multi-source server from a parsed master config."""
+    server = UnifiedMCPServer.from_master_config(master)
+    tools = create_unified_tools(server)
+    logger.info(
+        "Mode: unified (sources: %s, default: %r)",
+        server.source_names, server.default_source,
+    )
+    return server, tools, dict(master.transport)
+
+
+def _init_legacy_single_source():
+    """Build the single-source server from ARCHILLES_LIBRARY_PATH + library config."""
+    import os
+    from src.archilles.config import master_config_path
+
     library_path = os.getenv('ARCHILLES_LIBRARY_PATH') or os.getenv('CALIBRE_LIBRARY_PATH')
 
     if not library_path:
-        logger.error("Library path not set (ARCHILLES_LIBRARY_PATH or CALIBRE_LIBRARY_PATH)")
-        sys.stderr.write("\n" + "="*60 + "\n")
-        sys.stderr.write("ERROR: Library path not set\n")
-        sys.stderr.write("="*60 + "\n\n")
-        sys.stderr.write("Please set one of these environment variables:\n\n")
+        master_path = master_config_path()
+        logger.error("Neither master config nor ARCHILLES_LIBRARY_PATH is set")
+        sys.stderr.write("\n" + "=" * 60 + "\n")
+        sys.stderr.write("ERROR: No configuration found\n")
+        sys.stderr.write("=" * 60 + "\n\n")
+        sys.stderr.write("Provide either:\n\n")
+        sys.stderr.write(f"  A) Master config at {master_path} for multi-source mode, OR\n")
+        sys.stderr.write("  B) Set ARCHILLES_LIBRARY_PATH for single-source mode:\n\n")
         sys.stderr.write("  Windows (PowerShell):\n")
         sys.stderr.write('    $env:ARCHILLES_LIBRARY_PATH = "C:\\path\\to\\Library"\n\n')
         sys.stderr.write("  Linux/macOS:\n")
         sys.stderr.write('    export ARCHILLES_LIBRARY_PATH="/path/to/Library"\n\n')
         sys.stderr.write("  Claude Desktop (claude_desktop_config.json):\n")
         sys.stderr.write('    "env": {"ARCHILLES_LIBRARY_PATH": "/path/to/Library"}\n\n')
-        sys.stderr.write("  Legacy: CALIBRE_LIBRARY_PATH is also accepted.\n\n")
         sys.stderr.flush()
         sys.exit(1)
 
@@ -328,14 +385,12 @@ def main():
         except Exception as e:
             logger.warning(f"Failed to load config: {e}")
 
-    # Config can override library path (legacy key or new key)
     library_path = config.get('library_path', config.get('calibre_library_path', library_path))
     archilles_dir = Path(library_path) / ".archilles"
     instance_name = config.get('instance_name', 'archilles')
 
     rag_db_path = os.getenv('RAG_DB_PATH') or config.get('rag_db_path', str(archilles_dir / "rag_db"))
 
-    # Create SourceAdapter
     adapter_type = config.get('adapter')  # None = auto-detect
     try:
         from src.adapters import create_adapter
@@ -354,7 +409,10 @@ def main():
     if enable_reranking:
         logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
 
-    from citation.config import CitationConfig
+    try:
+        from citation.config import CitationConfig
+    except ImportError:
+        from src.citation.config import CitationConfig
     citation_config = CitationConfig.from_dict(config.get('citation', {}))
     logger.info(f"Citation style: {citation_config.label} (locale: {citation_config.locale})")
 
@@ -368,22 +426,12 @@ def main():
         adapter=adapter,
         instance_name=instance_name,
     )
-
-    logger.info(f"Server initialized: {instance_name} ({adapter.adapter_type if adapter else 'no adapter'})")
-
-    # Resolve transport from CLI args → config → default (stdio)
-    transport_cfg = config.get("transport", {})
-    transport_mode = args.transport or transport_cfg.get("mode", "stdio")
-    sse_host = args.host or transport_cfg.get("host", "127.0.0.1")
-    sse_port = args.port or transport_cfg.get("port", 8765)
-    sse_auth_token = transport_cfg.get("auth_token")
-
-    if transport_mode == "sse":
-        logger.info(f"Transport: SSE ({sse_host}:{sse_port})")
-        asyncio.run(sse_server(server, sse_host, sse_port, sse_auth_token))
-    else:
-        logger.info("Transport: stdio")
-        asyncio.run(stdio_server(server))
+    logger.info(
+        "Mode: legacy single-source — server %r (%s)",
+        instance_name, adapter.adapter_type if adapter else "no adapter",
+    )
+    tools = create_mcp_tools(server)
+    return server, tools, config.get("transport", {})
 
 
 if __name__ == '__main__':
