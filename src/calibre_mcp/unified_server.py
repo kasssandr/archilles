@@ -565,16 +565,16 @@ class UnifiedMCPServer:
             if not isinstance(res, dict) or "error" in res:
                 per_source_counts[name] = 0
                 continue
-            text = res.get("bibliography") or ""
-            count = res.get("count", 0)
+            text = res.get("data") or ""
+            count = res.get("book_count", 0)
             per_source_counts[name] = count
             if text:
                 chunks.append(f"% --- Source: {name} ({count} entries) ---\n{text}")
 
         return {
             "format": format,
-            "bibliography": "\n\n".join(chunks),
-            "count": sum(per_source_counts.values()),
+            "data": "\n\n".join(chunks),
+            "book_count": sum(per_source_counts.values()),
             "per_source_counts": per_source_counts,
         }
 
