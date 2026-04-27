@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from src.calibre_mcp.annotation_providers.kindle_provider import (
+from src.archilles.annotation_providers.kindle_provider import (
     KindleProvider,
     _parse_clipping_date,
     _parse_meta_line,
