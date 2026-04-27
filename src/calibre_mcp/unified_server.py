@@ -819,6 +819,19 @@ def create_unified_tools(server: UnifiedMCPServer) -> list[dict]:
                     f"Optional: limit to one source. Available: {source_names}. "
                     "Default = aggregate across all sources."
                 )
+            elif name == "set_research_interests":
+                # Special case: source=None routes to the master file at
+                # master_dir/research_interests.json (applies as a baseline
+                # to every source via the effective merge), NOT to the
+                # default source's library — see set_research_interests_tool.
+                description = (
+                    f"Source name to scope research interests to one library. "
+                    f"Available: {source_names}. "
+                    "Omit to read or write the master research-interests file "
+                    "at <master_dir>/research_interests.json, which applies as "
+                    "a baseline to every source's searches via the effective "
+                    "merge layer."
+                )
             else:
                 default = server.default_source
                 description = (
