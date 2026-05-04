@@ -185,10 +185,25 @@ class WatchdogScanner:
         }
         self._annotation_cache: dict[str, dict[str, Any]] | None = None
         self._annotation_cache_dirty = False
+        self._shutdown_requested = False
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def shutdown_requested(self) -> bool:
+        """True once a graceful shutdown has been requested via :meth:`request_shutdown`."""
+        return self._shutdown_requested
+
+    def request_shutdown(self) -> None:
+        """Signal that the current scan should stop after the currently-indexing book finishes.
+
+        Mirrors :class:`scripts.safe_indexer.SafeIndexer` semantics so a user CTRL+C
+        does not abort mid-write — the flag is consulted between books in both the
+        Phase-2 (delta updates) and Phase-3 (new-book indexing) loops.
+        """
+        self._shutdown_requested = True
 
     def scan(
         self,
@@ -217,6 +232,7 @@ class WatchdogScanner:
             'new_indexed':         0,    # count of Phase-3 immediate new-book indexes
             'new_indexed_time':    0.0,
             'scanned':             0,
+            'interrupted':         False,
         }
 
         # ── Phase 1: fast scan ─────────────────────────────────────────
@@ -282,6 +298,9 @@ class WatchdogScanner:
             books_to_update_list = sorted(books_to_update)
             total_p2 = len(books_to_update_list)
             for i, cid in enumerate(books_to_update_list, 1):
+                if self._shutdown_requested:
+                    print(f"\n⏸️  Abbruch angefordert — Phase 2 nach {i-1}/{total_p2} Büchern gestoppt.")
+                    break
                 meta = calibre_books.get(cid)
                 if not meta:
                     continue
@@ -315,6 +334,13 @@ class WatchdogScanner:
                     print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
                 self._save_checkpoint(total_p3, done_ids)
                 for j, entry in enumerate(pending, 1):
+                    if self._shutdown_requested:
+                        print(
+                            f"\n⏸️  Abbruch angefordert — Phase 3 nach "
+                            f"{already_done + j - 1}/{total_p3} Büchern gestoppt. "
+                            f"Checkpoint bleibt erhalten."
+                        )
+                        break
                     cid = entry['calibre_id']
                     meta = calibre_books.get(cid)
                     if not meta:
@@ -331,13 +357,20 @@ class WatchdogScanner:
                     except Exception as exc:
                         logger.error(f"New-book indexing failed for calibre_id={cid}: {exc}")
                         results['errors'].append({'calibre_id': cid, 'error': str(exc)})
-                if self.checkpoint_file.exists():
+                # Only clear the checkpoint when the run finished cleanly. On a
+                # graceful shutdown we keep it so the next watchdog run resumes
+                # exactly where this one stopped.
+                if not self._shutdown_requested and self.checkpoint_file.exists():
                     self.checkpoint_file.unlink()
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
 
         results['total_time'] = round(time.time() - t0, 1)
+        results['interrupted'] = self._shutdown_requested
 
         if not dry_run:
+            # Persist the annotation cache and write the log even on graceful
+            # shutdown so the partial run is recorded and the next scan benefits
+            # from the cached signatures.
             self._save_annotation_cache()
             self._write_log(results)
 

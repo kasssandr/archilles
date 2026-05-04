@@ -29,6 +29,7 @@ Environment
 import argparse
 import json
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -52,6 +53,32 @@ def _resolve_paths() -> tuple[Path, str, Path]:
     return library_path, db_path, archilles_dir
 
 
+def _install_shutdown_handler(scanner: WatchdogScanner) -> None:
+    """Forward SIGINT/SIGTERM into a graceful shutdown of the scanner.
+
+    First signal: request stop after the currently-indexing book finishes.
+    Second signal: hard exit (mirrors :class:`scripts.safe_indexer.SafeIndexer`).
+    """
+    def handler(signum, frame):
+        if not scanner.shutdown_requested:
+            print("\n\n" + "=" * 60)
+            print("⏸️  ABBRUCH ANGEFORDERT (CTRL+C)")
+            print("=" * 60)
+            print("  Aktuelles Buch wird zu Ende indexiert, dann gestoppt.")
+            print("  Für sofortigen Abbruch nochmals CTRL+C drücken")
+            print("  (kann das gerade laufende Buch unvollständig hinterlassen).")
+            print("=" * 60 + "\n")
+            scanner.request_shutdown()
+        else:
+            print("\n⚠️  HARTER ABBRUCH — gerade laufendes Buch ggf. unvollständig.")
+            print("   Beim nächsten Lauf wird es über den Checkpoint erneut versucht.\n")
+            sys.exit(1)
+
+    signal.signal(signal.SIGINT, handler)
+    if hasattr(signal, 'SIGTERM'):
+        signal.signal(signal.SIGTERM, handler)
+
+
 def _print_results(results: dict, json_mode: bool) -> None:
     if json_mode:
         print(json.dumps(results, indent=2, ensure_ascii=False))
@@ -63,7 +90,8 @@ def _print_results(results: dict, json_mode: bool) -> None:
     n_unch = len(results['unchanged'])
     n_err  = len(results['errors'])
 
-    print(f"\nARCHILLES Watchdog — scan complete in {results['total_time']}s")
+    header = "scan complete" if not results.get('interrupted') else "scan INTERRUPTED"
+    print(f"\nARCHILLES Watchdog — {header} in {results['total_time']}s")
     print(f"  Scanned:              {results['scanned']} books")
     print(f"  New (not indexed):    {n_new}")
     print(f"  Metadata changed:     {n_meta}")
@@ -146,6 +174,11 @@ def main() -> None:
     )
     if args.log_file:
         scanner.log_file = Path(args.log_file)
+
+    # Graceful CTRL+C / SIGTERM: finish current book, then stop. Mirrors the
+    # behaviour of batch_index.py via SafeIndexer so both tools react the same
+    # way to interrupts.
+    _install_shutdown_handler(scanner)
 
     if not args.json_mode:
         print(f"Library:  {library_path}")
