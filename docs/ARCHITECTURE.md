@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** April 2026 (HTTP/SSE transport for LLM-agnostic MCP access)
+**Last updated:** May 2026 (scheduled routines layer for multi-source synchronisation)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
@@ -70,6 +70,15 @@ The system is built around three principles: privacy by architecture (not by pol
                   │   MCP   │  │ Web UI  │  │   CLI   │
                   │ Server  │  │Streamlit│  │rag_demo │
                   └─────────┘  └─────────┘  └─────────┘
+                                                 ▲
+                                                 │
+                          ┌─────────────────────┴─────────────────────┐
+                          │     Scheduled Routines Layer               │
+                          │  run_routine.py  →  per-source wrapper     │
+                          │  run_link_vault.py  →  gated vault linker  │
+                          │  weekly_status_mail.py  →  Gmail digest    │
+                          │  (Windows Task Scheduler, OnLogon trigger) │
+                          └────────────────────────────────────────────┘
 ```
 
 * * *
@@ -299,6 +308,50 @@ Streamlit-based interface for users without Claude Desktop. Provides search with
 `rag_demo.py` provides the `archillesRAG` class (the core RAG implementation) and a CLI for single-book indexing, search queries, and result export.
 
 `batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), checkpoint-based resume for long-running operations, format preference (`--prefer-format pdf|epub|mobi|azw3`), and orphan cleanup (`--cleanup-orphans` removes index entries for books deleted from Calibre).
+
+* * *
+
+### 8\. Scheduled Routines Layer (`scripts/run_routine.py`, `scripts/run_link_vault.py`, `scripts/weekly_status_mail.py`)
+
+A thin orchestration layer that wraps the indexing tools above for unattended, scheduler-driven operation across the unified server's three sources (Calibre, Zotero, Obsidian/folder vaults). Background and rationale: see [ADR-025](DECISIONS.md#adr-025-scheduled-routines--pragmatischer-schritt-a-vor-watchdog-generalisierung-mai-2026).
+
+#### `run_routine.py` — generic per-source wrapper
+
+Reads the master config (`~/.archilles/config.json`), looks up the named source, and dispatches to the appropriate tool based on adapter type:
+
+| Adapter | Tool invoked | What runs |
+| --- | --- | --- |
+| `calibre` | `scripts/watchdog.py --json` | Hash-diff scan + delta updates for metadata/annotations, queues new books |
+| `obsidian`, `folder`, `zotero` | `scripts/batch_index.py --all --skip-existing` | Indexes documents not yet in LanceDB; metadata diff is *not* detected |
+
+CLI: `--source <name>` (required, must match a master-config entry) and `--frequency daily|weekly` (required). Throttling lives in the script, not the trigger: each successful run writes `<library>/.archilles/last_routine_run.txt` with an ISO timestamp; subsequent invocations skip when the marker is from today (`daily`) or the same ISO calendar week (`weekly`). Flags `--force` and `--dry-run` bypass the marker and the subprocess respectively.
+
+Output is captured (`subprocess.run(capture_output=True)`) and written to `<library>/.archilles/routine.log` (full subprocess stdout/stderr) and `<library>/.archilles/routine_history.jsonl` (one JSON record per run with timestamp, exit_code, duration_s, parsed stats). Stats parsing is best-effort: the Calibre path extracts the trailing JSON document from `watchdog --json` output via brace-counting; the batch-index path runs regexes over the human-readable summary lines.
+
+#### `run_link_vault.py` — gated vault maintenance
+
+A specialised wrapper around `D:\Archilles-Lab\CLAUDE\KI-Prompts+Codes\link_vault.py --semantic --apply`, which clusters Obsidian notes by topic, generates MOC files, and inserts cross-links based on LanceDB-derived semantic similarity. Because `--semantic` reads embeddings, the vault-linker requires a freshly indexed LanceDB. Two gates protect this:
+
+1. **Lab-routine gate.** Reads `<lab>/.archilles/last_routine_run.txt`; if not dated today, the run is skipped with reason `lab_routine_not_today`.
+2. **Monthly marker.** Own marker `<lab>/.archilles/last_link_vault_run.txt`; if it falls in the current calendar month, skipped with reason `monthly_marker`.
+
+Skips are recorded (with reason) in `<lab>/.archilles/vault_linker_history.jsonl` — they are operational signals, not failures. The next logon trigger retries automatically; on a day when the Lab routine completes, the linker fires next.
+
+#### `weekly_status_mail.py` — operations digest
+
+Reads each source's `routine_history.jsonl` plus the linker's `vault_linker_history.jsonl`, filters to the past 7 days, formats a plaintext digest (per-source counters, last run, last failure, last skip with reason) and sends it via Gmail SMTPS. Auth: `GMAIL_APP_PASSWORD` from `~/.archilles/secrets.env` (or `secrets.env.txt`, accommodating Notepad's silent `.txt` suffix on Windows). Own ISO-week marker (`~/.archilles/last_weekly_mail.txt`) ensures one digest per week.
+
+#### `install_scheduled_routines.ps1` — Windows Task Scheduler installer
+
+Idempotent PowerShell installer that registers five tasks under the current user without admin rights, all with OnLogon trigger and per-task delay (5 min for the three routines, 10 min for the mailer, 30 min for the linker so it strictly runs after the Lab routine has had a chance to complete). Throttling lives in the scripts, not in the triggers — so a task can fire at every logon and the script decides whether work is due. Missed triggers (machine off) are picked up at the next logon via `-StartWhenAvailable`.
+
+| Task | Delay | Frequency in script | Tool |
+| --- | --- | --- | --- |
+| `Archilles-Routine-Calibre` | PT5M | daily | `watchdog.py --json` |
+| `Archilles-Routine-Lab` | PT5M | daily | `batch_index --all --skip-existing` |
+| `Archilles-Routine-Zotero` | PT5M | weekly | `batch_index --all --skip-existing` |
+| `Archilles-Status-Mail` | PT10M | weekly | `weekly_status_mail.py` |
+| `Archilles-Vault-Linker` | PT30M | monthly + hard-gate | `link_vault.py --semantic --apply` |
 
 * * *
 

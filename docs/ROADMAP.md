@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** April 2026
+**Last updated:** May 2026
 
 ---
 
@@ -64,6 +64,8 @@ Annotation-Import-System: Provider-basierte Architektur für den Import von Anno
 
 HTTP/SSE-Transport (April 2026): `mcp_server.py` unterstützt jetzt beide MCP-Transports. `--transport stdio` (Default, unverändert für Claude Desktop) und `--transport sse` für ChatGPT Desktop, OpenAI Codex, Cursor und andere HTTP-basierte Clients. Host, Port und optionaler Bearer-Token konfigurierbar via CLI oder `config.json`-Block `transport`. Zwei parallele Instanzen auf verschiedenen Ports möglich. 11 Tests. Dokumentiert in [MCP Integration Guide](MCP_GUIDE.md).
 
+Scheduled Routines (Mai 2026): Eine Orchestrierungsschicht über die bestehenden Indexierungs-Tools, die für unbeaufsichtigten Multi-Source-Betrieb sorgt. `scripts/run_routine.py` ruft pro Source das passende Tool — `watchdog.py --json` für Calibre, `batch_index --all --skip-existing` für Zotero und Obsidian/Folder — und drosselt sich selbst über Marker-Dateien (täglich oder wöchentlich). `scripts/run_link_vault.py` führt den Vault-Cross-Linker als monatliche Maintenance, hart gegated darauf, dass die Lab-Routine am selben Tag erfolgreich abgeschlossen ist. `scripts/weekly_status_mail.py` versendet wöchentlich einen Plaintext-Digest aller Routine-Läufe per Gmail SMTP. Fünf Windows-Scheduler-Tasks werden idempotent durch `scripts/install_scheduled_routines.ps1` registriert. Begründung und Abgrenzung zur (vertagten) Watchdog-Generalisierung: [ADR-025](DECISIONS.md#adr-025-scheduled-routines--pragmatischer-schritt-a-vor-watchdog-generalisierung-mai-2026).
+
 ---
 
 ## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
@@ -76,7 +78,9 @@ Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidier
 
 **Benchmark-Suite für Bibliotheks-Retrieval (neu):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Benchmark wird vor dem Community-Release veröffentlicht und dient sowohl der internen Qualitätssicherung als auch der externen Kommunikation.
 
-**Calibre Watchdog (neu):** Automatische Synchronisation zwischen Calibre und LanceDB. Ein periodischer Scan-Prozess erkennt drei Änderungstypen: Metadaten-Änderungen (Comments, Tags, Rating — via `metadata_hash`-Vergleich, ADR-011), Annotations-Änderungen (via `annotation_hash`), und neu hinzugekommene Titel. Metadaten- und Annotations-Updates werden sofort via `index_book()` ausgeführt (~1–3s pro Buch); neue Bücher werden in eine Index-Queue geschrieben. Der Watchdog ist kein Daemon, sondern ein idempotenter Scan, aufrufbar via `scripts/watchdog.py` oder Windows Task Scheduler. Er ist die Voraussetzung für alle nachgelagerten Features, die auf aktuellem LanceDB-Bestand aufbauen. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
+**Calibre Watchdog (umgesetzt April 2026):** Automatische Synchronisation zwischen Calibre und LanceDB. Ein periodischer Scan-Prozess erkennt drei Änderungstypen: Metadaten-Änderungen (Comments, Tags, Rating — via `metadata_hash`-Vergleich, ADR-011), Annotations-Änderungen (via `annotation_hash`), und neu hinzugekommene Titel. Metadaten- und Annotations-Updates werden sofort via `index_book()` ausgeführt (~1–3s pro Buch); neue Bücher werden in eine Index-Queue geschrieben. Der Watchdog ist kein Daemon, sondern ein idempotenter Scan, aufrufbar via `scripts/watchdog.py` oder Windows Task Scheduler. Er ist die Voraussetzung für alle nachgelagerten Features, die auf aktuellem LanceDB-Bestand aufbauen. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
+
+**Watchdog-Generalisierung für Zotero und Obsidian (offen, Schritt B):** Der Watchdog ist heute Calibre-spezifisch — er liest direkt `metadata.db`. Das Adapter-Interface (`compute_metadata_hash`, `compute_orphan_ids`) ist seit April vorbereitet, der `WatchdogScanner` selbst noch nicht generalisiert. Im Mai 2026 wurde stattdessen pragmatisch eine Routine-Orchestrierung ausgeliefert (siehe v0.9-Abschnitt), die für Lab und Zotero `batch_index --all --skip-existing` nutzt. Schritt B holt das nach: `WatchdogScanner` adapter-agnostisch machen (Annotation-Cache pro Adapter, `doc_id` statt `calibre_id`), das MCP-Tool `watchdog_scan` aus `_CALIBRE_ONLY_TOOLS` rausnehmen, damit ein „Jetzt-indexieren"-Knopf in Claude-Frontends auch für Lab und Zotero funktioniert.
 
 Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
 

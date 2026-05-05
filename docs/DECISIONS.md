@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 22. April 2026 (ADR-024: HTTP/SSE-Transport für LLM-Agnostik)
+**Letzte Überarbeitung:** 4. Mai 2026 (ADR-025: Scheduled Routines — pragmatischer Schritt A vor Watchdog-Generalisierung)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -443,6 +443,27 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 **Begründung:** Strukturinformationen sind für zitierbare Retrievalergebnisse (Kapitelangabe, section_type-Filterung) unverzichtbar. Die EPUB-Pipeline hatte das Problem durch TOC-basiertes Parsing bereits gelöst; die PDF-Pipeline wurde auf denselben Stand gebracht. Die Filterung malformierter TOCs (zu kurze Titel, reine Zeichennummern) verhindert Rauschen in der Metadaten.
 
 **Implementierung:** `src/extractors/pdf_extractor.py` — `_build_page_toc_map()`, `_section_type_from_toc_title()`, `_create_chunks_with_pages()`. Verifikation an Testbüchern (Eunapios, Golden Bough); Reports in `reports/chunk_inspection/`.
+
+---
+
+### ADR-025: Scheduled Routines — pragmatischer Schritt A vor Watchdog-Generalisierung (Mai 2026)
+
+**Kontext:** Mit dem Unified MCP Server (April 2026) standen drei Quellen unter einem Dach: Calibre, Zotero und der Obsidian-Vault des Archilles Lab. Der echte Watchdog (Hash-Diff über Metadaten und Annotationen) existiert aber nur für Calibre — er liest direkt `metadata.db`. Das adapter-agnostische Interface (`compute_metadata_hash`, `compute_orphan_ids`) ist seit April vorbereitet, der `WatchdogScanner` selbst noch nicht generalisiert. Das MCP-Tool `watchdog_scan` ist im Unified-Server explizit über `_CALIBRE_ONLY_TOOLS` gegated. Für Lab und Zotero gab es keinen Routine-Pfad — manuelle `batch_index`-Aufrufe waren der einzige Weg.
+
+**Entscheidung:** Statt den Watchdog selbst zu generalisieren („Schritt B"), wird zuerst eine pragmatische Lösung („Schritt A") ausgeliefert: ein Wrapper-Skript `scripts/run_routine.py`, das pro Source das passende Tool auswählt — `scripts/watchdog.py --json` für Calibre, `scripts/batch_index.py --all --skip-existing` für die übrigen Adapter. Throttling per Marker-Datei (`<library>/.archilles/last_routine_run.txt`), Frequenzen `daily` und `weekly`. Der Wrapper schreibt eine maschinenlesbare History (`routine_history.jsonl`), aus der ein Wochen-Status-Mailer (`scripts/weekly_status_mail.py`) automatisch sonntags eine Plaintext-Mail per Gmail SMTP versendet. Ergänzt um eine monatlich gegatete Vault-Linker-Routine (`scripts/run_link_vault.py`), die `link_vault.py --semantic --apply` ruft, sobald die Lab-Routine am selben Tag erfolgreich abgeschlossen ist.
+
+**Warum nicht ein einheitliches Tool pro Source:** Die naheliegende Frage war „ein Tool für alle Quellen oder drei spezialisierte Tools?". Antwort: **eines mit `source`-Parameter**. Aggregiertes Verhalten ohne Argument, spezialisiertes mit Argument. So gibt es keine Code-Duplikate; die drei „spezialisierten Routinen" leben in drei Scheduler-Einträgen mit unterschiedlichem `--source`-Argument, nicht in drei separaten Skripten.
+
+**Warum hartes Gating statt Delay beim Vault-Linker:** `link_vault.py --semantic` liest LanceDB-Embeddings, um semantische Nachbarn zwischen Notizen zu finden — die LanceDB muss frisch sein. Naheliegend wäre ein Trigger-Delay nach der Lab-Routine. Das skaliert aber nicht: bei einer kleinen GPU braucht ein voller Lab-Indexierungslauf Stunden, kein fester Delay-Wert deckt das robust ab. Stattdessen prüft der Vault-Linker den Lab-Marker direkt und überspringt sich selbst (mit dokumentiertem Grund), wenn die Lab-Routine an dem Tag noch nicht abgeschlossen ist. Beim nächsten Logon-Trigger versucht er es erneut. Skips sind kein Fehler, sondern werden in `vault_linker_history.jsonl` mit `reason` vermerkt und in der Wochen-Mail sichtbar.
+
+**Konsequenzen:**
+- Fünf Windows-Scheduler-Tasks (`Archilles-Routine-Calibre/Lab/Zotero`, `Archilles-Status-Mail`, `Archilles-Vault-Linker`), alle mit OnLogon-Trigger, registriert idempotent durch `scripts/install_scheduled_routines.ps1`
+- Master-Config (`~/.archilles/config.json`) wird zur Quelle der Wahrheit — der Wrapper liest `library_path` und `adapter` pro Source
+- Lab und Zotero finden so neue Dokumente, erkennen aber **keine** Metadaten- oder Annotation-Änderungen an bereits indexierten Dokumenten — das bleibt Schritt B vorbehalten
+- Die Wochen-Mail liefert den Operationsbeleg ohne weitere Infrastruktur (keine Monitoring-Dashboards, kein externer Service, nur Plaintext über Gmail SMTP)
+- Das MCP-Tool `watchdog_scan` bleibt vorerst Calibre-only; der „Jetzt-indexieren"-Knopf für Lab/Zotero im Web-Frontend ist explizit auf Schritt B vertagt
+
+**Verworfen:** Den Watchdog jetzt schon zu generalisieren. Der Refactoring-Aufwand (Annotation-Cache pro Adapter, MCP-Tool-Routing, Test-Suite) lohnt sich erst, wenn der reale Bedarf nachweisbar ist. Für den 80%-Fall — neue Dokumente automatisch einsammeln und einen wöchentlichen Status-Beleg erhalten — reicht der pragmatische Wrapper.
 
 ---
 

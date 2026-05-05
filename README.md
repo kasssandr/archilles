@@ -70,6 +70,9 @@ Register project-specific keywords once and they automatically receive a score b
 ### 📤 **Academic Bibliography Export**
 Export your library (or any filtered subset) as BibTeX, RIS, EndNote, JSON, or CSV. Filter by author, tag, or publication year. One tool call from Claude Desktop is all it takes.
 
+### 🔄 **Scheduled Routines** *(Windows, multi-source)*
+Five idempotent Task Scheduler entries cover the unattended case: daily Calibre watchdog, daily Obsidian-vault scan, weekly Zotero scan, monthly cross-link maintenance for the Obsidian vault (hard-gated on a successful index run), and a weekly Gmail status digest so you know the rest is working. One PowerShell installer, no admin rights, throttled per source by marker files. See [MCP Guide → Option E](docs/MCP_GUIDE.md#option-e-unified-scheduled-routines-multi-source-windows).
+
 ---
 
 ## Why Archilles?

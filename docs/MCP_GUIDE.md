@@ -297,13 +297,17 @@ Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop
 
 ## Keeping Your Index in Sync
 
-Once your library is indexed, every book you edit, every tag you change, every highlight you add in Calibre is a divergence between Calibre and LanceDB. The **Watchdog** (`scripts/watchdog.py`) closes that gap: a fast scan that detects metadata and annotation changes via hash comparison, updates the LanceDB delta, and queues genuinely new books for the next batch-index run.
+Once your library is indexed, every book you edit, every tag you change, every highlight you add in Calibre is a divergence between Calibre and LanceDB. The **Watchdog** (`scripts/watchdog.py`) closes that gap for **Calibre**: a fast scan that detects metadata and annotation changes via hash comparison, updates the LanceDB delta, and queues genuinely new books for the next batch-index run.
 
 After the first scan has seeded its annotation-signature cache, subsequent scans typically finish in a few seconds on a library of a few thousand titles — they reopen only the books whose file signature changed. The first scan itself is slower, because each PDF with embedded highlights is opened once to seed the cache. You only need to run the watchdog periodically — **daily or weekly is enough for most users; monthly is fine for libraries that don't change often**. Hourly schedules are overkill unless you're actively curating in Calibre all day.
+
+> **For Zotero and Obsidian/folder sources** the hash-based watchdog does not yet exist — `watchdog_scan` is currently Calibre-only. The unified scheduled-routines layer (Option E below) covers all three sources by running the appropriate tool per adapter, but for non-Calibre sources it only finds *new* documents, not metadata edits on already-indexed ones. Generalising the watchdog is on the roadmap; until then, the routines layer is the recommended path for Zotero and Obsidian.
 
 ### Option A: Claude Routine (easiest if you use Claude)
 
 The MCP server exposes the scan as a tool called `watchdog_scan`. In Claude Desktop, create a Routine that calls it on your preferred schedule (Settings → Routines → New Routine → "Run tool `watchdog_scan`" → pick an interval). No shell, no scheduler, no configuration files.
+
+> Note: `watchdog_scan` is Calibre-only. If your unified config also includes Zotero or an Obsidian vault, those sources are not covered by this tool — use Option E for full multi-source coverage.
 
 ### Option B: Windows Task Scheduler
 
@@ -373,6 +377,38 @@ Create `~/Library/LaunchAgents/org.archilles.watchdog.plist`:
 ```
 
 Load it with `launchctl load ~/Library/LaunchAgents/org.archilles.watchdog.plist`. To remove it later, `launchctl unload …` then delete the file.
+
+### Option E: Unified Scheduled Routines (multi-source, Windows)
+
+If your `~/.archilles/config.json` lists more than one source — Calibre, Zotero, an Obsidian vault — the helper `scripts/run_routine.py` covers all of them with a single wrapper. It picks the right tool per adapter (`watchdog.py` for Calibre, `batch_index.py --all --skip-existing` for Zotero and folder/Obsidian), self-throttles via per-library marker files, and writes a structured history that a weekly mailer can summarise.
+
+Install all five tasks at once:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File C:\Path\To\archilles\scripts\install_scheduled_routines.ps1
+```
+
+This registers (idempotently, no admin rights):
+
+| Task | Trigger / Delay | Frequency in script |
+|------|-----------------|---------------------|
+| `Archilles-Routine-Calibre` | OnLogon + 5 min | daily |
+| `Archilles-Routine-Lab` | OnLogon + 5 min | daily |
+| `Archilles-Routine-Zotero` | OnLogon + 5 min | weekly |
+| `Archilles-Status-Mail` | OnLogon + 10 min | weekly (first logon of new ISO week) |
+| `Archilles-Vault-Linker` | OnLogon + 30 min | monthly + hard-gated on Lab routine |
+
+The trigger fires at every logon; the script decides per run whether work is due (a single marker file in `<library>/.archilles/last_routine_run.txt` makes this idempotent). Missed triggers because the machine was off are picked up at the next logon.
+
+The status mail requires a Gmail App Password in `~/.archilles/secrets.env` (key `GMAIL_APP_PASSWORD`); recipient and sender are hard-coded in the script — adjust before first use if you forked the repo.
+
+Uninstall:
+
+```powershell
+Get-ScheduledTask -TaskName 'Archilles-*' | Unregister-ScheduledTask -Confirm:$false
+```
+
+For the architectural background and the explicit scope (what the routines layer does *not* do — namely metadata-diff for non-Calibre sources, which is reserved for a future watchdog generalisation), see [ADR-025](DECISIONS.md#adr-025-scheduled-routines--pragmatischer-schritt-a-vor-watchdog-generalisierung-mai-2026) and [ARCHITECTURE.md §8](ARCHITECTURE.md).
 
 ### What the Watchdog Actually Does
 
