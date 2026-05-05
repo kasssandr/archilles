@@ -2570,9 +2570,13 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
 
 def _handle_import_annotations(args):
-    """Handle the import-annotations subcommand (no RAG model needed)."""
+    """Handle the import-annotations subcommand."""
     from src.archilles.annotation_providers import create_default_registry
-    from src.calibre_mcp.book_matcher import BookMatcher
+    from src.calibre_mcp.book_matcher import BookMatcher, load_asin_index
+    from src.calibre_mcp.annotation_writer import (
+        annotation_dicts_for_matching,
+        write_annotations,
+    )
 
     source = args.source
     file_path = args.path
@@ -2635,11 +2639,15 @@ def _handle_import_annotations(args):
             books = []
 
         if books:
-            matcher = BookMatcher(books, fuzzy_threshold=args.fuzzy_threshold)
-            items = [
-                {"title": a.book_title or "", "author": a.book_author, "annotation": a}
-                for a in annotations
-            ]
+            asin_index = load_asin_index(Path(library_path))
+            matcher = BookMatcher(
+                books,
+                fuzzy_threshold=args.fuzzy_threshold,
+                asin_index=asin_index,
+            )
+            print(f"  ASIN identifiers in Calibre: {len(asin_index)}")
+
+            items = annotation_dicts_for_matching(annotations)
             matched, unmatched = matcher.match_batch(items)
 
             print(f"\n  Match results:")
@@ -2647,17 +2655,23 @@ def _handle_import_annotations(args):
             print(f"    Unmatched: {len(unmatched)} annotations")
 
             if matched:
-                # Group matched by calibre book
+                # Group matched by calibre book for display
                 by_calibre = {}
                 for m in matched:
                     cid = m["calibre_id"]
-                    by_calibre.setdefault(cid, {"title": m["calibre_title"], "items": []})
+                    by_calibre.setdefault(
+                        cid, {"title": m["calibre_title"], "items": []}
+                    )
                     by_calibre[cid]["items"].append(m)
                 print(f"\n  Matched books:")
                 for cid, info in sorted(by_calibre.items()):
                     score = info["items"][0].get("match_score", 0)
                     mtype = info["items"][0].get("match_type", "?")
-                    print(f"    [{cid}] {info['title']} — {len(info['items'])} annotations ({mtype}, score: {score:.0f})")
+                    print(
+                        f"    [{cid}] {info['title']} — "
+                        f"{len(info['items'])} annotations "
+                        f"({mtype}, score: {score:.0f})"
+                    )
 
             if unmatched:
                 print(f"\n  Unmatched (not in Calibre library):")
@@ -2669,24 +2683,39 @@ def _handle_import_annotations(args):
                         print(f"    - {t}")
 
                 if not args.dry_run and library_path:
-                    review_path = Path(library_path) / ".archilles" / "unmatched_annotations.json"
+                    review_path = (
+                        Path(library_path) / ".archilles" / "unmatched_annotations.json"
+                    )
                     review_path.parent.mkdir(parents=True, exist_ok=True)
-                    review_data = [{"title": u.get("title"), "author": u.get("author")} for u in unmatched]
+                    review_data = [
+                        {"title": u.get("title"), "author": u.get("author")}
+                        for u in unmatched
+                    ]
                     with open(review_path, "w", encoding="utf-8") as f:
                         json.dump(review_data, f, indent=2, ensure_ascii=False)
                     print(f"\n  Review queue written to: {review_path}")
+
+            # 3. Persistence: embed and write into LanceDB (unless --dry-run)
+            if matched and not args.dry_run:
+                db_path = Path(args.db_path) if args.db_path else (
+                    Path(library_path) / ".archilles" / "rag_db"
+                )
+                print(f"\n  Embedding and writing to LanceDB: {db_path}")
+                n_books, n_notes = write_annotations(
+                    matched=matched,
+                    library=Path(library_path),
+                    db_path=db_path,
+                )
+                print(f"\n  Wrote {n_notes} note(s) for {n_books} book(s).\n")
     else:
         print(f"\n  WARNING: No ARCHILLES_LIBRARY_PATH set — skipping Calibre matching.")
         print(f"  Set the environment variable to enable book matching.")
         matched = []
 
-    # 3. Summary
+    # 4. Summary
     if args.dry_run:
         print(f"\n  DRY RUN — no changes written to index.")
         print(f"  Remove --dry-run to import into the ARCHILLES index.\n")
-    else:
-        print(f"\n  NOTE: Embedding into LanceDB index not yet implemented.")
-        print(f"  Annotations were parsed and matched but not stored.\n")
 
 
 def main():
