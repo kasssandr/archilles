@@ -72,6 +72,26 @@ def _parse_year(date_str: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _parse_extra(extra: str) -> dict[str, str | int]:
+    """Parse Zotero's free-form 'extra' field into key-value pairs.
+
+    Lines matching "Key: Value" are extracted; all others are ignored.
+    Keys are lowercased and spaces replaced by underscores.
+    'rating' is converted to int if the value is a plain digit 0-9.
+    """
+    result: dict[str, str | int] = {}
+    for line in extra.splitlines():
+        m = re.match(r'^([^:]+):\s*(.+)$', line.strip())
+        if not m:
+            continue
+        key = m.group(1).strip().lower().replace(" ", "_")
+        val: str | int = m.group(2).strip()
+        if key == "rating" and isinstance(val, str) and val.isdigit():
+            val = int(val)
+        result[key] = val
+    return result
+
+
 class ZoteroAdapter(SourceAdapter):
     """Read-only adapter for Zotero libraries (zotero.sqlite).
 
@@ -182,6 +202,28 @@ class ZoteroAdapter(SourceAdapter):
     # ── Tags ─────────────────────────────────────────────────────
 
     @staticmethod
+    def _get_collection_ids(conn: sqlite3.Connection, collection_name: str) -> set[int]:
+        """Return all collectionIDs with the given name plus all their descendants."""
+        roots = conn.execute(
+            "SELECT collectionID FROM collections WHERE collectionName = ?",
+            (collection_name,),
+        ).fetchall()
+        if not roots:
+            return set()
+        ids = {r[0] for r in roots}
+        queue = list(ids)
+        while queue:
+            ph = ",".join("?" * len(queue))
+            children = conn.execute(
+                f"SELECT collectionID FROM collections WHERE parentCollectionID IN ({ph})",
+                queue,
+            ).fetchall()
+            new_ids = {r[0] for r in children} - ids
+            queue = list(new_ids)
+            ids |= new_ids
+        return ids
+
+    @staticmethod
     def _get_tags(conn: sqlite3.Connection, item_id: int) -> list[str]:
         rows = conn.execute(
             """
@@ -281,7 +323,7 @@ class ZoteroAdapter(SourceAdapter):
         """Build DocumentMetadata for a single Zotero item."""
         fields = self._get_fields(conn, item_id, [
             "title", "abstractNote", "date", "publisher", "language",
-            "series", "shortTitle",
+            "series", "shortTitle", "extra",
         ])
 
         file_path, file_format = self._get_primary_attachment(conn, item_id)
@@ -305,6 +347,7 @@ class ZoteroAdapter(SourceAdapter):
             publisher=fields.get("publisher", ""),
             series=fields.get("series", ""),
             identifiers=self._get_identifiers(conn, item_id),
+            custom_fields=_parse_extra(fields.get("extra", "")),
             timestamps=DocumentTimestamps(
                 created_at=ts_row["dateAdded"] if ts_row else None,
                 modified_at=ts_row["dateModified"] if ts_row else None,
@@ -317,6 +360,8 @@ class ZoteroAdapter(SourceAdapter):
         self,
         tag_filter: str | None = None,
         exclude_tag: str | None = None,
+        collection_filter: str | None = None,
+        item_type_filter: str | None = None,
     ) -> list[DocumentMetadata]:
         conn = self._connect()
         try:
@@ -348,6 +393,30 @@ class ZoteroAdapter(SourceAdapter):
                     )
                 """
                 params.append(exclude_tag)
+
+            if collection_filter:
+                col_ids = self._get_collection_ids(conn, collection_filter)
+                if not col_ids:
+                    logger.warning("Zotero collection %r not found — no items returned", collection_filter)
+                    return []
+                ph = ",".join("?" * len(col_ids))
+                query += f"""
+                    AND i.itemID IN (
+                        SELECT itemID FROM collectionItems WHERE collectionID IN ({ph})
+                    )
+                """
+                params.extend(col_ids)
+
+            if item_type_filter:
+                type_row = conn.execute(
+                    "SELECT itemTypeID FROM itemTypes WHERE LOWER(typeName) = LOWER(?)",
+                    (item_type_filter,),
+                ).fetchone()
+                if not type_row:
+                    logger.warning("Zotero item type %r not found — no items returned", item_type_filter)
+                    return []
+                query += " AND i.itemTypeID = ?"
+                params.append(type_row[0])
 
             query += " ORDER BY i.itemID"
             rows = conn.execute(query, params).fetchall()

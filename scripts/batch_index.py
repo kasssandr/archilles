@@ -735,13 +735,15 @@ def _adapter_list_books(
     tag_filter: Optional[str] = None,
     exclude_tags: Optional[List[str]] = None,
     author_filter: Optional[List[str]] = None,
+    collection_filter: Optional[str] = None,
+    item_type_filter: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """List books via a SourceAdapter, returning dicts compatible with batch_index().
 
     This replaces the Calibre-specific get_all_books/get_books_by_tag/get_books_by_author
     for non-Calibre adapters.
     """
-    docs = adapter.list_documents(tag_filter=tag_filter)
+    docs = adapter.list_documents(tag_filter=tag_filter, collection_filter=collection_filter, item_type_filter=item_type_filter)
 
     # Apply exclude_tags (adapter only supports single exclude_tag)
     if exclude_tags:
@@ -1449,6 +1451,9 @@ Profiles:
     group.add_argument('--ids', metavar='ID[,ID,...]',
                        help='Comma-separated Calibre book IDs (e.g. --ids 1234,5678,9012). '
                             'Use --force to re-index already indexed books.')
+    group.add_argument('--collection', metavar='NAME',
+                       help='Index items in this Zotero collection (and all sub-collections). '
+                            'Zotero libraries only.')
 
     # Rating filters (mutually exclusive)
     rating_group = parser.add_mutually_exclusive_group()
@@ -1476,6 +1481,10 @@ Profiles:
                              '(partial, case-insensitive). Can be repeated for multiple authors '
                              '(OR logic). Works alongside --tag, --all, and --author. '
                              'Example: --filter-author "Arendt" --filter-author "Benjamin"')
+    parser.add_argument('--type', dest='item_type', metavar='TYPE',
+                        help='Filter by Zotero item type (case-insensitive). '
+                             'Zotero libraries only. '
+                             'Examples: book, journalArticle, thesis, report, conferencePaper')
 
     # Options
     parser.add_argument('--dry-run', action='store_true',
@@ -1550,8 +1559,8 @@ Profiles:
         sys.exit(0)
 
     # Validate: require --all/--tag/--author/--ids unless --cleanup-orphans is the sole operation
-    if not args.all and not args.tag and not args.author and not args.ids and not args.cleanup_orphans:
-        parser.error("one of the arguments --all --tag --author --cleanup-orphans is required")
+    if not args.all and not args.tag and not args.author and not args.ids and not args.collection and not args.cleanup_orphans:
+        parser.error("one of the arguments --all --tag --author --collection --cleanup-orphans is required")
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -1647,13 +1656,19 @@ Profiles:
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"
     stats = {'indexed': 0, 'failed': 0}
-    if args.all or args.tag or args.author or args.ids:
+    if args.all or args.tag or args.author or args.ids or args.collection:
         if use_adapter:
             # Non-Calibre adapter: use adapter for book discovery
             tag = args.tag if args.tag else None
+            collection = args.collection if args.collection else None
             print(f"📚 Listing documents via {adapter.adapter_type} adapter")
-            if tag:
+            item_type = args.item_type if args.item_type else None
+            if collection:
+                print(f"  Collection filter: {collection} (incl. sub-collections)")
+            elif tag:
                 print(f"  Tag filter: {tag}")
+            if item_type:
+                print(f"  Item type filter: {item_type}")
             if filter_authors:
                 print(f"  Author filter: {', '.join(filter_authors)}")
             books = _adapter_list_books(
@@ -1661,6 +1676,8 @@ Profiles:
                 tag_filter=tag,
                 exclude_tags=effective_excludes or None,
                 author_filter=filter_authors if (filter_authors or args.author) else None,
+                collection_filter=collection,
+                item_type_filter=item_type,
             )
             # --author mode: filter by author name
             if args.author and not filter_authors:
@@ -1668,6 +1685,8 @@ Profiles:
                     adapter,
                     exclude_tags=effective_excludes or None,
                     author_filter=[args.author],
+                    collection_filter=collection,
+                    item_type_filter=item_type,
                 )
         elif args.all:
             print(f"📚 Indexing ALL books in the library")

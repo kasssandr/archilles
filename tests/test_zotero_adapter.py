@@ -17,7 +17,7 @@ from src.adapters import create_adapter, detect_adapter_type
 # ── Fixtures ────────────────────────────────────────────────────
 
 
-def _create_zotero_db(library_path: Path, items=None):
+def _create_zotero_db(library_path: Path, items=None, collections=None):
     """Create a minimal zotero.sqlite for testing."""
     db_path = library_path / "zotero.sqlite"
     conn = sqlite3.connect(str(db_path))
@@ -62,6 +62,7 @@ def _create_zotero_db(library_path: Path, items=None):
         INSERT INTO fields VALUES (8, 'series');
         INSERT INTO fields VALUES (9, 'shortTitle');
         INSERT INTO fields VALUES (10, 'ISSN');
+        INSERT INTO fields VALUES (11, 'extra');
 
         CREATE TABLE itemDataValues (
             valueID INTEGER PRIMARY KEY,
@@ -209,7 +210,7 @@ def _create_zotero_db(library_path: Path, items=None):
         )
 
         # Set EAV fields
-        for field in ("title", "abstractNote", "date", "publisher", "language", "ISBN", "DOI", "series", "shortTitle", "ISSN"):
+        for field in ("title", "abstractNote", "date", "publisher", "language", "ISBN", "DOI", "series", "shortTitle", "ISSN", "extra"):
             mapped = field
             if field == "ISBN":
                 mapped = "isbn"
@@ -294,6 +295,19 @@ def _create_zotero_db(library_path: Path, items=None):
         # Deleted items
         if item.get("deleted"):
             conn.execute("INSERT INTO deletedItems (itemID) VALUES (?)", (item["itemID"],))
+
+    # Collections
+    for col in (collections or []):
+        conn.execute(
+            "INSERT INTO collections (collectionID, collectionName, parentCollectionID, libraryID, key) "
+            "VALUES (?, ?, ?, 1, ?)",
+            (col["collectionID"], col["collectionName"], col.get("parentCollectionID"), col.get("key", f"COL{col['collectionID']:04d}")),
+        )
+        for item_id in col.get("items", []):
+            conn.execute(
+                "INSERT INTO collectionItems (collectionID, itemID) VALUES (?, ?)",
+                (col["collectionID"], item_id),
+            )
 
     conn.commit()
     conn.close()
@@ -565,3 +579,177 @@ class TestZoteroComments:
     def test_get_comments_not_found(self, zotero_library):
         adapter = create_adapter(zotero_library)
         assert adapter.get_comments("NONEXIST") == ""
+
+
+# ── Collection Filter ────────────────────────────────────────────
+
+
+@pytest.fixture
+def zotero_library_collections(tmp_path):
+    """Library with two top-level collections and one nested sub-collection."""
+    items = [
+        {"itemID": 1, "key": "HIST0001", "itemTypeID": 7, "title": "Ancient Rome",
+         "authors": [("Mary", "Johnson")], "date": "2019"},
+        {"itemID": 2, "key": "PHYS0001", "itemTypeID": 12, "title": "Quantum Mechanics",
+         "authors": [("", "Feynman")], "date": "1965"},
+        {"itemID": 3, "key": "HIST0002", "itemTypeID": 7, "title": "Medieval Europe",
+         "authors": [("Paul", "Smith")], "date": "2005",
+         "attachment": {"itemID": 100, "key": "ATT00100", "linkMode": 0,
+                        "contentType": "application/pdf", "path": "storage:medieval.pdf",
+                        "filename": "medieval.pdf"}},
+        {"itemID": 4, "key": "HIST0003", "itemTypeID": 7, "title": "Byzantine Empire",
+         "authors": [("Anna", "Komnene")], "date": "2010"},
+    ]
+    collections = [
+        {"collectionID": 10, "collectionName": "History", "items": [1, 3]},
+        {"collectionID": 11, "collectionName": "Physics", "items": [2]},
+        {"collectionID": 12, "collectionName": "Medieval", "parentCollectionID": 10, "items": [3, 4]},
+    ]
+    _create_zotero_db(tmp_path, items, collections)
+    return tmp_path
+
+
+class TestZoteroCollectionFilter:
+    def test_collection_filter_basic(self, zotero_library_collections):
+        adapter = create_adapter(zotero_library_collections)
+        docs = adapter.list_documents(collection_filter="Physics")
+        assert len(docs) == 1
+        assert docs[0].doc_id == "PHYS0001"
+
+    def test_collection_filter_includes_subcollections(self, zotero_library_collections):
+        """'History' contains items 1 and 3 directly; 'Medieval' (child of History)
+        adds items 3 and 4 — so the union is {1, 3, 4}."""
+        adapter = create_adapter(zotero_library_collections)
+        docs = adapter.list_documents(collection_filter="History")
+        doc_ids = {d.doc_id for d in docs}
+        assert doc_ids == {"HIST0001", "HIST0002", "HIST0003"}
+
+    def test_collection_filter_not_found_returns_empty(self, zotero_library_collections):
+        adapter = create_adapter(zotero_library_collections)
+        docs = adapter.list_documents(collection_filter="NoSuchCollection")
+        assert docs == []
+
+    def test_collection_filter_excludes_other_items(self, zotero_library_collections):
+        adapter = create_adapter(zotero_library_collections)
+        docs = adapter.list_documents(collection_filter="Physics")
+        doc_ids = {d.doc_id for d in docs}
+        assert "HIST0001" not in doc_ids
+        assert "HIST0002" not in doc_ids
+
+
+# ── Extra Field Parsing ──────────────────────────────────────────
+
+from src.adapters.zotero_adapter import _parse_extra
+
+
+class TestParseExtra:
+    def test_key_value_pairs(self):
+        extra = "Citation Key: smith2024\nRating: 4\nRead: 2024-03"
+        result = _parse_extra(extra)
+        assert result["citation_key"] == "smith2024"
+        assert result["rating"] == 4
+        assert result["read"] == "2024-03"
+
+    def test_rating_converted_to_int(self):
+        assert _parse_extra("Rating: 3")["rating"] == 3
+
+    def test_rating_non_numeric_stays_string(self):
+        result = _parse_extra("Rating: high")
+        assert result["rating"] == "high"
+
+    def test_unstructured_lines_ignored(self):
+        extra = "Some free text without colon\nKey: value"
+        result = _parse_extra(extra)
+        assert "key" in result
+        assert len(result) == 1
+
+    def test_empty_extra(self):
+        assert _parse_extra("") == {}
+
+    def test_key_normalization(self):
+        result = _parse_extra("Citation Key: abc\nmy field: xyz")
+        assert "citation_key" in result
+        assert "my_field" in result
+
+    def test_colon_in_value_preserved(self):
+        result = _parse_extra("DOI: 10.1000/xyz123:2024")
+        assert result["doi"] == "10.1000/xyz123:2024"
+
+
+@pytest.fixture
+def zotero_library_extra(tmp_path):
+    items = [
+        {
+            "itemID": 1,
+            "key": "EXTRA001",
+            "itemTypeID": 7,
+            "title": "A Rated Book",
+            "authors": [("John", "Doe")],
+            "date": "2023",
+            "extra": "Rating: 5\nRead: 2024-01\nCitation Key: doe2023",
+        },
+        {
+            "itemID": 2,
+            "key": "EXTRA002",
+            "itemTypeID": 7,
+            "title": "Unrated Book",
+            "authors": [("Jane", "Smith")],
+            "date": "2022",
+        },
+    ]
+    _create_zotero_db(tmp_path, items)
+    return tmp_path
+
+
+class TestZoteroExtraField:
+    def test_extra_fields_in_custom_fields(self, zotero_library_extra):
+        adapter = create_adapter(zotero_library_extra)
+        doc = adapter.get_metadata("EXTRA001")
+        assert doc.custom_fields["rating"] == 5
+        assert doc.custom_fields["read"] == "2024-01"
+        assert doc.custom_fields["citation_key"] == "doe2023"
+
+    def test_no_extra_yields_empty_custom_fields(self, zotero_library_extra):
+        adapter = create_adapter(zotero_library_extra)
+        doc = adapter.get_metadata("EXTRA002")
+        assert doc.custom_fields == {}
+
+
+# ── Item Type Filter ─────────────────────────────────────────────
+
+
+class TestZoteroItemTypeFilter:
+    def test_filter_by_book(self, zotero_library_multi):
+        adapter = create_adapter(zotero_library_multi)
+        docs = adapter.list_documents(item_type_filter="book")
+        # itemTypeID 7 = book: BOOK0001, NOAUTHOR (DELETED1 is excluded)
+        doc_ids = {d.doc_id for d in docs}
+        assert "BOOK0001" in doc_ids
+        assert "NOAUTHOR" in doc_ids
+        assert "ARTICLE1" not in doc_ids
+
+    def test_filter_by_journal_article(self, zotero_library_multi):
+        adapter = create_adapter(zotero_library_multi)
+        docs = adapter.list_documents(item_type_filter="journalArticle")
+        doc_ids = {d.doc_id for d in docs}
+        assert doc_ids == {"ARTICLE1"}
+
+    def test_case_insensitive(self, zotero_library_multi):
+        adapter = create_adapter(zotero_library_multi)
+        docs_lower = adapter.list_documents(item_type_filter="journalarticle")
+        docs_camel = adapter.list_documents(item_type_filter="journalArticle")
+        assert {d.doc_id for d in docs_lower} == {d.doc_id for d in docs_camel}
+
+    def test_unknown_type_returns_empty(self, zotero_library_multi):
+        adapter = create_adapter(zotero_library_multi)
+        docs = adapter.list_documents(item_type_filter="nosuchtype")
+        assert docs == []
+
+    def test_type_and_collection_combined(self, zotero_library_collections):
+        """book items within the History collection."""
+        adapter = create_adapter(zotero_library_collections)
+        docs = adapter.list_documents(collection_filter="History", item_type_filter="book")
+        doc_ids = {d.doc_id for d in docs}
+        # HIST0001 (book, in History), HIST0002 (book, in Medieval⊂History),
+        # HIST0003 (book, in Medieval⊂History)
+        assert doc_ids == {"HIST0001", "HIST0002", "HIST0003"}

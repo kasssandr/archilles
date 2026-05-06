@@ -222,6 +222,8 @@ class FolderAdapter(SourceAdapter):
         self,
         tag_filter: str | None = None,
         exclude_tag: str | None = None,
+        collection_filter: str | None = None,
+        item_type_filter: str | None = None,
     ) -> list[DocumentMetadata]:
         docs = list(self._ensure_cache().values())
 

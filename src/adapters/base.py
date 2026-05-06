@@ -74,8 +74,10 @@ class SourceAdapter(ABC):
         self,
         tag_filter: str | None = None,
         exclude_tag: str | None = None,
+        collection_filter: str | None = None,
+        item_type_filter: str | None = None,
     ) -> list[DocumentMetadata]:
-        """List all documents, optionally filtered by tag."""
+        """List all documents, optionally filtered by tag, collection, or item type."""
         ...
 
     @abstractmethod
