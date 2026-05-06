@@ -392,7 +392,16 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
 
     # Group by book to avoid duplicates when books have multiple authors
     query += " GROUP BY books.id"
-    query += " ORDER BY ratings.rating DESC, author, books.title"
+    query += (
+        " ORDER BY"
+        " CASE WHEN ratings.rating >= 10 THEN 0"
+        "      WHEN ratings.rating >= 8  THEN 1"
+        "      WHEN ratings.rating >= 6  THEN 2"
+        "      WHEN ratings.rating IS NULL THEN 3"
+        "      WHEN ratings.rating >= 4  THEN 4"
+        "      ELSE 5 END,"
+        " author, books.title"
+    )
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()
@@ -466,7 +475,16 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None,
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    query += " GROUP BY books.id ORDER BY books.id"
+    query += (
+        " GROUP BY books.id ORDER BY"
+        " CASE WHEN ratings.rating >= 10 THEN 0"
+        "      WHEN ratings.rating >= 8  THEN 1"
+        "      WHEN ratings.rating >= 6  THEN 2"
+        "      WHEN ratings.rating IS NULL THEN 3"
+        "      WHEN ratings.rating >= 4  THEN 4"
+        "      ELSE 5 END,"
+        " books.id"
+    )
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()
@@ -549,7 +567,16 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
         """
         params.extend(exclude_tags)
 
-    query += " GROUP BY books.id ORDER BY ratings.rating DESC, books.title"
+    query += (
+        " GROUP BY books.id ORDER BY"
+        " CASE WHEN ratings.rating >= 10 THEN 0"
+        "      WHEN ratings.rating >= 8  THEN 1"
+        "      WHEN ratings.rating >= 6  THEN 2"
+        "      WHEN ratings.rating IS NULL THEN 3"
+        "      WHEN ratings.rating >= 4  THEN 4"
+        "      ELSE 5 END,"
+        " books.title"
+    )
 
     cursor = conn.execute(query, params)
     rows = cursor.fetchall()

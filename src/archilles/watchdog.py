@@ -192,7 +192,8 @@ def _index_priority_key(
     elif rating >= 8:  rating_order = 1
     elif rating >= 6:  rating_order = 2
     elif rating == 0:  rating_order = 3
-    else:              rating_order = 4  # 1–2 stars: lower priority than unrated
+    elif rating >= 4:  rating_order = 4  # 2★
+    else:              rating_order = 5  # 1★
 
     return (0 if is_priority else 1, rating_order)
 
