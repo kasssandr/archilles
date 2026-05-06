@@ -875,6 +875,9 @@ class CalibreMCPServer:
         dry_run: bool = False,
         queue_new: bool = True,
         index_new: bool = False,
+        first_authors: list[str] | None = None,
+        first_tags: list[str] | None = None,
+        first_titles: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         MCP Tool: Scan the Calibre library for changes and sync into LanceDB.
@@ -901,9 +904,14 @@ class CalibreMCPServer:
         Scheduler or cron; see docs/MCP_GUIDE.md § "Keeping Your Index in Sync".
 
         Args:
-            dry_run:   Report changes only; do not modify LanceDB or the queue.
-            queue_new: Write newly discovered Calibre IDs to index_queue.json.
-            index_new: Index new books immediately (slow: ~90s/book with embeddings).
+            dry_run:       Report changes only; do not modify LanceDB or the queue.
+            queue_new:     Write newly discovered Calibre IDs to index_queue.json.
+            index_new:     Index new books immediately (slow: ~90s/book with embeddings).
+            first_authors: Substring list — books by matching author are indexed first.
+            first_tags:    Substring list — books carrying a matching tag are indexed first.
+            first_titles:  Substring list — books with a matching title are indexed first.
+
+        Within each priority group, books are ordered 5★ → 4★ → 3★ → unrated → 2–1★.
 
         Returns:
             Dictionary with scan results: counts, changed IDs, timing, errors.
@@ -929,6 +937,9 @@ class CalibreMCPServer:
                 dry_run=dry_run,
                 queue_new=queue_new,
                 index_new=index_new,
+                first_authors=first_authors,
+                first_tags=first_tags,
+                first_titles=first_titles,
             )
             # Add human-readable summary for the Routine output
             summary = (

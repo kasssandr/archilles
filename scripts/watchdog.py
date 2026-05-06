@@ -161,6 +161,21 @@ def main() -> None:
         '--log-file', metavar='PATH',
         help='Override log file path (default: <library>/.archilles/watchdog.log)'
     )
+    parser.add_argument(
+        '--first-author', metavar='AUTHOR', dest='first_authors',
+        action='append', default=[],
+        help='Index books by this author first (substring, case-insensitive); repeatable'
+    )
+    parser.add_argument(
+        '--first-tag', metavar='TAG', dest='first_tags',
+        action='append', default=[],
+        help='Index books with this tag first (case-insensitive); repeatable'
+    )
+    parser.add_argument(
+        '--first-title', metavar='TITLE', dest='first_titles',
+        action='append', default=[],
+        help='Index books whose title contains this substring first; repeatable'
+    )
     args = parser.parse_args()
 
     library_path, db_path, archilles_dir = _resolve_paths()
@@ -192,6 +207,9 @@ def main() -> None:
         dry_run=args.dry_run,
         queue_new=args.queue_new,
         index_new=args.index_new,
+        first_authors=args.first_authors,
+        first_tags=args.first_tags,
+        first_titles=args.first_titles,
     )
 
     _print_results(results, json_mode=args.json_mode)

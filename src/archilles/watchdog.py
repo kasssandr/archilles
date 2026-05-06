@@ -102,13 +102,16 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
                 ) AS author,
                 comments.text                       AS comments,
                 GROUP_CONCAT(DISTINCT tags.name)    AS tags,
-                publishers.name                     AS publisher
+                publishers.name                     AS publisher,
+                ratings.rating                      AS rating
             FROM books
             LEFT JOIN comments              ON books.id = comments.book
             LEFT JOIN books_tags_link       ON books.id = books_tags_link.book
             LEFT JOIN tags                  ON books_tags_link.tag = tags.id
             LEFT JOIN books_publishers_link ON books.id = books_publishers_link.book
             LEFT JOIN publishers            ON books_publishers_link.publisher = publishers.id
+            LEFT JOIN books_ratings_link    ON books.id = books_ratings_link.book
+            LEFT JOIN ratings               ON books_ratings_link.rating = ratings.id
             GROUP BY books.id
         """).fetchall()
     finally:
@@ -126,6 +129,7 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
             'tags':      tags_list,
             'publisher': row['publisher'] or '',
             'path':      str(library_path / row['path']),
+            'rating':    row['rating'] or 0,
         }
     return result
 
@@ -152,6 +156,45 @@ def _compute_metadata_hash(meta: dict[str, Any]) -> str:
     return hashlib.md5(
         json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')
     ).hexdigest()
+
+
+def _index_priority_key(
+    entry: dict,
+    calibre_books: dict,
+    first_authors: list[str],
+    first_tags: list[str],
+    first_titles: list[str],
+) -> tuple[int, int]:
+    """Sort key for new-book indexing order.
+
+    Returns (group, rating_order) where:
+      group 0 = explicit priority match (first_authors / first_tags / first_titles)
+      group 1 = normal queue
+
+    Within each group, rating order: 5★=0, 4★=1, 3★=2, unrated=3, 1–2★=4
+    Calibre stores ratings as 2/4/6/8/10; NULL → 0 (unrated).
+    """
+    meta = calibre_books.get(entry['calibre_id'], {})
+    rating = meta.get('rating') or 0
+
+    is_priority = False
+    if first_authors:
+        author_lc = meta.get('author', '').lower()
+        is_priority = any(a.lower() in author_lc for a in first_authors)
+    if not is_priority and first_tags:
+        tags_lc = {t.lower() for t in meta.get('tags', [])}
+        is_priority = any(t.lower() in tags_lc for t in first_tags)
+    if not is_priority and first_titles:
+        title_lc = meta.get('title', '').lower()
+        is_priority = any(t.lower() in title_lc for t in first_titles)
+
+    if rating >= 10:   rating_order = 0
+    elif rating >= 8:  rating_order = 1
+    elif rating >= 6:  rating_order = 2
+    elif rating == 0:  rating_order = 3
+    else:              rating_order = 4  # 1–2 stars: lower priority than unrated
+
+    return (0 if is_priority else 1, rating_order)
 
 
 class WatchdogScanner:
@@ -210,15 +253,24 @@ class WatchdogScanner:
         dry_run: bool = False,
         queue_new: bool = True,
         index_new: bool = False,
+        first_authors: list[str] | None = None,
+        first_tags: list[str] | None = None,
+        first_titles: list[str] | None = None,
     ) -> dict[str, Any]:
         """
         Run a full scan and return a results dict.
 
         Parameters
         ----------
-        dry_run   Report changes only; do not modify LanceDB or the queue.
-        queue_new Write new Calibre IDs to index_queue.json (default True).
-        index_new Index new books immediately via archillesRAG (slow, ~90s/book).
+        dry_run       Report changes only; do not modify LanceDB or the queue.
+        queue_new     Write new Calibre IDs to index_queue.json (default True).
+        index_new     Index new books immediately via archillesRAG (slow, ~90s/book).
+        first_authors Substring list — books whose author matches come first.
+        first_tags    Substring list — books carrying a matching tag come first.
+        first_titles  Substring list — books whose title matches come first.
+
+        Within each priority group, books are ordered 5★ → 4★ → 3★ → unrated →
+        2–1★ (low ratings treated as lower priority than unrated).
         """
         t0 = time.time()
         results: dict[str, Any] = {
@@ -328,6 +380,10 @@ class WatchdogScanner:
                 ni0 = time.time()
                 saved_total, done_ids = self._load_checkpoint()
                 pending = [e for e in results['new_books'] if e['calibre_id'] not in done_ids]
+                pending.sort(key=lambda e: _index_priority_key(
+                    e, calibre_books,
+                    first_authors or [], first_tags or [], first_titles or [],
+                ))
                 already_done = len(done_ids)
                 total_p3 = max(saved_total, already_done + len(pending))
                 if already_done:
