@@ -76,7 +76,7 @@ def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
     expires — tasks that fire simultaneously at login will serialize naturally
     rather than being skipped for the day.
     """
-    poll_interval = 60
+    poll_interval = 300
     deadline = time.time() + wait_s
     while True:
         locked = False
