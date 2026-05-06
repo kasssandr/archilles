@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
-from src.archilles.watchdog import WatchdogScanner
+from src.archilles.watchdog import WatchdogScanner, ZoteroWatchdogScanner
 
 
 def _resolve_paths() -> tuple[Path, str, Path]:
@@ -53,7 +53,14 @@ def _resolve_paths() -> tuple[Path, str, Path]:
     return library_path, db_path, archilles_dir
 
 
-def _install_shutdown_handler(scanner: WatchdogScanner) -> None:
+def _detect_scanner_type(library_path: Path) -> str:
+    """Return 'zotero' if the library contains zotero.sqlite, else 'calibre'."""
+    if (library_path / "zotero.sqlite").exists():
+        return "zotero"
+    return "calibre"
+
+
+def _install_shutdown_handler(scanner) -> None:
     """Forward SIGINT/SIGTERM into a graceful shutdown of the scanner.
 
     First signal: request stop after the currently-indexing book finishes.
@@ -110,19 +117,20 @@ def _print_results(results: dict, json_mode: bool) -> None:
     if results['new_books']:
         print(f"\n  New books queued for indexing:")
         for b in results['new_books'][:10]:
-            print(f"    [{b['calibre_id']}] {b['title']}")
+            book_id = b.get('calibre_id') or b.get('doc_id', '?')
+            print(f"    [{book_id}] {b['title']}")
         if n_new > 10:
             print(f"    … and {n_new - 10} more")
 
     if results['metadata_changed']:
         ids = results['metadata_changed'][:10]
         suffix = f" … +{len(results['metadata_changed']) - 10}" if len(results['metadata_changed']) > 10 else ""
-        print(f"\n  Metadata updated: calibre_ids {ids}{suffix}")
+        print(f"\n  Metadata updated: {ids}{suffix}")
 
     if results['annotations_changed']:
         ids = results['annotations_changed'][:10]
         suffix = f" … +{len(results['annotations_changed']) - 10}" if len(results['annotations_changed']) > 10 else ""
-        print(f"  Annotations updated: calibre_ids {ids}{suffix}")
+        print(f"  Annotations updated: {ids}{suffix}")
 
     print()
 
@@ -181,12 +189,26 @@ def main() -> None:
     library_path, db_path, archilles_dir = _resolve_paths()
 
     from src.archilles.config import get_excluded_tags
-    scanner = WatchdogScanner(
-        library_path=library_path,
-        db_path=db_path,
-        archilles_dir=archilles_dir,
-        excluded_tags=[] if args.include_excluded else get_excluded_tags(library_path),
-    )
+    excluded = [] if args.include_excluded else get_excluded_tags(library_path)
+    scanner_type = _detect_scanner_type(library_path)
+
+    if scanner_type == "zotero":
+        scanner = ZoteroWatchdogScanner(
+            library_path=library_path,
+            db_path=db_path,
+            archilles_dir=archilles_dir,
+            excluded_tags=excluded,
+        )
+        if not args.json_mode:
+            print(f"Scanner:  Zotero")
+    else:
+        scanner = WatchdogScanner(
+            library_path=library_path,
+            db_path=db_path,
+            archilles_dir=archilles_dir,
+            excluded_tags=excluded,
+        )
+
     if args.log_file:
         scanner.log_file = Path(args.log_file)
 
@@ -203,14 +225,17 @@ def main() -> None:
         else:
             print()
 
-    results = scanner.scan(
-        dry_run=args.dry_run,
-        queue_new=args.queue_new,
-        index_new=args.index_new,
-        first_authors=args.first_authors,
-        first_tags=args.first_tags,
-        first_titles=args.first_titles,
-    )
+    scan_kwargs: dict = {
+        'dry_run': args.dry_run,
+        'queue_new': args.queue_new,
+        'index_new': args.index_new,
+    }
+    if scanner_type == "calibre":
+        scan_kwargs['first_authors'] = args.first_authors
+        scan_kwargs['first_tags'] = args.first_tags
+        scan_kwargs['first_titles'] = args.first_titles
+
+    results = scanner.scan(**scan_kwargs)
 
     _print_results(results, json_mode=args.json_mode)
 

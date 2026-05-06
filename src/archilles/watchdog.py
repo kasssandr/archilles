@@ -613,3 +613,422 @@ class WatchdogScanner:
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
         with open(self.log_file, 'a', encoding='utf-8') as fh:
             fh.write('\n'.join(lines) + '\n')
+
+
+# ══════════════════════════════════════════════════════════════════
+# Zotero Watchdog
+# ══════════════════════════════════════════════════════════════════
+
+_ZOTERO_EXCLUDED_TYPE_IDS = (1, 3, 27)  # annotation, attachment, note
+_ZOTERO_INDEXABLE_CONTENT_TYPES = (
+    "application/pdf",
+    "application/epub+zip",
+    "text/html",
+    "text/plain",
+)
+
+
+def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
+    """Batch-read all Zotero items in one pass for watchdog scanning.
+
+    Returns {item_key: {title, authors, tags, abstract, date, modified_at,
+                         attachment_modified_at, has_attachment}}.
+    Authors and tags are pre-sorted for stable hash computation.
+    """
+    db_path = library_path / "zotero.sqlite"
+    if not db_path.exists():
+        raise FileNotFoundError(f"zotero.sqlite not found in {library_path}")
+
+    excluded = ",".join(str(t) for t in _ZOTERO_EXCLUDED_TYPE_IDS)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        items = conn.execute(f"""
+            SELECT itemID, key, dateModified
+            FROM items
+            WHERE itemTypeID NOT IN ({excluded})
+            AND itemID NOT IN (SELECT itemID FROM deletedItems)
+        """).fetchall()
+
+        if not items:
+            return {}
+
+        valid_ids = {r["itemID"] for r in items}
+        id_to_key = {r["itemID"]: r["key"] for r in items}
+
+        result: dict[str, dict[str, Any]] = {
+            r["key"]: {
+                "item_id": r["itemID"],
+                "modified_at": r["dateModified"] or "",
+                "title": "",
+                "authors": [],
+                "tags": [],
+                "abstract": "",
+                "date": "",
+                "attachment_modified_at": None,
+                "has_attachment": False,
+            }
+            for r in items
+        }
+
+        # EAV fields (title, abstract, date) — one query for all items
+        field_rows = conn.execute("""
+            SELECT id.itemID, f.fieldName, idv.value
+            FROM itemData id
+            JOIN itemDataValues idv ON id.valueID = idv.valueID
+            JOIN fields f ON id.fieldID = f.fieldID
+            WHERE f.fieldName IN ('title', 'shortTitle', 'abstractNote', 'date')
+        """).fetchall()
+
+        for row in field_rows:
+            key = id_to_key.get(row["itemID"])
+            if not key:
+                continue
+            fn, val = row["fieldName"], row["value"]
+            d = result[key]
+            if fn == "title":
+                d["title"] = val
+            elif fn == "shortTitle" and not d["title"]:
+                d["title"] = val
+            elif fn == "abstractNote":
+                d["abstract"] = val
+            elif fn == "date":
+                d["date"] = val
+
+        # Creators — one query for all items
+        creator_rows = conn.execute("""
+            SELECT ic.itemID, c.firstName, c.lastName, ct.creatorType
+            FROM itemCreators ic
+            JOIN creators c ON ic.creatorID = c.creatorID
+            JOIN creatorTypes ct ON ic.creatorTypeID = ct.creatorTypeID
+            ORDER BY ic.itemID, ic.orderIndex
+        """).fetchall()
+
+        author_map: dict[int, list[str]] = {}
+        editor_map: dict[int, list[str]] = {}
+        for row in creator_rows:
+            if row["itemID"] not in valid_ids:
+                continue
+            first, last = row["firstName"] or "", row["lastName"] or ""
+            name = f"{first} {last}".strip() if first else last
+            if not name:
+                continue
+            if row["creatorType"] == "author":
+                author_map.setdefault(row["itemID"], []).append(name)
+            elif row["creatorType"] == "editor":
+                editor_map.setdefault(row["itemID"], []).append(name)
+
+        for iid, key in id_to_key.items():
+            result[key]["authors"] = sorted(author_map.get(iid) or editor_map.get(iid, []))
+
+        # Tags — one query for all items
+        tag_rows = conn.execute("""
+            SELECT it.itemID, t.name
+            FROM itemTags it
+            JOIN tags t ON it.tagID = t.tagID
+        """).fetchall()
+
+        for row in tag_rows:
+            key = id_to_key.get(row["itemID"])
+            if key:
+                result[key]["tags"].append(row["name"])
+        for data in result.values():
+            data["tags"].sort()
+
+        # Attachments: has_attachment + max dateModified (signals annotation changes)
+        ct_ph = ",".join("?" * len(_ZOTERO_INDEXABLE_CONTENT_TYPES))
+        att_rows = conn.execute(f"""
+            SELECT ia.parentItemID, MAX(i.dateModified) AS att_modified
+            FROM itemAttachments ia
+            JOIN items i ON ia.itemID = i.itemID
+            WHERE ia.linkMode IN (0, 1, 2)
+            AND ia.contentType IN ({ct_ph})
+            AND ia.itemID NOT IN (SELECT itemID FROM deletedItems)
+            GROUP BY ia.parentItemID
+        """, _ZOTERO_INDEXABLE_CONTENT_TYPES).fetchall()
+
+        for row in att_rows:
+            key = id_to_key.get(row["parentItemID"])
+            if key:
+                result[key]["has_attachment"] = True
+                result[key]["attachment_modified_at"] = row["att_modified"]
+
+        return result
+    finally:
+        conn.close()
+
+
+def _compute_zotero_metadata_hash(data: dict[str, Any]) -> str:
+    """Stable hash over title/authors/tags/abstract/date — mirrors ZoteroAdapter.compute_metadata_hash."""
+    relevant = {
+        "title":    data.get("title", ""),
+        "authors":  data.get("authors", []),   # pre-sorted
+        "tags":     data.get("tags", []),       # pre-sorted
+        "abstract": data.get("abstract", ""),
+        "date":     data.get("date", ""),
+    }
+    return hashlib.md5(
+        json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
+class ZoteroWatchdogScanner:
+    """Incremental sync scanner for Zotero libraries.
+
+    Detects three change types and dispatches accordingly:
+      new_items           Zotero keys present in zotero.sqlite but absent from LanceDB
+      metadata_changed    title / authors / tags / abstract / date changed
+      annotations_changed attachment dateModified changed (covers PDF + DB annotations)
+
+    Phase 1 is pure SQLite + in-memory hash comparison — no book files are opened.
+    Phase 2 re-indexes changed items via archillesRAG.index_book().
+    Phase 3 queues or immediately indexes new items.
+    """
+
+    def __init__(
+        self,
+        library_path: Path,
+        db_path: str,
+        archilles_dir: Path,
+        excluded_tags: list[str] | None = None,
+    ):
+        self.library_path = Path(library_path)
+        self.db_path = db_path
+        self.archilles_dir = archilles_dir
+        self.queue_file = archilles_dir / "zotero_index_queue.json"
+        self.log_file = archilles_dir / "watchdog.log"
+        self.annotation_cache_file = archilles_dir / "zotero_watchdog_cache.json"
+        self.excluded_tags_lower: set[str] = {
+            t.lower() for t in (excluded_tags or [])
+        }
+        self._annotation_cache: dict[str, str] | None = None  # {key: att_modified_at}
+        self._annotation_cache_dirty = False
+        self._shutdown_requested = False
+
+    @property
+    def shutdown_requested(self) -> bool:
+        return self._shutdown_requested
+
+    def request_shutdown(self) -> None:
+        self._shutdown_requested = True
+
+    def scan(
+        self,
+        dry_run: bool = False,
+        queue_new: bool = True,
+        index_new: bool = False,
+    ) -> dict[str, Any]:
+        """Run a full scan and return a results dict."""
+        t0 = time.time()
+        results: dict[str, Any] = {
+            'new_books':            [],
+            'metadata_changed':    [],
+            'annotations_changed': [],
+            'unchanged':           [],
+            'errors':              [],
+            'delta_updates':       0,
+            'delta_time':          0.0,
+            'new_indexed':         0,
+            'new_indexed_time':    0.0,
+            'scanned':             0,
+            'interrupted':         False,
+        }
+
+        # ── Phase 1: fast scan ────────────────────────────────────
+        zotero_items = _zotero_metadata_for_scan(self.library_path)
+        results['scanned'] = len(zotero_items)
+
+        indexed_hashes = self._load_indexed_hashes()
+        ann_cache = self._load_annotation_cache()
+
+        for key, data in zotero_items.items():
+            if self.excluded_tags_lower:
+                item_tags_lower = {t.lower() for t in data.get("tags", [])}
+                if item_tags_lower & self.excluded_tags_lower:
+                    continue
+
+            if not data["has_attachment"]:
+                continue
+
+            if key not in indexed_hashes:
+                results['new_books'].append({'doc_id': key, 'title': data.get('title', key)})
+                continue
+
+            stored = indexed_hashes[key]
+
+            # Metadata change
+            current_meta_hash = _compute_zotero_metadata_hash(data)
+            stored_meta_hash = stored.get('metadata_hash', '')
+            meta_changed = bool(stored_meta_hash) and current_meta_hash != stored_meta_hash
+
+            # Annotation change: attachment dateModified as proxy
+            current_att_mod = data.get("attachment_modified_at") or ""
+            cached_att_mod = ann_cache.get(key, "")
+            annot_changed = bool(cached_att_mod) and current_att_mod != cached_att_mod
+
+            # Update cache regardless of dry_run (it's a local file, not LanceDB)
+            if current_att_mod and current_att_mod != cached_att_mod:
+                ann_cache[key] = current_att_mod
+                self._annotation_cache_dirty = True
+            elif not cached_att_mod and current_att_mod:
+                # First time seeing this item — seed the cache, no change triggered
+                ann_cache[key] = current_att_mod
+                self._annotation_cache_dirty = True
+
+            if meta_changed:
+                results['metadata_changed'].append(key)
+            if annot_changed:
+                results['annotations_changed'].append(key)
+            if not meta_changed and not annot_changed:
+                results['unchanged'].append(key)
+
+        # ── Phase 2: apply delta updates ─────────────────────────
+        books_to_update = set(results['metadata_changed']) | set(results['annotations_changed'])
+        if books_to_update and not dry_run:
+            from src.adapters.zotero_adapter import ZoteroAdapter
+            adapter = ZoteroAdapter(self.library_path)
+            rag = self._load_rag()
+            dt0 = time.time()
+            update_list = sorted(books_to_update)
+            total_p2 = len(update_list)
+            for i, key in enumerate(update_list, 1):
+                if self._shutdown_requested:
+                    print(f"\n⏸️  Abbruch angefordert — Phase 2 nach {i-1}/{total_p2} Items gestoppt.")
+                    break
+                data = zotero_items.get(key, {})
+                file_path = adapter.get_file_path(key)
+                if not file_path:
+                    logger.warning("No file found for Zotero key %s — skipping delta update", key)
+                    continue
+                print(f"\n[{i}/{total_p2}] {data.get('title', key)}")
+                try:
+                    rag.index_book(str(file_path), key, force=False)
+                    results['delta_updates'] += 1
+                except Exception as exc:
+                    logger.error("Delta update failed for key=%s: %s", key, exc)
+                    results['errors'].append({'doc_id': key, 'error': str(exc)})
+            results['delta_time'] = round(time.time() - dt0, 1)
+
+        # ── Phase 3: handle new items ─────────────────────────────
+        new_keys = [b['doc_id'] for b in results['new_books']]
+        if new_keys and not dry_run:
+            if queue_new:
+                self._queue_new_items(new_keys)
+            if index_new:
+                from src.adapters.zotero_adapter import ZoteroAdapter
+                adapter = ZoteroAdapter(self.library_path)
+                rag = self._load_rag()
+                ni0 = time.time()
+                total_p3 = len(new_keys)
+                for j, entry in enumerate(results['new_books'], 1):
+                    if self._shutdown_requested:
+                        print(f"\n⏸️  Abbruch angefordert — Phase 3 nach {j-1}/{total_p3} Items gestoppt.")
+                        break
+                    key = entry['doc_id']
+                    file_path = adapter.get_file_path(key)
+                    if not file_path:
+                        continue
+                    print(f"\n[{j}/{total_p3}] {entry['title']}")
+                    try:
+                        rag.index_book(str(file_path), key, force=False)
+                        results['new_indexed'] += 1
+                        # Seed annotation cache for freshly indexed items
+                        att_mod = zotero_items.get(key, {}).get("attachment_modified_at") or ""
+                        if att_mod:
+                            ann_cache[key] = att_mod
+                            self._annotation_cache_dirty = True
+                    except Exception as exc:
+                        logger.error("New-item indexing failed for key=%s: %s", key, exc)
+                        results['errors'].append({'doc_id': key, 'error': str(exc)})
+                results['new_indexed_time'] = round(time.time() - ni0, 1)
+
+        results['total_time'] = round(time.time() - t0, 1)
+        results['interrupted'] = self._shutdown_requested
+
+        if not dry_run:
+            self._save_annotation_cache()
+            self._write_log(results)
+
+        return results
+
+    # ── Internal helpers ──────────────────────────────────────────
+
+    def _load_indexed_hashes(self) -> dict[str, dict[str, str]]:
+        """Load stored hashes from LanceDB using string book_id as key."""
+        try:
+            from scripts.rag_demo import archillesRAG
+            rag = archillesRAG(db_path=self.db_path, skip_model=True)
+            return rag.store.get_hashes_by_book_id()
+        except Exception as exc:
+            logger.warning("Could not load indexed hashes: %s", exc)
+            return {}
+
+    def _load_rag(self):
+        from scripts.rag_demo import archillesRAG
+        return archillesRAG(db_path=self.db_path)
+
+    def _load_annotation_cache(self) -> dict[str, str]:
+        """Lazy-load the Zotero annotation cache ({item_key: att_modified_at})."""
+        if self._annotation_cache is not None:
+            return self._annotation_cache
+        if self.annotation_cache_file.exists():
+            try:
+                self._annotation_cache = json.loads(
+                    self.annotation_cache_file.read_text(encoding='utf-8')
+                )
+            except Exception as exc:
+                logger.warning("Could not read Zotero annotation cache (resetting): %s", exc)
+                self._annotation_cache = {}
+        else:
+            self._annotation_cache = {}
+        return self._annotation_cache
+
+    def _save_annotation_cache(self) -> None:
+        if self._annotation_cache is None or not self._annotation_cache_dirty:
+            return
+        try:
+            self.archilles_dir.mkdir(parents=True, exist_ok=True)
+            self.annotation_cache_file.write_text(
+                json.dumps(self._annotation_cache, indent=2),
+                encoding='utf-8',
+            )
+            self._annotation_cache_dirty = False
+        except Exception as exc:
+            logger.warning("Could not save Zotero annotation cache: %s", exc)
+
+    def _queue_new_items(self, keys: list[str]) -> None:
+        existing: list[str] = []
+        if self.queue_file.exists():
+            try:
+                existing = json.loads(self.queue_file.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+        merged = sorted(set(existing) | set(keys))
+        self.archilles_dir.mkdir(parents=True, exist_ok=True)
+        self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+
+    def _write_log(self, results: dict[str, Any]) -> None:
+        ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
+        n_new  = len(results['new_books'])
+        n_meta = len(results['metadata_changed'])
+        n_anno = len(results['annotations_changed'])
+        n_unch = len(results['unchanged'])
+        new_ids = [b['doc_id'] for b in results['new_books']]
+        lines = [
+            f"{ts} ZOTERO SCAN completed in {results['total_time']}s",
+            f"  new_items: {n_new}" + (f" {new_ids}" if new_ids else ""),
+            f"  metadata_changed: {n_meta}"
+            + (f" {results['metadata_changed']}" if n_meta else ""),
+            f"  annotations_changed: {n_anno}"
+            + (f" {results['annotations_changed']}" if n_anno else ""),
+            f"  unchanged: {n_unch}",
+            f"  errors: {len(results['errors'])}",
+            f"  delta_updates: {results['delta_updates']}"
+            + (f" completed in {results['delta_time']}s" if results['delta_updates'] else ""),
+            f"  new_indexed: {results.get('new_indexed', 0)}"
+            + (f" completed in {results.get('new_indexed_time', 0)}s" if results.get('new_indexed') else ""),
+            "",
+        ]
+        self.archilles_dir.mkdir(parents=True, exist_ok=True)
+        with open(self.log_file, 'a', encoding='utf-8') as fh:
+            fh.write('\n'.join(lines) + '\n')

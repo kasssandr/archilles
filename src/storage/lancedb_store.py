@@ -831,6 +831,62 @@ class LanceDBStore:
 
         return result
 
+    def get_hashes_by_book_id(self) -> dict[str, dict[str, str]]:
+        """Return {book_id: {metadata_hash, annotation_hash}} keyed by string book_id.
+
+        Adapter-agnostic counterpart to get_hashes_for_indexed_books(), which
+        uses calibre_id (int) and therefore skips non-Calibre items (Zotero,
+        Folder) where calibre_id is NULL.
+        """
+        if self.table is None:
+            return {}
+
+        columns = ['book_id', 'metadata_hash', 'annotation_hash', 'chunk_type']
+
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            projection = [c for c in columns if c in existing]
+            arrow_table = lance_dataset.to_table(columns=projection)
+            rows = arrow_table.to_pandas().to_dict(orient='records')
+        except Exception:
+            try:
+                df = self.table.search().select(columns).limit(10_000_000).to_pandas()
+                available = [c for c in columns if c in df.columns]
+                rows = df[available].to_dict(orient='records')
+            except Exception:
+                df = self.table.to_pandas()
+                available = [c for c in columns if c in df.columns]
+                rows = df[available].to_dict(orient='records')
+
+        def _clean(value: Any) -> str:
+            if value is None:
+                return ''
+            if isinstance(value, float) and value != value:
+                return ''
+            s = str(value)
+            return '' if s == 'nan' else s
+
+        result: dict[str, dict[str, str]] = {}
+        for row in rows:
+            bid = _clean(row.get('book_id'))
+            if not bid:
+                continue
+            chunk_type = row.get('chunk_type')
+            new_meta = _clean(row.get('metadata_hash'))
+            new_annot = _clean(row.get('annotation_hash'))
+
+            if bid in result:
+                if chunk_type in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT) and new_meta:
+                    result[bid]['metadata_hash'] = new_meta
+            else:
+                result[bid] = {'metadata_hash': new_meta, 'annotation_hash': new_annot}
+
+            if chunk_type == ChunkType.ANNOTATION and new_annot:
+                result[bid]['annotation_hash'] = new_annot
+
+        return result
+
     def get_all(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
         """
         Get all chunks (with pagination).
