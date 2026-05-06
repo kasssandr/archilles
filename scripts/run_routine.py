@@ -69,21 +69,41 @@ _LOCK_FILE = Path.home() / ".archilles" / "routine.lock"
 _LOCK_MAX_AGE_S = 9 * 3600
 
 
-def _acquire_lock(script_name: str) -> bool:
-    if _LOCK_FILE.exists():
-        try:
-            if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_MAX_AGE_S:
-                info = _LOCK_FILE.read_text(encoding="utf-8").strip()
-                print(f"SKIP — Routine-Lock belegt: {info}", file=sys.stderr)
-                return False
-        except OSError:
-            pass
-    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _LOCK_FILE.write_text(
-        f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
-        encoding="utf-8",
-    )
-    return True
+def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
+    """Try to acquire the global lock.
+
+    If wait_s > 0, polls every 60 s until the lock is free or the timeout
+    expires — tasks that fire simultaneously at login will serialize naturally
+    rather than being skipped for the day.
+    """
+    poll_interval = 60
+    deadline = time.time() + wait_s
+    while True:
+        locked = False
+        if _LOCK_FILE.exists():
+            try:
+                if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_MAX_AGE_S:
+                    locked = True
+                    info = _LOCK_FILE.read_text(encoding="utf-8").strip()
+            except OSError:
+                pass
+
+        if not locked:
+            _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _LOCK_FILE.write_text(
+                f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
+                encoding="utf-8",
+            )
+            return True
+
+        if time.time() >= deadline:
+            print(f"SKIP — Routine-Lock nach {wait_s}s Wartezeit noch belegt: {info}",
+                  file=sys.stderr)
+            return False
+
+        remaining = int(deadline - time.time())
+        print(f"  Warte auf Lock ({remaining}s verbleibend): {info}", file=sys.stderr)
+        time.sleep(poll_interval)
 
 
 def _release_lock() -> None:
@@ -94,7 +114,8 @@ def _release_lock() -> None:
 
 
 def _build_command(adapter: str) -> list[str]:
-    if adapter == "calibre":
+    if adapter in ("calibre", "zotero"):
+        # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
         return [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
     return [
         sys.executable,
@@ -160,6 +181,10 @@ def main() -> int:
                         help="Ignore marker and run unconditionally")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan and exit (no subprocess, no marker update)")
+    parser.add_argument("--wait-for-lock", type=int, default=0, metavar="SECONDS",
+                        help="Poll for the global lock up to SECONDS before giving up "
+                             "(default: 0 = skip immediately if locked). "
+                             "Recommended value for OnLogon tasks: 7200")
     args = parser.parse_args()
 
     master = load_master_config()
@@ -201,7 +226,7 @@ def main() -> int:
               f"  ARCHILLES_LIBRARY_PATH={library_path}")
         return 0
 
-    if not _acquire_lock(f"run_routine({args.source})"):
+    if not _acquire_lock(f"run_routine({args.source})", wait_s=args.wait_for_lock):
         return 1
     try:
         start = datetime.now().astimezone()
