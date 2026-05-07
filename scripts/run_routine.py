@@ -122,6 +122,8 @@ def _build_command(adapter: str) -> list[str]:
         str(REPO_ROOT / "scripts" / "batch_index.py"),
         "--all",
         "--skip-existing",
+        "--non-interactive",
+        "--profile", "minimal",
     ]
 
 
