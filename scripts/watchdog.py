@@ -33,6 +33,12 @@ import signal
 import sys
 from pathlib import Path
 
+# Ensure UTF-8 output on Windows (pipes default to cp1252, breaking emoji in titles)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 # Allow running from repo root without installing the package
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

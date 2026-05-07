@@ -220,6 +220,7 @@ def main() -> int:
     cmd = _build_command(adapter)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
+    env["PYTHONIOENCODING"] = "utf-8"
 
     if args.dry_run:
         print(f"DRY-RUN — würde ausführen: {' '.join(cmd)}\n"
