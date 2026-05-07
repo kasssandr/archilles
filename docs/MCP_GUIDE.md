@@ -215,11 +215,49 @@ Once running, the server is available at:
 - **SSE endpoint:** `http://127.0.0.1:8765/sse`
 - **Message endpoint:** `http://127.0.0.1:8765/messages/`
 
-### Connecting ChatGPT Desktop
+### ChatGPT Desktop — Current Status and Limitation
 
-1. Open ChatGPT Desktop → Settings → Connected apps / MCP servers
-2. Add a new server and enter the SSE URL: `http://127.0.0.1:8765/sse`
-3. Save. ChatGPT will list all Archilles tools and you can use them in any conversation.
+**ChatGPT Desktop does not currently support local MCP servers.** The app blocks connections to `localhost` and `127.0.0.1` at the application level, regardless of protocol (HTTP or HTTPS). This is a deliberate policy decision by OpenAI: ChatGPT's MCP integration is designed for publicly reachable remote servers, not local processes.
+
+Archilles supports the modern Streamable HTTP transport (`--transport streamable-http`, MCP spec March 2025), which is technically correct for ChatGPT — once OpenAI allows local servers, the connection should work without any further changes on the Archilles side. Until then, there are two options:
+
+#### Option A: Tunnel (ngrok / Cloudflare Tunnel)
+
+A tunnel exposes your local Archilles server under a public HTTPS URL that ChatGPT accepts.
+
+```bash
+# ngrok (requires a free account at ngrok.com)
+ngrok http 8765
+
+# or: Cloudflare Tunnel (requires cloudflared to be installed)
+cloudflared tunnel --url http://localhost:8765
+```
+
+The tunnel prints a URL such as `https://abc123.ngrok-free.app`. Use that URL in ChatGPT Desktop:
+
+1. Start Archilles: `python mcp_server.py --transport streamable-http`
+2. Start the tunnel and copy the URL
+3. ChatGPT Desktop → Settings → Connected apps / MCP servers → add new server
+4. Enter the URL: `https://<tunnel-id>.ngrok-free.app/mcp`
+
+**Privacy note:** With a tunnel, all search queries and results — including excerpts from your books and notes — pass through a third-party server (ngrok or Cloudflare). For researchers working with sensitive sources, unpublished materials, or archival documents, this is a meaningful trade-off. For those working exclusively with published, non-sensitive material, the risk is low.
+
+**Authentication strongly recommended:** If you use a tunnel, set an `auth_token` in your transport config so that anyone who discovers the tunnel URL cannot access your library:
+
+```json
+{
+  "transport": {
+    "mode": "streamable-http",
+    "host": "127.0.0.1",
+    "port": 8765,
+    "auth_token": "your-secret-token"
+  }
+}
+```
+
+#### Option B: Wait
+
+If OpenAI adds localhost support in a future version of ChatGPT Desktop, Archilles will work without any changes — just start with `--transport streamable-http` and enter `https://localhost:8765/mcp` in ChatGPT.
 
 ### Connecting via Config File (SSE Mode)
 
@@ -283,13 +321,15 @@ On first start, Windows may show a firewall dialog asking whether to allow Pytho
 
 ### stdio vs. SSE — Which to Use?
 
-| Client | Transport |
-|--------|-----------|
-| Claude Desktop | **stdio** (keep existing config) |
-| ChatGPT Desktop | SSE |
-| OpenAI Codex | SSE |
-| Cursor / VS Code MCP extension | SSE |
-| Any client that expects a URL | SSE |
+| Client | Transport | URL |
+|--------|-----------|-----|
+| Claude Desktop | **stdio** (keep existing config) | — |
+| Cursor / VS Code MCP extension | SSE or Streamable HTTP | `http://127.0.0.1:8765/sse` or `/mcp` |
+| OpenAI Codex CLI | Streamable HTTP | `http://127.0.0.1:8765/mcp` |
+| ChatGPT Desktop | ⚠ not supported (local servers blocked) | — |
+| Any HTTP-based client | SSE or Streamable HTTP | see above |
+
+`--transport sse` uses the classic SSE transport (`/sse` + `/messages/`). `--transport streamable-http` uses the modern Streamable HTTP transport (`/mcp`, single endpoint for GET and POST) per MCP spec March 2025.
 
 Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop working if you change its config.
 

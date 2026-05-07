@@ -189,6 +189,8 @@ async def sse_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     auth_token: str | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
 ):
     """Run MCP server with SSE transport (for ChatGPT, Codex and other HTTP clients)."""
     import mcp.server as mcp_sdk
@@ -282,7 +284,109 @@ async def sse_server(
         ]
     )
 
-    config = uvicorn.Config(app, host=host, port=port, log_level="warning")
+    scheme = "https" if ssl_certfile else "http"
+    logger.info(f"SSE endpoint: {scheme}://{host}:{port}/sse")
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+        ssl_certfile=ssl_certfile or None,
+        ssl_keyfile=ssl_keyfile or None,
+    )
+    userver = uvicorn.Server(config)
+    try:
+        await userver.serve()
+    except OSError as e:
+        if getattr(e, "errno", 0) in (98, 10048) or "address already in use" in str(e).lower():
+            logger.error(f"Port {port} is already in use.")
+            sys.stderr.write(f"\nERROR: Port {port} is already in use. Use --port to choose another.\n\n")
+            sys.exit(1)
+        raise
+
+
+async def streamable_http_server(
+    server,
+    tools: list[dict],
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    auth_token: str | None = None,
+    ssl_certfile: str | None = None,
+    ssl_keyfile: str | None = None,
+):
+    """Run MCP server with Streamable HTTP transport (for ChatGPT Desktop and modern MCP clients)."""
+    import uuid
+    import anyio
+    import mcp.server as mcp_sdk
+    import mcp.types as types
+    from mcp.server.streamable_http import StreamableHTTPServerTransport
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    import uvicorn
+
+    logger.info(f"Starting ARCHILLES MCP Server (Streamable HTTP mode) on {host}:{port}")
+
+    mcp_srv = mcp_sdk.Server(server.instance_name)
+
+    sdk_tools = [
+        types.Tool(
+            name=t["name"],
+            description=t["description"],
+            inputSchema=t["inputSchema"],
+        )
+        for t in tools
+    ]
+
+    @mcp_srv.list_tools()
+    async def list_tools():
+        return sdk_tools
+
+    @mcp_srv.call_tool()
+    async def call_tool(name: str, arguments: dict | None):
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: _dispatch_tool(server, name, arguments or {})
+        )
+        content = [
+            types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, ensure_ascii=False),
+            )
+        ]
+        is_error = isinstance(result, dict) and "error" in result
+        return types.CallToolResult(content=content, isError=is_error)
+
+    init_options = mcp_srv.create_initialization_options()
+
+    async def mcp_endpoint(scope, receive, send):
+        if auth_token:
+            headers = dict(scope.get("headers", []))
+            auth_hdr = headers.get(b"authorization", b"").decode()
+            if auth_hdr != f"Bearer {auth_token}":
+                await send({"type": "http.response.start", "status": 401,
+                            "headers": [(b"content-type", b"text/plain")]})
+                await send({"type": "http.response.body", "body": b"Unauthorized", "more_body": False})
+                return
+        transport = StreamableHTTPServerTransport(mcp_session_id=str(uuid.uuid4()))
+        async with transport.connect() as (read_stream, write_stream):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(mcp_srv.run, read_stream, write_stream, init_options)
+                await transport.handle_request(scope, receive, send)
+                tg.cancel_scope.cancel()
+
+    app = Starlette(routes=[Mount("/mcp", app=mcp_endpoint)])
+
+    scheme = "https" if ssl_certfile else "http"
+    logger.info(f"MCP endpoint: {scheme}://{host}:{port}/mcp")
+
+    config = uvicorn.Config(
+        app,
+        host=host,
+        port=port,
+        log_level="warning",
+        ssl_certfile=ssl_certfile or None,
+        ssl_keyfile=ssl_keyfile or None,
+    )
     userver = uvicorn.Server(config)
     try:
         await userver.serve()
@@ -302,12 +406,14 @@ def main():
     parser = argparse.ArgumentParser(description="ARCHILLES MCP Server")
     parser.add_argument(
         "--transport",
-        choices=["stdio", "sse"],
+        choices=["stdio", "sse", "streamable-http"],
         default=None,
         help="Transport protocol (default: stdio, or from config.json)",
     )
     parser.add_argument("--host", default=None, help="SSE bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=None, help="SSE port (default: 8765)")
+    parser.add_argument("--ssl-certfile", default=None, help="TLS certificate file (enables HTTPS)")
+    parser.add_argument("--ssl-keyfile", default=None, help="TLS private key file (enables HTTPS)")
     args = parser.parse_args()
 
     # ── Mode selection: master config wins over legacy single-source ──
@@ -330,10 +436,15 @@ def main():
     sse_host = args.host or transport_cfg.get("host", "127.0.0.1")
     sse_port = args.port or transport_cfg.get("port", 8765)
     sse_auth_token = transport_cfg.get("auth_token")
+    sse_certfile = args.ssl_certfile or transport_cfg.get("ssl_certfile")
+    sse_keyfile = args.ssl_keyfile or transport_cfg.get("ssl_keyfile")
 
     if transport_mode == "sse":
         logger.info(f"Transport: SSE ({sse_host}:{sse_port})")
-        asyncio.run(sse_server(server, tools, sse_host, sse_port, sse_auth_token))
+        asyncio.run(sse_server(server, tools, sse_host, sse_port, sse_auth_token, sse_certfile, sse_keyfile))
+    elif transport_mode == "streamable-http":
+        logger.info(f"Transport: Streamable HTTP ({sse_host}:{sse_port})")
+        asyncio.run(streamable_http_server(server, tools, sse_host, sse_port, sse_auth_token, sse_certfile, sse_keyfile))
     else:
         logger.info("Transport: stdio")
         asyncio.run(stdio_server(server, tools))
