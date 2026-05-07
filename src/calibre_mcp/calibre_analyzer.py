@@ -263,6 +263,64 @@ class CalibreAnalyzer:
 
         return books
 
+    def _get_annotation_counts_batch(self, book_ids: list[int]) -> dict[int, int]:
+        """Return highlight+note count per book_id (0 if none or table missing)."""
+        if not book_ids:
+            return {}
+        try:
+            placeholders = ",".join("?" * len(book_ids))
+            cursor = self.conn.execute(
+                f"""SELECT book, COUNT(*) as cnt
+                    FROM annotations
+                    WHERE book IN ({placeholders})
+                      AND annot_type IN ('highlight', 'note')
+                    GROUP BY book""",
+                book_ids,
+            )
+            counts = {row["book"]: row["cnt"] for row in cursor.fetchall()}
+        except sqlite3.OperationalError:
+            counts = {}
+        return {bid: counts.get(bid, 0) for bid in book_ids}
+
+    def export_duplicates_csv(self, method: str = 'title_author') -> str:
+        """Return a CSV string of all duplicate books with annotation counts.
+
+        Columns: Group, ID, Authors, Title, Annotations
+        Each duplicate group is numbered; Doublette-tagged books appear last
+        under group label "Doublette".
+        """
+        import csv
+        from io import StringIO
+
+        result = self.detect_duplicates(method=method)
+
+        # Collect all book IDs to fetch annotation counts in one query
+        all_books: list[tuple[str, dict]] = []  # (group_label, book_dict)
+        for i, group in enumerate(result['duplicate_groups'], 1):
+            label = f"Gruppe {i}"
+            for book in group['books']:
+                all_books.append((label, book))
+        for book in result.get('doublette_tagged_books', []):
+            # Avoid duplicating books already in a group
+            if not any(b['id'] == book['id'] for _, b in all_books):
+                all_books.append(("Doublette", book))
+
+        all_ids = [b['id'] for _, b in all_books]
+        annot_counts = self._get_annotation_counts_batch(all_ids)
+
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['Gruppe', 'ID', 'Authors', 'Title', 'Annotations'])
+        for label, book in all_books:
+            writer.writerow([
+                label,
+                book['id'],
+                '; '.join(book['authors']),
+                book['title'],
+                annot_counts.get(book['id'], 0),
+            ])
+        return output.getvalue()
+
     def _get_publishers_batch(self, book_ids: list[int]) -> dict[int, str]:
         """Fetch publisher names for multiple books in one query."""
         if not book_ids:
@@ -932,13 +990,26 @@ Examples:
         help='Duplicate detection method (default: title_author)'
     )
 
+    parser.add_argument(
+        '--csv',
+        metavar='FILE',
+        help='Write duplicate results as CSV to FILE (use - for stdout)'
+    )
+
     args = parser.parse_args()
 
     try:
         with CalibreAnalyzer(args.database) as analyzer:
             # Handle duplicates detection
             if args.duplicates or args.filter == 'duplicates':
-                if args.output == 'json':
+                if getattr(args, 'csv', None):
+                    csv_data = analyzer.export_duplicates_csv(method=args.duplicate_method)
+                    if args.csv == '-':
+                        sys.stdout.write(csv_data)
+                    else:
+                        Path(args.csv).write_text(csv_data, encoding='utf-8')
+                        print(f"CSV gespeichert: {args.csv}")
+                elif args.output == 'json':
                     data = analyzer.detect_duplicates(method=args.duplicate_method)
                     print(json.dumps(data, indent=2, ensure_ascii=False))
                 else:
