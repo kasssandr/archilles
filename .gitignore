@@ -94,3 +94,8 @@ server_stdout.log
 # Prepare/Embed pipeline output (regenerated locally, large)
 prepared_chunks/
 prepared_chunks_test/
+
+# One-shot migration scripts (private, never push)
+scripts/migration/
+phase1_review_plan.csv
+extract_reviews_state.json
