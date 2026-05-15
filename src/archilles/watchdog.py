@@ -254,6 +254,7 @@ class WatchdogScanner:
         dry_run: bool = False,
         queue_new: bool = True,
         index_new: bool = False,
+        max_new: int | None = None,
         first_authors: list[str] | None = None,
         first_tags: list[str] | None = None,
         first_titles: list[str] | None = None,
@@ -266,6 +267,9 @@ class WatchdogScanner:
         dry_run       Report changes only; do not modify LanceDB or the queue.
         queue_new     Write new Calibre IDs to index_queue.json (default True).
         index_new     Index new books immediately via archillesRAG (slow, ~90s/book).
+        max_new       Cap on how many new books are indexed per run (None = no limit).
+                      Useful for daily routines: set e.g. 20 to drain the backlog
+                      gradually without blocking the machine for hours.
         first_authors Substring list — books whose author matches come first.
         first_tags    Substring list — books carrying a matching tag come first.
         first_titles  Substring list — books whose title matches come first.
@@ -387,6 +391,8 @@ class WatchdogScanner:
                 ))
                 already_done = len(done_ids)
                 total_p3 = max(saved_total, already_done + len(pending))
+                if max_new is not None:
+                    pending = pending[:max_new]
                 if already_done:
                     print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
                 self._save_checkpoint(total_p3, done_ids)

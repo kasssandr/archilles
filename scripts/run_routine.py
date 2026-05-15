@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -116,7 +117,10 @@ def _release_lock() -> None:
 def _build_command(adapter: str) -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
-        return [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
+        cmd = [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
+        if adapter == "calibre":
+            cmd += ["--index-new", "--max-new", "20"]
+        return cmd
     return [
         sys.executable,
         str(REPO_ROOT / "scripts" / "batch_index.py"),
@@ -129,7 +133,7 @@ def _build_command(adapter: str) -> list[str]:
 
 def _parse_stats(stdout: str, adapter: str) -> dict:
     """Best-effort extraction of counters from tool stdout."""
-    if adapter == "calibre":
+    if adapter in ("calibre", "zotero"):
         # watchdog --json prints progress lines BEFORE the final JSON dump;
         # extract the last top-level JSON object by scanning from the end.
         s = stdout.rstrip()
@@ -224,6 +228,7 @@ def main() -> int:
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    env["PYTHONUNBUFFERED"] = "1"
 
     if args.dry_run:
         print(f"DRY-RUN — würde ausführen: {' '.join(cmd)}\n"
@@ -235,54 +240,163 @@ def main() -> int:
     try:
         start = datetime.now().astimezone()
         print(f"[{start.isoformat()}] {args.source}: {' '.join(cmd)}")
-        with log_file.open("a", encoding="utf-8") as f:
-            f.write(f"\n=== {start.isoformat()} {args.source} START ===\n")
-            f.write(f"cmd: {' '.join(cmd)}\n")
+
+        log_handle = log_file.open("a", encoding="utf-8")
+        log_handle.write(f"\n=== {start.isoformat()} {args.source} START ===\n")
+        log_handle.write(f"cmd: {' '.join(cmd)}\n")
+        log_handle.flush()
+
+        stdout_buf: list[str] = []
+        log_lock = threading.Lock()
+
+        # Terminal-Transform: zeigt jede [N/M]-Zeile, unterdrueckt sonstige
+        # Detailzeilen (Einrueckungen) und den abschliessenden JSON-Blob von
+        # watchdog --json. Routine.log bleibt vollstaendig.
+        book_re = re.compile(r"^\[(\d+)/(\d+)\]\s")
+        embed_re = re.compile(r"^\s*Embedding:\s+(\d+)%")
+
+        def _make_book_transform():
+            last_embed_bucket = -1
+            in_book = False
+            in_json = False
+            bar_w = 20
+
+            def transform(line: str):
+                nonlocal last_embed_bucket, in_book, in_json
+
+                # Unterdruecke den abschliessenden JSON-Blob (watchdog --json
+                # schreibt einen einzigen Top-Level-Block ans Ende von stdout;
+                # _parse_stats() liest ihn aus stdout_buf).
+                if line.strip() == "{":
+                    in_json = True
+                    return None
+                if in_json:
+                    return None
+
+                m = book_re.match(line)
+                if m:
+                    n, total = int(m.group(1)), max(int(m.group(2)), 1)
+                    pct = n * 100 // total
+                    in_book = True
+                    last_embed_bucket = -1
+                    filled = (pct * bar_w) // 100
+                    bar = "#" * filled + "." * (bar_w - filled)
+                    rest = line[m.end():].rstrip("\r\n")
+                    return f"[{pct:3d}%] [{bar}] {n}/{total}  {rest}\n"
+                em = embed_re.match(line)
+                if em:
+                    pct = int(em.group(1))
+                    if pct == 0:
+                        last_embed_bucket = -1
+                    bucket = pct // 10
+                    if bucket > last_embed_bucket or pct == 100:
+                        last_embed_bucket = bucket
+                        return line
+                    return None
+                if in_book and (line.startswith(" ") or line.startswith("\t")):
+                    return None
+                in_book = False
+                return line
+
+            return transform
+
+        def _pump(stream, terminal, buf=None, transform=None):
+            try:
+                for line in iter(stream.readline, ""):
+                    display = transform(line) if transform else line
+                    if display is not None:
+                        terminal.write(display)
+                        terminal.flush()
+                    if buf is not None:
+                        buf.append(line)
+                    with log_lock:
+                        log_handle.write(line)
+                        log_handle.flush()
+            finally:
+                stream.close()
 
         try:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd, env=env, cwd=str(REPO_ROOT),
-                capture_output=True, text=True, encoding="utf-8",
-                timeout=8 * 3600,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", bufsize=1,
             )
+        except OSError as e:
+            log_handle.write(f"FEHLER beim Start: {e}\n")
+            log_handle.close()
+            raise
+
+        t_out = threading.Thread(
+            target=_pump,
+            args=(proc.stdout, sys.stdout, stdout_buf, _make_book_transform()),
+            daemon=True)
+        t_err = threading.Thread(
+            target=_pump, args=(proc.stderr, sys.stderr, None, None), daemon=True)
+        t_out.start()
+        t_err.start()
+
+        timed_out = False
+        try:
+            returncode = proc.wait(timeout=8 * 3600)
         except subprocess.TimeoutExpired:
-            end = datetime.now().astimezone()
-            record = {
-                "timestamp": start.isoformat(), "source": args.source,
-                "adapter": adapter, "frequency": args.frequency,
-                "exit_code": -1, "duration_s": (end - start).total_seconds(),
-                "error": "timeout (>8h)", "stats": {},
-            }
-            _append_history(history_file, record)
-            with log_file.open("a", encoding="utf-8") as f:
-                f.write(f"=== {end.isoformat()} TIMEOUT ===\n")
-            return 124
+            proc.kill()
+            try:
+                returncode = proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                returncode = -1
+            timed_out = True
+
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
 
         end = datetime.now().astimezone()
         duration = (end - start).total_seconds()
 
-        with log_file.open("a", encoding="utf-8") as f:
-            f.write(proc.stdout or "")
-            if proc.stderr:
-                f.write("\n--- stderr ---\n" + proc.stderr)
-            f.write(f"\n=== {end.isoformat()} EXIT={proc.returncode} dur={duration:.1f}s ===\n")
+        if timed_out:
+            with log_lock:
+                log_handle.write(f"\n=== {end.isoformat()} TIMEOUT ===\n")
+            log_handle.close()
+            record = {
+                "timestamp": start.isoformat(), "source": args.source,
+                "adapter": adapter, "frequency": args.frequency,
+                "exit_code": -1, "duration_s": duration,
+                "error": "timeout (>8h)", "stats": {},
+            }
+            _append_history(history_file, record)
+            return 124
 
-        sys.stdout.write(proc.stdout or "")
-        if proc.stderr:
-            sys.stderr.write(proc.stderr)
+        with log_lock:
+            log_handle.write(f"\n=== {end.isoformat()} EXIT={returncode} dur={duration:.1f}s ===\n")
+        log_handle.close()
+
+        stdout_text = "".join(stdout_buf)
+        stats = _parse_stats(stdout_text, adapter)
+
+        # Fuer Calibre/Zotero: JSON-Blob wurde am Terminal unterdrueckt,
+        # daher hier eine lesbare Zusammenfassung ausgeben.
+        if adapter in ("calibre", "zotero") and stats:
+            print(
+                f"\n  Watchdog abgeschlossen in {duration:.0f}s —"
+                f" Gescannt: {stats.get('scanned', '?')}"
+                f" | Neu: {stats.get('new_books', 0)}"
+                f" | Metadaten: {stats.get('metadata_changed', 0)}"
+                f" | Annotationen: {stats.get('annotations_changed', 0)}"
+                f" | Aktualisiert: {stats.get('delta_updates', 0)}"
+                f" | Fehler: {stats.get('errors', 0)}"
+            )
 
         record = {
             "timestamp": start.isoformat(), "source": args.source,
             "adapter": adapter, "frequency": args.frequency,
-            "exit_code": proc.returncode, "duration_s": round(duration, 1),
-            "stats": _parse_stats(proc.stdout or "", adapter),
+            "exit_code": returncode, "duration_s": round(duration, 1),
+            "stats": stats,
         }
         _append_history(history_file, record)
 
-        if proc.returncode == 0:
+        if returncode == 0:
             marker.write_text(end.isoformat(), encoding="utf-8")
 
-        return proc.returncode
+        return returncode
     finally:
         _release_lock()
 

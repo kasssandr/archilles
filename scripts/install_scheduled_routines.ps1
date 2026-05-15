@@ -7,7 +7,7 @@
 #
 #   Archilles-Routine-Calibre  -> scripts/run_routine.py        --source archilles        --frequency daily
 #   Archilles-Routine-Lab      -> scripts/run_routine.py        --source archilles-lab    --frequency daily
-#   Archilles-Routine-Zotero   -> scripts/run_routine.py        --source archilles-zotero --frequency weekly
+#   Archilles-Routine-Zotero   -> scripts/run_routine.py        --source archilles-zotero --frequency daily
 #   Archilles-Status-Mail      -> scripts/weekly_status_mail.py
 #
 # Behaviour:
@@ -100,8 +100,8 @@ New-ArchillesTask `
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Zotero" `
-    -Description "Zotero library: index new documents, max. 1x per ISO week" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", "weekly") `
+    -Description "Zotero library: index new documents, max. 1x per day" `
+    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", "daily") `
     -Delay       "PT5M"
 
 New-ArchillesTask `

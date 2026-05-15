@@ -1550,6 +1550,13 @@ Profiles:
                              'Writes JSONL files to --output-dir. No GPU required.')
     parser.add_argument('--output-dir', default='./prepared_chunks',
                         help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks)')
+    parser.add_argument('--prepare-chunk-size', type=int, default=1024, metavar='TOKENS',
+                        help='Chunk size in tokens for --prepare-only (default: 1024). '
+                             'Larger values = fewer chunks, less DB volume, slightly broader retrieval. '
+                             'Has no effect on the live --skip-existing path.')
+    parser.add_argument('--prepare-overlap', type=int, default=128, metavar='TOKENS',
+                        help='Chunk overlap in tokens for --prepare-only (default: 128). '
+                             'Has no effect on the live --skip-existing path.')
 
     args = parser.parse_args()
 
@@ -1644,6 +1651,8 @@ Profiles:
                 use_modular_pipeline=args.use_modular_pipeline,
                 adapter=adapter,
                 skip_model=getattr(args, 'prepare_only', False),
+                prepare_chunk_size=args.prepare_chunk_size,
+                prepare_overlap=args.prepare_overlap,
             )
         except LanceDBError as e:
             print(f"\n{'='*60}")

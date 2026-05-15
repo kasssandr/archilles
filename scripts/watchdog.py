@@ -192,6 +192,11 @@ def main() -> None:
         action='append', default=[],
         help='Index books whose title contains this substring first; repeatable'
     )
+    parser.add_argument(
+        '--max-new', type=int, default=None, metavar='N',
+        help='Cap on new books indexed per run (default: no limit). '
+             'Use e.g. --max-new 20 in daily routines to drain the backlog gradually.'
+    )
     args = parser.parse_args()
 
     library_path, db_path, archilles_dir = _resolve_paths()
@@ -237,6 +242,7 @@ def main() -> None:
         'dry_run': args.dry_run,
         'queue_new': args.queue_new,
         'index_new': args.index_new,
+        'max_new': args.max_new,
     }
     if scanner_type == "calibre":
         scan_kwargs['first_authors'] = args.first_authors

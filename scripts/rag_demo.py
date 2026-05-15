@@ -37,6 +37,7 @@ import time
 import re
 import hashlib
 import json
+from contextlib import contextmanager
 from datetime import datetime
 import numpy as np
 
@@ -348,6 +349,8 @@ class archillesRAG:
         hierarchical: bool = False,  # Enable parent-child chunking
         adapter=None,  # Optional SourceAdapter for metadata lookup
         skip_model: bool = False,  # Skip loading embedding model (for prepare-only mode)
+        prepare_chunk_size: int = 1024,  # Phase-1 chunk size (tokens), only used in prepare_book()
+        prepare_overlap: int = 128,      # Phase-1 chunk overlap (tokens)
     ):
         """
         Initialize RAG system.
@@ -368,6 +371,11 @@ class archillesRAG:
         self.use_modular_pipeline = use_modular_pipeline
         self.profile_name = profile
         self._adapter = adapter  # SourceAdapter (or None for legacy CalibreDB path)
+        # Phase-1 chunk settings (used in prepare_book(), not in index_book()).
+        # Larger than the live default to keep prepared JSONL volume manageable
+        # for cloud-GPU embedding later — bestehender Live-Index bleibt unberuehrt.
+        self._prepare_chunk_size = prepare_chunk_size
+        self._prepare_overlap = prepare_overlap
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
@@ -427,6 +435,21 @@ class archillesRAG:
         else:
             print(f"  Loading embedding model... (first time: ~500 MB download)")
             self.embedding_model = SentenceTransformer(model_name, device=self.device)
+            if self.device == "cuda":
+                # FP16: halbiert VRAM-Druck, ~1.3-1.8x schneller auf GPUs ohne
+                # Tensor Cores (T1000). encode() liefert dann FP16-Numpy zurueck —
+                # LanceDB erwartet FP32, daher Patch der encode-Methode.
+                self.embedding_model = self.embedding_model.half()
+                _orig_encode = self.embedding_model.encode
+
+                def _encode_fp32(*args, **kwargs):
+                    out = _orig_encode(*args, **kwargs)
+                    if isinstance(out, np.ndarray) and out.dtype != np.float32:
+                        out = out.astype(np.float32)
+                    return out
+
+                self.embedding_model.encode = _encode_fp32
+                print(f"  FP16 active (CUDA) — halver VRAM, schnellere Inferenz")
             print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested
@@ -1176,6 +1199,31 @@ class archillesRAG:
             'needs_ocr': needs_ocr,
         }
 
+    @contextmanager
+    def _override_extractor_chunking(self, chunk_size: int, overlap: int):
+        """Temporarily swap chunk_size/overlap on every sub-extractor of
+        UniversalExtractor (pdf/epub/txt/html), restoring on exit.
+
+        UniversalExtractor instantiates one BaseExtractor per format, each
+        with its own chunk_size — `BaseExtractor._temporary_chunk_params`
+        only handles a single instance, so we iterate them all here.
+        """
+        sub_attrs = ("pdf_extractor", "epub_extractor", "txt_extractor", "html_extractor")
+        saved = []
+        for attr in sub_attrs:
+            sub = getattr(self.extractor, attr, None)
+            if sub is None:
+                continue
+            saved.append((sub, sub.chunk_size, sub.overlap))
+            sub.chunk_size = chunk_size
+            sub.overlap = overlap
+        try:
+            yield
+        finally:
+            for sub, saved_size, saved_overlap in saved:
+                sub.chunk_size = saved_size
+                sub.overlap = saved_overlap
+
     def prepare_book(self, book_path: str, book_id: str = None,
                      output_dir: str = "./prepared_chunks") -> Dict[str, Any]:
         """
@@ -1219,9 +1267,14 @@ class archillesRAG:
                         'chunk_count': header.get('chunk_count', 0),
                     }
 
-        # Step 1: Extract text
+        # Step 1: Extract text — apply Phase-1 chunk settings temporarily
+        # (groesser als der Live-Default, damit Phase-1-JSONL kompakt bleibt
+        # fuer spaetere Cloud-GPU-Embeddings; Live-Index bleibt unangetastet).
         start_time = time.time()
-        extracted = self.extractor.extract(book_path)
+        with self._override_extractor_chunking(
+            self._prepare_chunk_size, self._prepare_overlap
+        ):
+            extracted = self.extractor.extract(book_path)
         extract_time = time.time() - start_time
 
         # Handle hierarchical chunking if requested
