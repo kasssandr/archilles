@@ -100,6 +100,7 @@ def _print_results(results: dict, json_mode: bool) -> None:
         return
 
     n_new  = len(results['new_books'])
+    n_pending = len(results.get('fulltext_pending', []))
     n_meta = len(results['metadata_changed'])
     n_anno = len(results['annotations_changed'])
     n_unch = len(results['unchanged'])
@@ -109,6 +110,7 @@ def _print_results(results: dict, json_mode: bool) -> None:
     print(f"\nARCHILLES Watchdog — {header} in {results['total_time']}s")
     print(f"  Scanned:              {results['scanned']} books")
     print(f"  New (not indexed):    {n_new}")
+    print(f"  Fulltext pending:     {n_pending}")
     print(f"  Metadata changed:     {n_meta}")
     print(f"  Annotations changed:  {n_anno}")
     print(f"  Unchanged:            {n_unch}")
@@ -117,6 +119,9 @@ def _print_results(results: dict, json_mode: bool) -> None:
     if results.get('new_indexed'):
         print(f"  New books indexed:    {results['new_indexed']}"
               + f" in {results.get('new_indexed_time', 0)}s")
+    if results.get('fulltext_indexed'):
+        print(f"  Fulltext indexed:     {results['fulltext_indexed']}"
+              + f" in {results.get('fulltext_indexed_time', 0)}s")
     if n_err:
         print(f"  Errors:               {n_err}")
         for e in results['errors']:
@@ -162,7 +167,18 @@ def main() -> None:
     )
     parser.add_argument(
         '--index-new', action='store_true',
-        help='Index new books immediately (slow: ~90s/book with embeddings)'
+        help='Index new books immediately with full content (slow: ~90s/book with embeddings)'
+    )
+    parser.add_argument(
+        '--index-metadata-only', action='store_true',
+        help='For new books: create a fast PHASE1_METADATA stub instead of full content. '
+             'Use for Phase A (daily, fast). Mutually exclusive with --index-new.'
+    )
+    parser.add_argument(
+        '--index-fulltext-pending', action='store_true',
+        help='Index full content for books that were previously stub-indexed '
+             '(PHASE1_METADATA only). Drains the backlog; use CTRL+C to stop gracefully. '
+             'Use for Phase B (separate schedule).'
     )
     parser.add_argument(
         '--include-excluded', action='store_true',
@@ -238,13 +254,20 @@ def main() -> None:
         else:
             print()
 
+    if getattr(args, 'index_metadata_only', False) and args.index_new:
+        print("FEHLER: --index-metadata-only und --index-new schließen sich gegenseitig aus.",
+              file=sys.stderr)
+        sys.exit(2)
+
     scan_kwargs: dict = {
         'dry_run': args.dry_run,
         'queue_new': args.queue_new,
         'index_new': args.index_new,
-        'max_new': args.max_new,
     }
     if scanner_type == "calibre":
+        scan_kwargs['index_metadata_only'] = getattr(args, 'index_metadata_only', False)
+        scan_kwargs['index_fulltext_pending'] = getattr(args, 'index_fulltext_pending', False)
+        scan_kwargs['max_new'] = args.max_new
         scan_kwargs['first_authors'] = args.first_authors
         scan_kwargs['first_tags'] = args.first_tags
         scan_kwargs['first_titles'] = args.first_titles

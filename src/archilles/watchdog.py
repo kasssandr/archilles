@@ -223,6 +223,7 @@ class WatchdogScanner:
         self.queue_file = archilles_dir / "index_queue.json"
         self.log_file = archilles_dir / "watchdog.log"
         self.checkpoint_file = archilles_dir / "index_new_checkpoint.json"
+        self.fulltext_checkpoint_file = archilles_dir / "index_fulltext_checkpoint.json"
         self.annotation_cache_file = archilles_dir / "watchdog_annotation_cache.json"
         self.excluded_tags_lower: set[str] = {
             t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
@@ -254,6 +255,8 @@ class WatchdogScanner:
         dry_run: bool = False,
         queue_new: bool = True,
         index_new: bool = False,
+        index_metadata_only: bool = False,
+        index_fulltext_pending: bool = False,
         max_new: int | None = None,
         first_authors: list[str] | None = None,
         first_tags: list[str] | None = None,
@@ -264,15 +267,20 @@ class WatchdogScanner:
 
         Parameters
         ----------
-        dry_run       Report changes only; do not modify LanceDB or the queue.
-        queue_new     Write new Calibre IDs to index_queue.json (default True).
-        index_new     Index new books immediately via archillesRAG (slow, ~90s/book).
-        max_new       Cap on how many new books are indexed per run (None = no limit).
-                      Useful for daily routines: set e.g. 20 to drain the backlog
-                      gradually without blocking the machine for hours.
-        first_authors Substring list — books whose author matches come first.
-        first_tags    Substring list — books carrying a matching tag come first.
-        first_titles  Substring list — books whose title matches come first.
+        dry_run                Report changes only; do not modify LanceDB or queue.
+        queue_new              Write new Calibre IDs to index_queue.json (default True).
+        index_new              Index new books immediately via archillesRAG (full content).
+        index_metadata_only    For new books: create a fast PHASE1_METADATA stub instead
+                               of full content indexing.  Mutually exclusive with index_new.
+        index_fulltext_pending Find books that have only PHASE1_METADATA stubs (no content
+                               chunks) and index their full text.  This drains the backlog
+                               of books that were previously stub-indexed.
+        max_new                Cap on new books indexed via index_new or index_metadata_only.
+                               Applies independently to index_fulltext_pending.
+                               None = no limit (run until done or CTRL+C).
+        first_authors          Substring list — books whose author matches come first.
+        first_tags             Substring list — books carrying a matching tag come first.
+        first_titles           Substring list — books whose title matches come first.
 
         Within each priority group, books are ordered 5★ → 4★ → 3★ → unrated →
         2–1★ (low ratings treated as lower priority than unrated).
@@ -280,6 +288,7 @@ class WatchdogScanner:
         t0 = time.time()
         results: dict[str, Any] = {
             'new_books':            [],
+            'fulltext_pending':     [],  # phase1-stub books that need full content indexing
             'metadata_changed':    [],
             'annotations_changed': [],
             'unchanged':           [],
@@ -288,6 +297,8 @@ class WatchdogScanner:
             'delta_time':          0.0,
             'new_indexed':         0,    # count of Phase-3 immediate new-book indexes
             'new_indexed_time':    0.0,
+            'fulltext_indexed':    0,    # count of Phase-4 fulltext-pending indexes
+            'fulltext_indexed_time': 0.0,
             'scanned':             0,
             'interrupted':         False,
         }
@@ -300,6 +311,11 @@ class WatchdogScanner:
         results['scanned'] = len(calibre_books)
 
         indexed_hashes = self._load_indexed_hashes()
+        # Books in LanceDB that have only non-content chunks (phase1 stubs, annotations)
+        phase1_only_ids: set[int] = {
+            cid for cid, h in indexed_hashes.items()
+            if not h.get('has_content', True)
+        }
 
         for cid, meta in calibre_books.items():
             # Skip books carrying excluded tags (see config.get_excluded_tags)
@@ -342,7 +358,15 @@ class WatchdogScanner:
                 results['metadata_changed'].append(cid)
             if annot_changed:
                 results['annotations_changed'].append(cid)
-            if not meta_changed and not annot_changed:
+
+            if cid in phase1_only_ids:
+                # Track for fulltext backlog; metadata/annotation changes handled in Phase 2
+                results['fulltext_pending'].append({
+                    'calibre_id': cid,
+                    'title':      meta['title'],
+                    'book_id':    str(cid),
+                })
+            elif not meta_changed and not annot_changed:
                 results['unchanged'].append(cid)
 
         # ── Phase 2: apply delta updates ──────────────────────────────
@@ -368,7 +392,11 @@ class WatchdogScanner:
                 book_id = str(cid)
                 print(f"\n[{i}/{total_p2}] {meta['title']}")
                 try:
-                    rag.index_book(file_path, book_id, force=False)
+                    if cid in phase1_only_ids:
+                        # Refresh phase1 stub with updated metadata — no full indexing
+                        rag.index_book(file_path, book_id, phase='phase1')
+                    else:
+                        rag.index_book(file_path, book_id, force=False)
                     results['delta_updates'] += 1
                 except Exception as exc:
                     logger.error(f"Delta update failed for calibre_id={cid}: {exc}")
@@ -380,7 +408,7 @@ class WatchdogScanner:
         if new_ids and not dry_run:
             if queue_new:
                 self._queue_new_books(new_ids)
-            if index_new:
+            if index_new or index_metadata_only:
                 rag = self._load_rag()
                 ni0 = time.time()
                 saved_total, done_ids = self._load_checkpoint()
@@ -396,10 +424,11 @@ class WatchdogScanner:
                 if already_done:
                     print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
                 self._save_checkpoint(total_p3, done_ids)
+                phase_label = "Metadaten-Stub" if index_metadata_only else "Volltext"
                 for j, entry in enumerate(pending, 1):
                     if self._shutdown_requested:
                         print(
-                            f"\n⏸️  Abbruch angefordert — Phase 3 nach "
+                            f"\n⏸️  Abbruch angefordert — Phase 3 ({phase_label}) nach "
                             f"{already_done + j - 1}/{total_p3} Büchern gestoppt. "
                             f"Checkpoint bleibt erhalten."
                         )
@@ -413,7 +442,10 @@ class WatchdogScanner:
                         continue
                     print(f"\n[{already_done + j}/{total_p3}] {entry['title']}")
                     try:
-                        rag.index_book(formats[0]['path'], str(cid), force=False)
+                        if index_metadata_only:
+                            rag.index_book(formats[0]['path'], str(cid), phase='phase1')
+                        else:
+                            rag.index_book(formats[0]['path'], str(cid), force=False)
                         results['new_indexed'] += 1
                         done_ids.add(cid)
                         self._save_checkpoint(total_p3, done_ids)
@@ -426,6 +458,58 @@ class WatchdogScanner:
                 if not self._shutdown_requested and self.checkpoint_file.exists():
                     self.checkpoint_file.unlink()
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
+
+        # ── Phase 4: fulltext-pending backlog ─────────────────────────
+        # Index books that were previously stub-indexed (PHASE1_METADATA only)
+        # but have no content chunks yet.  Runs when --index-fulltext-pending
+        # is set; no max_new cap by default so the user can drain the full
+        # backlog in one session (CTRL+C for graceful stop, checkpoint resumes).
+        if index_fulltext_pending and results['fulltext_pending'] and not dry_run:
+            rag = self._load_rag()
+            ft0 = time.time()
+            saved_total, done_ids = self._load_fulltext_checkpoint()
+            pending = [
+                e for e in results['fulltext_pending']
+                if e['calibre_id'] not in done_ids
+            ]
+            pending.sort(key=lambda e: _index_priority_key(
+                e, calibre_books,
+                first_authors or [], first_tags or [], first_titles or [],
+            ))
+            already_done = len(done_ids)
+            total_p4 = max(saved_total, already_done + len(pending))
+            if max_new is not None:
+                pending = pending[:max_new]
+            if already_done:
+                print(f"  (Volltext-Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
+            self._save_fulltext_checkpoint(total_p4, done_ids)
+            for j, entry in enumerate(pending, 1):
+                if self._shutdown_requested:
+                    print(
+                        f"\n⏸️  Abbruch angefordert — Phase 4 (Volltext) nach "
+                        f"{already_done + j - 1}/{total_p4} Büchern gestoppt. "
+                        f"Checkpoint bleibt erhalten."
+                    )
+                    break
+                cid = entry['calibre_id']
+                meta = calibre_books.get(cid)
+                if not meta:
+                    continue
+                formats = _discover_formats(Path(meta['path']))
+                if not formats:
+                    continue
+                print(f"\n[{already_done + j}/{total_p4}] {entry['title']}")
+                try:
+                    rag.index_book(formats[0]['path'], str(cid), force=False)
+                    results['fulltext_indexed'] += 1
+                    done_ids.add(cid)
+                    self._save_fulltext_checkpoint(total_p4, done_ids)
+                except Exception as exc:
+                    logger.error(f"Fulltext indexing failed for calibre_id={cid}: {exc}")
+                    results['errors'].append({'calibre_id': cid, 'error': str(exc)})
+            if not self._shutdown_requested and self.fulltext_checkpoint_file.exists():
+                self.fulltext_checkpoint_file.unlink()
+            results['fulltext_indexed_time'] = round(time.time() - ft0, 1)
 
         results['total_time'] = round(time.time() - t0, 1)
         results['interrupted'] = self._shutdown_requested
@@ -594,6 +678,23 @@ class WatchdogScanner:
             encoding='utf-8',
         )
 
+    def _load_fulltext_checkpoint(self) -> tuple[int, set[int]]:
+        """Return (total_at_start, done_ids) from a previous interrupted --index-fulltext-pending run."""
+        if not self.fulltext_checkpoint_file.exists():
+            return 0, set()
+        try:
+            data = json.loads(self.fulltext_checkpoint_file.read_text(encoding='utf-8'))
+            return data.get('total', 0), set(data.get('done', []))
+        except Exception:
+            return 0, set()
+
+    def _save_fulltext_checkpoint(self, total: int, done: set[int]) -> None:
+        self.archilles_dir.mkdir(parents=True, exist_ok=True)
+        self.fulltext_checkpoint_file.write_text(
+            json.dumps({'total': total, 'done': sorted(done)}, indent=2),
+            encoding='utf-8',
+        )
+
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
         n_new  = len(results['new_books'])
@@ -604,6 +705,7 @@ class WatchdogScanner:
         lines = [
             f"{ts} SCAN completed in {results['total_time']}s",
             f"  new_books: {n_new}" + (f" {new_ids}" if new_ids else ""),
+            f"  fulltext_pending: {len(results.get('fulltext_pending', []))}",
             f"  metadata_changed: {n_meta}"
             + (f" {results['metadata_changed']}" if n_meta else ""),
             f"  annotations_changed: {n_anno}"
@@ -614,6 +716,8 @@ class WatchdogScanner:
             + (f" completed in {results['delta_time']}s" if results['delta_updates'] else ""),
             f"  new_indexed: {results.get('new_indexed', 0)}"
             + (f" completed in {results.get('new_indexed_time', 0)}s" if results.get('new_indexed') else ""),
+            f"  fulltext_indexed: {results.get('fulltext_indexed', 0)}"
+            + (f" completed in {results.get('fulltext_indexed_time', 0)}s" if results.get('fulltext_indexed') else ""),
             "",
         ]
         self.archilles_dir.mkdir(parents=True, exist_ok=True)

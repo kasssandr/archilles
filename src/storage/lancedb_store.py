@@ -805,6 +805,7 @@ class LanceDBStore:
             return '' if s == 'nan' else s
 
         result: dict[int, dict[str, str]] = {}
+        content_seen: set[int] = set()
         for row in rows:
             cid = row.get('calibre_id')
             if cid is None or (isinstance(cid, float) and cid != cid):
@@ -814,6 +815,9 @@ class LanceDBStore:
             new_meta = _clean(row.get('metadata_hash'))
             new_annot = _clean(row.get('annotation_hash'))
             new_book = _clean(row.get('book_id'))
+
+            if chunk_type in ChunkType.CONTENT_TYPES:
+                content_seen.add(cid)
 
             if cid in result:
                 # Prefer content chunks over annotation chunks for metadata_hash
@@ -828,6 +832,9 @@ class LanceDBStore:
             # Capture annotation hash from annotation chunks
             if chunk_type == ChunkType.ANNOTATION and new_annot:
                 result[cid]['annotation_hash'] = new_annot
+
+        for cid in result:
+            result[cid]['has_content'] = cid in content_seen
 
         return result
 

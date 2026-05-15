@@ -114,12 +114,19 @@ def _release_lock() -> None:
         pass
 
 
-def _build_command(adapter: str) -> list[str]:
+def _build_command(adapter: str, phase: str = "B") -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
         cmd = [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
         if adapter == "calibre":
-            cmd += ["--index-new", "--max-new", "20"]
+            if phase == "A":
+                # Phase A: fast daily scan — create metadata stubs for new books,
+                # apply delta updates (metadata/annotations) for existing books.
+                cmd += ["--index-metadata-only"]
+            else:
+                # Phase B: drain the fulltext backlog (phase1-stub → full content).
+                # No --max-new: runs until done or gracefully stopped by the user.
+                cmd += ["--index-fulltext-pending"]
         return cmd
     return [
         sys.executable,
@@ -157,9 +164,12 @@ def _parse_stats(stdout: str, adapter: str) -> dict:
             return {
                 "scanned": data.get("scanned"),
                 "new_books": len(data.get("new_books", [])),
+                "fulltext_pending": len(data.get("fulltext_pending", [])),
                 "metadata_changed": len(data.get("metadata_changed", [])),
                 "annotations_changed": len(data.get("annotations_changed", [])),
                 "delta_updates": data.get("delta_updates", 0),
+                "new_indexed": data.get("new_indexed", 0),
+                "fulltext_indexed": data.get("fulltext_indexed", 0),
                 "errors": len(data.get("errors", [])),
             }
         except Exception:
@@ -191,6 +201,10 @@ def main() -> int:
                         help="Poll for the global lock up to SECONDS before giving up "
                              "(default: 0 = skip immediately if locked). "
                              "Recommended value for OnLogon tasks: 7200")
+    parser.add_argument("--phase", choices=["A", "B"], default="B",
+                        help="Calibre indexing phase: A = metadata stubs for new books "
+                             "(fast, daily), B = fulltext for stub-only books (slow, "
+                             "runs until done). Default: B. Ignored for non-Calibre adapters.")
     args = parser.parse_args()
 
     master = load_master_config()
@@ -208,7 +222,9 @@ def main() -> int:
     library_path = Path(src.library_path)
     archilles_dir = library_path / ".archilles"
     archilles_dir.mkdir(parents=True, exist_ok=True)
-    marker = archilles_dir / "last_routine_run.txt"
+    # Phase B gets its own marker so A and B run independently.
+    phase_suffix = f"_phase{args.phase}" if (src.adapter or "calibre") == "calibre" else ""
+    marker = archilles_dir / f"last_routine_run{phase_suffix}.txt"
     log_file = archilles_dir / "routine.log"
     history_file = archilles_dir / "routine_history.jsonl"
 
@@ -223,7 +239,7 @@ def main() -> int:
         return 0
 
     adapter = src.adapter or "calibre"
-    cmd = _build_command(adapter)
+    cmd = _build_command(adapter, phase=args.phase)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -375,15 +391,20 @@ def main() -> int:
         # Fuer Calibre/Zotero: JSON-Blob wurde am Terminal unterdrueckt,
         # daher hier eine lesbare Zusammenfassung ausgeben.
         if adapter in ("calibre", "zotero") and stats:
-            print(
-                f"\n  Watchdog abgeschlossen in {duration:.0f}s —"
-                f" Gescannt: {stats.get('scanned', '?')}"
-                f" | Neu: {stats.get('new_books', 0)}"
-                f" | Metadaten: {stats.get('metadata_changed', 0)}"
-                f" | Annotationen: {stats.get('annotations_changed', 0)}"
-                f" | Aktualisiert: {stats.get('delta_updates', 0)}"
-                f" | Fehler: {stats.get('errors', 0)}"
-            )
+            parts = [
+                f"Gescannt: {stats.get('scanned', '?')}",
+                f"Neu: {stats.get('new_books', 0)}",
+                f"Volltext ausstehend: {stats.get('fulltext_pending', 0)}",
+                f"Metadaten: {stats.get('metadata_changed', 0)}",
+                f"Annotationen: {stats.get('annotations_changed', 0)}",
+                f"Aktualisiert: {stats.get('delta_updates', 0)}",
+            ]
+            if stats.get('new_indexed'):
+                parts.append(f"Neu indexiert: {stats['new_indexed']}")
+            if stats.get('fulltext_indexed'):
+                parts.append(f"Volltext indexiert: {stats['fulltext_indexed']}")
+            parts.append(f"Fehler: {stats.get('errors', 0)}")
+            print(f"\n  Watchdog abgeschlossen in {duration:.0f}s — " + " | ".join(parts))
 
         record = {
             "timestamp": start.isoformat(), "source": args.source,
