@@ -1,22 +1,30 @@
 # =============================================================================
 # ARCHILLES Scheduled Routines - Installer
 #
-# Registers four tasks in Windows Task Scheduler under the current user
+# Registers tasks in Windows Task Scheduler under the current user
 # (NO admin rights required). Trigger: at every logon. Throttling is done
 # by marker files inside each script (1x/day or 1x/ISO-week).
 #
-#   Archilles-Routine-Calibre  -> scripts/run_routine.py        --source archilles        --frequency daily
-#   Archilles-Routine-Lab      -> scripts/run_routine.py        --source archilles-lab    --frequency daily
-#   Archilles-Routine-Zotero   -> scripts/run_routine.py        --source archilles-zotero --frequency daily
-#   Archilles-Status-Mail      -> scripts/weekly_status_mail.py
+#   Archilles-Routine-Calibre    -> run_routine.py --source archilles --phase A (Metadaten-Stubs, schnell, täglich)
+#   Archilles-Routine-Calibre-B  -> run_routine.py --source archilles --phase B (Volltext-Backlog, langsam, ohne Limit)
+#   Archilles-Routine-Lab        -> run_routine.py --source archilles-lab    (Obsidian, täglich)
+#   Archilles-Routine-Zotero     -> run_routine.py --source archilles-zotero (Zotero, täglich)
+#   Archilles-Status-Mail        -> scripts/weekly_status_mail.py
+#   Archilles-Vault-Linker       -> scripts/run_link_vault.py
 #
-# Behaviour:
-#   * 5 minute delay after logon (routines), 10 minutes (mail) - so login
-#     itself is not slowed down; mail runs AFTER routines so latest stats
-#     are included.
-#   * If a logon trigger is missed (machine off): task starts at next logon.
-#     Marker logic in the script prevents duplicate runs.
-#   * Task runs as user (not admin).
+# Reihenfolge bei Logon (Lock serialisiert alle Routinen):
+#   PT5M  → Calibre-A, Lab, Zotero starten gemeinsam (schnell, je ~2-5 min)
+#   PT25M → Calibre-B startet erst wenn die anderen Routinen typischerweise
+#            fertig sind; läuft dann stundenlang bis CTRL+C oder fertig
+#   PT15M → Status-Mail
+#   PT30M → Vault-Linker
+#
+# Calibre-B:
+#   * Kein max_new-Limit — läuft bis Rückstand leer oder manuell gestoppt
+#   * CTRL+C (einmal): aktuelles Buch fertig indexieren, dann stoppen
+#   * Checkpoint index_fulltext_checkpoint.json: nächster Lauf macht weiter
+#   * Eigener Marker last_routine_run_phaseB.txt: läuft täglich bis Rückstand leer
+#   * Unbegrenzte ExecutionTimeLimit (Task Scheduler tötet ihn nicht nach 8h)
 #
 # Uninstall later:
 #   Get-ScheduledTask -TaskName 'Archilles-*' | Unregister-ScheduledTask -Confirm:$false
@@ -41,6 +49,14 @@ $Settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Hours 8)
+
+# Phase B darf unbegrenzt laufen — kein 8h-Kill durch den Scheduler
+$SettingsB = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -DontStopOnIdleEnd `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries `
+    -ExecutionTimeLimit ([System.TimeSpan]::Zero)
 
 $CurrentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 
@@ -88,27 +104,46 @@ Write-Host ""
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Calibre" `
-    -Description "Calibre watchdog (hash diff, new + changed books), max. 1x per day" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles", "--frequency", "daily") `
+    -Description "Calibre Phase A: Metadaten-Stubs fuer neue Buecher + Delta-Updates, max. 1x/Tag (schnell)" `
+    -Arguments   @("`"$Runner`"", "--source", "archilles", "--frequency", "daily", "--phase", "A", "--wait-for-lock", "7200") `
     -Delay       "PT5M"
+
+# Phase B hat eigene Settings (unbegrenzte Laufzeit) — direkt registrieren statt New-ArchillesTask
+$actionB  = New-ScheduledTaskAction `
+    -Execute          $Python `
+    -Argument         ("`"$Runner`" --source archilles --frequency daily --phase B --wait-for-lock 7200") `
+    -WorkingDirectory $RepoRoot
+$triggerB = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
+$triggerB.Delay = "PT25M"
+if (Get-ScheduledTask -TaskName "Archilles-Routine-Calibre-B" -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName "Archilles-Routine-Calibre-B" -Confirm:$false
+}
+Register-ScheduledTask `
+    -TaskName    "Archilles-Routine-Calibre-B" `
+    -Description "Calibre Phase B: Volltext-Backlog (Phase1-Stubs -> Volltext), laeuft bis fertig oder CTRL+C, kein Zeitlimit" `
+    -Action      $actionB `
+    -Trigger     $triggerB `
+    -Settings    $SettingsB `
+    -Principal   $Principal | Out-Null
+Write-Host "  registered: Archilles-Routine-Calibre-B"
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Lab" `
     -Description "Obsidian vault: index new documents, max. 1x per day" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles-lab", "--frequency", "daily") `
+    -Arguments   @("`"$Runner`"", "--source", "archilles-lab", "--frequency", "daily", "--wait-for-lock", "7200") `
     -Delay       "PT5M"
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Zotero" `
     -Description "Zotero library: index new documents, max. 1x per day" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", "daily") `
+    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", "daily", "--wait-for-lock", "7200") `
     -Delay       "PT5M"
 
 New-ArchillesTask `
     -Name        "Archilles-Status-Mail" `
     -Description "Weekly status mail (first logon of the new ISO week)" `
     -Arguments   @("`"$Mailer`"") `
-    -Delay       "PT10M"
+    -Delay       "PT15M"
 
 New-ArchillesTask `
     -Name        "Archilles-Vault-Linker" `
