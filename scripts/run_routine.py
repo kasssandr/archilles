@@ -310,25 +310,28 @@ def main() -> int:
         stdout_buf: list[str] = []
         log_lock = threading.Lock()
 
-        # Terminal-Transform: zeigt jede [N/M]-Zeile, unterdrueckt sonstige
-        # Detailzeilen (Einrueckungen) und den abschliessenden JSON-Blob von
-        # watchdog --json. Routine.log bleibt vollstaendig.
+        # Terminal-Transform: schreibt die [N/M]-Buchzeile als Fortschritts-
+        # balken um, drosselt die sehr gespraechige "Embedding: NN%"-Zeile auf
+        # einen Eintrag pro 10 %-Bucket und unterdrueckt den abschliessenden
+        # JSON-Blob von watchdog --json. Alle uebrigen Detail-Zeilen aus
+        # rag.index_book (File:, Extract:, Embed:, Index: …) gehen unveraendert
+        # durch — das ist die gleiche Tiefe wie beim direkten Aufruf von
+        # batch_index.py. Die routine.log bleibt unabhaengig vollstaendig.
         book_re = re.compile(r"^\[(\d+)/(\d+)\]\s")
         embed_re = re.compile(r"^\s*Embedding:\s+(\d+)%")
 
         def _make_book_transform():
             last_embed_bucket = -1
-            in_book = False
             in_json = False
             bar_w = 20
 
             def transform(line: str):
-                nonlocal last_embed_bucket, in_book, in_json
+                nonlocal last_embed_bucket, in_json
 
-                # Unterdruecke den abschliessenden JSON-Blob (watchdog --json
-                # schreibt einen einzigen Top-Level-Block ans Ende von stdout;
-                # _parse_stats() liest ihn aus stdout_buf).
-                if line.strip() == "{":
+                # Final JSON dump from watchdog --json: starts with a single
+                # "{" on its own line and runs to EOF. _parse_stats() reads
+                # the same content from stdout_buf, so we drop it on screen.
+                if line.rstrip() == "{":
                     in_json = True
                     return None
                 if in_json:
@@ -338,12 +341,12 @@ def main() -> int:
                 if m:
                     n, total = int(m.group(1)), max(int(m.group(2)), 1)
                     pct = n * 100 // total
-                    in_book = True
                     last_embed_bucket = -1
                     filled = (pct * bar_w) // 100
                     bar = "#" * filled + "." * (bar_w - filled)
                     rest = line[m.end():].rstrip("\r\n")
                     return f"[{pct:3d}%] [{bar}] {n}/{total}  {rest}\n"
+
                 em = embed_re.match(line)
                 if em:
                     pct = int(em.group(1))
@@ -354,9 +357,7 @@ def main() -> int:
                         last_embed_bucket = bucket
                         return line
                     return None
-                if in_book and (line.startswith(" ") or line.startswith("\t")):
-                    return None
-                in_book = False
+
                 return line
 
             return transform
