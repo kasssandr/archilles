@@ -234,12 +234,14 @@ def main() -> int:
                         help="Poll for the global lock up to SECONDS before giving up "
                              "(default: 0 = skip immediately if locked). "
                              "Recommended value for OnLogon tasks: 7200")
-    parser.add_argument("--phase", choices=["A", "B"], default="A",
+    parser.add_argument("--phase", choices=["A", "B"], default=None,
                         help="Calibre indexing phase: A = metadata stubs for new books "
                              "(fast, daily), B = fulltext for stub-only books (slow, "
                              "runs until done). Default: A (safer default — Phase B "
                              "must be requested explicitly). Ignored for non-Calibre adapters.")
     args = parser.parse_args()
+    phase_explicit = args.phase is not None
+    phase = args.phase or "A"
 
     master = load_master_config()
     if master is None:
@@ -253,11 +255,18 @@ def main() -> int:
         print(f"Unbekannte Source '{args.source}'. Verfügbar: {names}", file=sys.stderr)
         return 2
 
+    if phase_explicit and (src.adapter or "calibre") != "calibre":
+        print(
+            f"WARNUNG: --phase {phase} wird für Adapter '{src.adapter}' ignoriert "
+            f"(nur Calibre kennt Phase A/B).",
+            file=sys.stderr,
+        )
+
     library_path = Path(src.library_path)
     archilles_dir = library_path / ".archilles"
     archilles_dir.mkdir(parents=True, exist_ok=True)
     # Phase B gets its own marker so A and B run independently.
-    phase_suffix = f"_phase{args.phase}" if (src.adapter or "calibre") == "calibre" else ""
+    phase_suffix = f"_phase{phase}" if (src.adapter or "calibre") == "calibre" else ""
     marker = archilles_dir / f"last_routine_run{phase_suffix}.txt"
     log_file = archilles_dir / "routine.log"
     history_file = archilles_dir / "routine_history.jsonl"
@@ -273,7 +282,7 @@ def main() -> int:
         return 0
 
     adapter = src.adapter or "calibre"
-    cmd = _build_command(adapter, phase=args.phase)
+    cmd = _build_command(adapter, phase=phase)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -391,7 +400,7 @@ def main() -> int:
         # Scheduler-Task uses ExecutionTimeLimit=Zero. Phase A is the
         # fast daily run with an 8h ceiling. For other adapters we keep
         # the 8h ceiling as a safety net.
-        is_phase_b = adapter == "calibre" and args.phase == "B"
+        is_phase_b = adapter == "calibre" and phase == "B"
         wait_timeout = None if is_phase_b else 8 * 3600
 
         timed_out = False

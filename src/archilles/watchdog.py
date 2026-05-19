@@ -370,9 +370,16 @@ class WatchdogScanner:
                 results['unchanged'].append(cid)
 
         # ── Phase 2: apply delta updates ──────────────────────────────
+        # When Phase 4 will drain the full backlog (index_fulltext_pending=True
+        # without a max_new cap), phase1-only books will be re-indexed with
+        # full content anyway — a Phase 2 stub refresh would just waste
+        # embedding work that Phase 4 immediately overwrites.
+        phase4_will_process_all_stubs = index_fulltext_pending and max_new is None
         books_to_update = (
             set(results['metadata_changed']) | set(results['annotations_changed'])
         )
+        if phase4_will_process_all_stubs:
+            books_to_update -= phase1_only_ids
         if books_to_update and not dry_run:
             rag = self._load_rag()
             dt0 = time.time()

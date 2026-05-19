@@ -71,6 +71,14 @@ def _create_calibre_db(library_path: Path) -> None:
             book INTEGER,
             publisher INTEGER
         );
+        CREATE TABLE ratings (
+            id INTEGER PRIMARY KEY,
+            rating INTEGER
+        );
+        CREATE TABLE books_ratings_link (
+            book INTEGER,
+            rating INTEGER
+        );
     """)
     db.commit()
     db.close()
@@ -658,6 +666,220 @@ class TestAnnotationCache:
             assert changed is False  # treat-as-unchanged on error
             # No cache entry written for the failure
             assert str(book) not in scanner._annotation_cache
+
+
+# ---------------------------------------------------------------------------
+# Two-phase indexing: phase1 stubs, max_new cap, fulltext checkpoint
+# ---------------------------------------------------------------------------
+
+class TestTwoPhaseIndexing:
+    """The Calibre routine indexes in two phases:
+      A — fast metadata stubs (has_content=False) for new books
+      B — drain the fulltext backlog (turn stubs into full content)
+    Phase 1 of scan() classifies stub-only books into results['fulltext_pending'];
+    Phase 4 drains that backlog with its own checkpoint independent of Phase 3.
+    """
+
+    @staticmethod
+    def _make_scanner(library_path: Path, indexed_hashes: dict) -> WatchdogScanner:
+        scanner = WatchdogScanner(
+            library_path=library_path,
+            db_path=str(library_path / ".archilles" / "rag_db"),
+            archilles_dir=library_path / ".archilles",
+        )
+        scanner._load_indexed_hashes = lambda: indexed_hashes
+        scanner._annotation_changed = lambda file_path, stored_hash: False
+        return scanner
+
+    def test_phase1_stub_detected_as_fulltext_pending(
+        self, calibre_library: Path,
+    ):
+        """A book with has_content=False is a phase1 stub and must land in
+        results['fulltext_pending'], NOT in results['unchanged'] — otherwise
+        Phase 4 would never see the backlog."""
+        _add_book(calibre_library, 101, "Stub Book",
+                  authors=["A"], with_file="x.epub")
+
+        stored_meta = _compute_metadata_hash(
+            _calibre_metadata_for_hash(calibre_library)[101]
+        )
+        scanner = self._make_scanner(calibre_library, indexed_hashes={
+            101: {
+                'book_id': '101',
+                'metadata_hash': stored_meta,
+                'annotation_hash': '',
+                'has_content': False,
+            }
+        })
+
+        results = scanner.scan(dry_run=True)
+        pending_ids = {e['calibre_id'] for e in results['fulltext_pending']}
+        assert 101 in pending_ids
+        assert 101 not in results['unchanged']
+        assert 101 not in results['new_books']
+
+    def test_full_content_book_not_in_fulltext_pending(
+        self, calibre_library: Path,
+    ):
+        """has_content=True means the book has real content chunks — it must
+        NOT be classified as fulltext_pending even when metadata is unchanged."""
+        _add_book(calibre_library, 102, "Full Book",
+                  authors=["A"], with_file="x.epub")
+
+        stored_meta = _compute_metadata_hash(
+            _calibre_metadata_for_hash(calibre_library)[102]
+        )
+        scanner = self._make_scanner(calibre_library, indexed_hashes={
+            102: {
+                'book_id': '102',
+                'metadata_hash': stored_meta,
+                'annotation_hash': '',
+                'has_content': True,
+            }
+        })
+
+        results = scanner.scan(dry_run=True)
+        assert not results['fulltext_pending']
+        assert 102 in results['unchanged']
+
+    def test_max_new_limits_phase3(self, calibre_library: Path):
+        """max_new=2 must cap how many new books Phase 3 indexes per run."""
+        for cid in (1, 2, 3, 4, 5):
+            _add_book(calibre_library, cid, f"Book {cid}",
+                      authors=["A"], with_file="x.epub")
+
+        scanner = self._make_scanner(calibre_library, indexed_hashes={})
+
+        indexed_calls: list[str] = []
+
+        class FakeRAG:
+            def index_book(self, path, book_id, force=False, phase=None):
+                indexed_calls.append(book_id)
+        scanner._load_rag = lambda: FakeRAG()
+
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_new=True, max_new=2,
+        )
+
+        assert len(results['new_books']) == 5  # all detected
+        assert results['new_indexed'] == 2     # only 2 actually indexed
+        assert len(indexed_calls) == 2
+
+    def test_fulltext_checkpoint_resume(self, calibre_library: Path):
+        """When the fulltext checkpoint contains already-done IDs, Phase 4
+        must skip them and only process the remaining stubs."""
+        for cid in (1, 2, 3):
+            _add_book(calibre_library, cid, f"Stub {cid}",
+                      authors=["A"], with_file="x.epub")
+
+        meta_by_id = _calibre_metadata_for_hash(calibre_library)
+        indexed_hashes = {
+            cid: {
+                'book_id': str(cid),
+                'metadata_hash': _compute_metadata_hash(meta_by_id[cid]),
+                'annotation_hash': '',
+                'has_content': False,
+            }
+            for cid in (1, 2, 3)
+        }
+        scanner = self._make_scanner(calibre_library, indexed_hashes)
+
+        # Pre-seed the checkpoint as if book 1 was already drained in a prior run
+        scanner.archilles_dir.mkdir(parents=True, exist_ok=True)
+        scanner._save_fulltext_checkpoint(3, {1})
+
+        indexed_calls: list[str] = []
+
+        class FakeRAG:
+            def index_book(self, path, book_id, force=False, phase=None):
+                indexed_calls.append(book_id)
+        scanner._load_rag = lambda: FakeRAG()
+
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_fulltext_pending=True,
+        )
+
+        assert sorted(indexed_calls) == ['2', '3']
+        assert results['fulltext_indexed'] == 2
+        # Clean run drains the checkpoint
+        assert not scanner.fulltext_checkpoint_file.exists()
+
+    def test_phase2_skips_phase1_stubs_when_phase4_drains_all(
+        self, calibre_library: Path,
+    ):
+        """When Phase 4 will process the whole backlog (no max_new cap),
+        Phase 2 must NOT also refresh phase1-stub books — that would just
+        be embedding work Phase 4 overwrites immediately."""
+        # Book 10: phase1 stub with a metadata change → could land in BOTH
+        # metadata_changed and fulltext_pending.
+        _add_book(calibre_library, 10, "Changed Stub",
+                  authors=["A"], with_file="x.epub")
+
+        scanner = self._make_scanner(calibre_library, indexed_hashes={
+            10: {
+                'book_id': '10',
+                'metadata_hash': 'stale-hash',  # forces meta_changed=True
+                'annotation_hash': '',
+                'has_content': False,           # marks it as phase1 stub
+            }
+        })
+
+        all_calls: list[tuple[str, str | None, bool]] = []
+
+        class CountingRAG:
+            def index_book(self, path, book_id, force=False, phase=None):
+                all_calls.append((book_id, phase, force))
+        scanner._load_rag = lambda: CountingRAG()
+
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_fulltext_pending=True,
+        )
+
+        # Book 10 should be indexed exactly once — by Phase 4 (force=False,
+        # phase=None), not twice (once by Phase 2 with phase='phase1' then
+        # again by Phase 4).
+        book_10_calls = [c for c in all_calls if c[0] == '10']
+        assert len(book_10_calls) == 1, (
+            f"Expected book 10 indexed once by Phase 4, got: {book_10_calls}"
+        )
+        assert book_10_calls[0] == ('10', None, False)
+        assert results['fulltext_indexed'] == 1
+        assert results['delta_updates'] == 0  # Phase 2 skipped
+
+    def test_phase2_still_refreshes_phase1_stubs_when_max_new_set(
+        self, calibre_library: Path,
+    ):
+        """When Phase 4 is capped by max_new, some phase1 stubs may stay
+        as stubs after the run — so Phase 2 must keep refreshing their
+        metadata for them rather than silently dropping the update."""
+        _add_book(calibre_library, 20, "Changed Stub", authors=["A"],
+                  with_file="x.epub")
+
+        scanner = self._make_scanner(calibre_library, indexed_hashes={
+            20: {
+                'book_id': '20',
+                'metadata_hash': 'stale',
+                'annotation_hash': '',
+                'has_content': False,
+            }
+        })
+
+        calls: list[tuple[str, str | None]] = []
+
+        class CountingRAG:
+            def index_book(self, path, book_id, force=False, phase=None):
+                calls.append((book_id, phase))
+        scanner._load_rag = lambda: CountingRAG()
+
+        # max_new=0 means Phase 4 indexes nothing → Phase 2 must still refresh
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_fulltext_pending=True,
+            max_new=0,
+        )
+
+        # Exactly the Phase 2 refresh call should remain
+        assert ('20', 'phase1') in calls
+        assert results['delta_updates'] == 1
 
 
 # ---------------------------------------------------------------------------

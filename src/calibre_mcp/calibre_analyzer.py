@@ -264,21 +264,33 @@ class CalibreAnalyzer:
         return books
 
     def _get_annotation_counts_batch(self, book_ids: list[int]) -> dict[int, int]:
-        """Return highlight+note count per book_id (0 if none or table missing)."""
+        """Return highlight+note count per book_id (0 if none or table missing).
+
+        Chunks the IN-list to stay below SQLITE_MAX_VARIABLE_NUMBER (default
+        999 on older builds, 32 766 since 3.32). Without chunking a duplicate
+        report on a large library would raise OperationalError and silently
+        return zero annotations for every book.
+        """
         if not book_ids:
             return {}
+        counts: dict[int, int] = {}
+        chunk_size = 500
         try:
-            placeholders = ",".join("?" * len(book_ids))
-            cursor = self.conn.execute(
-                f"""SELECT book, COUNT(*) as cnt
-                    FROM annotations
-                    WHERE book IN ({placeholders})
-                      AND annot_type IN ('highlight', 'note')
-                    GROUP BY book""",
-                book_ids,
-            )
-            counts = {row["book"]: row["cnt"] for row in cursor.fetchall()}
+            for offset in range(0, len(book_ids), chunk_size):
+                chunk = book_ids[offset:offset + chunk_size]
+                placeholders = ",".join("?" * len(chunk))
+                cursor = self.conn.execute(
+                    f"""SELECT book, COUNT(*) as cnt
+                        FROM annotations
+                        WHERE book IN ({placeholders})
+                          AND annot_type IN ('highlight', 'note')
+                        GROUP BY book""",
+                    chunk,
+                )
+                for row in cursor.fetchall():
+                    counts[row["book"]] = row["cnt"]
         except sqlite3.OperationalError:
+            # annotations table missing on older Calibre versions — return zeros.
             counts = {}
         return {bid: counts.get(bid, 0) for bid in book_ids}
 
