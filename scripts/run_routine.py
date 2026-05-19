@@ -35,13 +35,13 @@ import re
 import subprocess
 import sys
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
 
 
@@ -64,87 +64,6 @@ def _append_history(history_file: Path, record: dict) -> None:
     history_file.parent.mkdir(parents=True, exist_ok=True)
     with history_file.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
-
-
-_LOCK_FILE = Path.home() / ".archilles" / "routine.lock"
-_LOCK_HEARTBEAT_INTERVAL_S = 300
-# 1 h — large enough to tolerate non-heartbeating co-tenants of the same lock
-# (run_link_vault.py, weekly_status_mail.py), short enough to recover from a
-# crashed holder before the next OnLogon trigger.
-_LOCK_STALE_AFTER_S = 3600
-
-
-def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
-    """Try to acquire the global lock.
-
-    If wait_s > 0, polls every 60 s until the lock is free or the timeout
-    expires — tasks that fire simultaneously at login will serialize naturally
-    rather than being skipped for the day.
-
-    The lock is considered stale if its mtime has not been updated within
-    _LOCK_STALE_AFTER_S. A live run_routine holder keeps the mtime fresh via
-    _start_lock_heartbeat(); a crashed holder leaves a stale lock that the
-    next acquirer can reclaim.
-    """
-    poll_interval = 300
-    deadline = time.time() + wait_s
-    info = ""
-    while True:
-        locked = False
-        if _LOCK_FILE.exists():
-            try:
-                if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_STALE_AFTER_S:
-                    locked = True
-                    info = _LOCK_FILE.read_text(encoding="utf-8").strip()
-            except OSError:
-                pass
-
-        if not locked:
-            _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _LOCK_FILE.write_text(
-                f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
-                encoding="utf-8",
-            )
-            return True
-
-        if time.time() >= deadline:
-            print(f"SKIP — Routine-Lock nach {wait_s}s Wartezeit noch belegt: {info}",
-                  file=sys.stderr)
-            return False
-
-        remaining = int(deadline - time.time())
-        print(f"  Warte auf Lock ({remaining}s verbleibend): {info}", file=sys.stderr)
-        time.sleep(poll_interval)
-
-
-def _start_lock_heartbeat(stop_event: threading.Event) -> threading.Thread:
-    """Refresh the lockfile mtime every _LOCK_HEARTBEAT_INTERVAL_S until stopped.
-
-    Prevents a long-running holder (e.g. Phase B running > _LOCK_STALE_AFTER_S)
-    from being mistaken for a crashed process and having its lock overwritten
-    by a concurrent run_routine invocation — which would cause both processes
-    to write to the same LanceDB simultaneously.
-    """
-    def _beat():
-        while not stop_event.wait(_LOCK_HEARTBEAT_INTERVAL_S):
-            try:
-                # os.utime is atomic: raises FileNotFoundError if the lock
-                # was already released, instead of recreating a stray file
-                # like Path.touch() would.
-                os.utime(_LOCK_FILE, None)
-            except OSError:
-                pass
-
-    t = threading.Thread(target=_beat, daemon=True)
-    t.start()
-    return t
-
-
-def _release_lock() -> None:
-    try:
-        _LOCK_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 def _build_command(adapter: str, phase: str = "A") -> list[str]:
@@ -294,10 +213,10 @@ def main() -> int:
               f"  ARCHILLES_LIBRARY_PATH={library_path}")
         return 0
 
-    if not _acquire_lock(f"run_routine({args.source})", wait_s=args.wait_for_lock):
+    if not runtime_lock.acquire(f"run_routine({args.source})", wait_s=args.wait_for_lock):
         return 1
     heartbeat_stop = threading.Event()
-    _start_lock_heartbeat(heartbeat_stop)
+    runtime_lock.start_heartbeat(heartbeat_stop)
     try:
         start = datetime.now().astimezone()
         print(f"[{start.isoformat()}] {args.source}: {' '.join(cmd)}")
@@ -476,7 +395,7 @@ def main() -> int:
         return returncode
     finally:
         heartbeat_stop.set()
-        _release_lock()
+        runtime_lock.release()
 
 
 if __name__ == "__main__":

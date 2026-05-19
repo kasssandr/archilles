@@ -27,10 +27,8 @@ Usage
 
 import argparse
 import json
-import os
 import smtplib
 import sys
-import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -38,34 +36,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
-
-_LOCK_FILE = Path.home() / ".archilles" / "routine.lock"
-_LOCK_MAX_AGE_S = 9 * 3600
-
-
-def _acquire_lock(script_name: str) -> bool:
-    if _LOCK_FILE.exists():
-        try:
-            if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_MAX_AGE_S:
-                info = _LOCK_FILE.read_text(encoding="utf-8").strip()
-                print(f"SKIP — Routine-Lock belegt: {info}", file=sys.stderr)
-                return False
-        except OSError:
-            pass
-    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _LOCK_FILE.write_text(
-        f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
-        encoding="utf-8",
-    )
-    return True
-
-
-def _release_lock() -> None:
-    try:
-        _LOCK_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 GMAIL_USER = "tomradau@gmail.com"
@@ -245,9 +217,9 @@ def main() -> int:
         print(body)
         return 0
 
-    if not _acquire_lock("weekly_status_mail"):
-        return 1
-    try:
+    with runtime_lock.routine_lock("weekly_status_mail") as acquired:
+        if not acquired:
+            return 1
         password = _load_secret()
         if not password:
             print("GMAIL_APP_PASSWORD nicht in ~/.archilles/secrets.env(.txt) gefunden.",
@@ -270,8 +242,6 @@ def main() -> int:
         marker.write_text(now.isoformat(), encoding="utf-8")
         print(f"OK — Status-Mail gesendet an {RECIPIENT} ({now.isoformat()})")
         return 0
-    finally:
-        _release_lock()
 
 
 if __name__ == "__main__":

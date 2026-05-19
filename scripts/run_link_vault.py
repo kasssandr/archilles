@@ -33,45 +33,17 @@ Usage
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
-
-_LOCK_FILE = Path.home() / ".archilles" / "routine.lock"
-_LOCK_MAX_AGE_S = 9 * 3600
-
-
-def _acquire_lock(script_name: str) -> bool:
-    if _LOCK_FILE.exists():
-        try:
-            if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_MAX_AGE_S:
-                info = _LOCK_FILE.read_text(encoding="utf-8").strip()
-                print(f"SKIP — Routine-Lock belegt: {info}", file=sys.stderr)
-                return False
-        except OSError:
-            pass
-    _LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _LOCK_FILE.write_text(
-        f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
-        encoding="utf-8",
-    )
-    return True
-
-
-def _release_lock() -> None:
-    try:
-        _LOCK_FILE.unlink(missing_ok=True)
-    except OSError:
-        pass
 
 
 LINK_VAULT_SCRIPT = Path(
@@ -199,9 +171,12 @@ def main() -> int:
         print(f"DRY-RUN — würde ausführen: {' '.join(cmd)}")
         return 0
 
-    if not _acquire_lock("run_link_vault"):
-        return 1
-    try:
+    # Vault-Linker kann bis zu 4 h laufen — wir brauchen den Heartbeat aus
+    # runtime_lock, damit der globale 1-h-Stale-Threshold die laufende
+    # Session nicht fälschlich für „gecrasht" hält.
+    with runtime_lock.routine_lock("run_link_vault") as acquired:
+        if not acquired:
+            return 1
         start = datetime.now().astimezone()
         print(f"[{start.isoformat()}] vault-linker: starte {cmd}")
         with log_file.open("a", encoding="utf-8") as f:
@@ -248,8 +223,6 @@ def main() -> int:
             monthly_marker.write_text(end.isoformat(), encoding="utf-8")
 
         return proc.returncode
-    finally:
-        _release_lock()
 
 
 if __name__ == "__main__":
