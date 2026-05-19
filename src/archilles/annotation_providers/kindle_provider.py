@@ -231,8 +231,12 @@ class KindleProvider(AnnotationProvider):
 
     def can_handle(self, path: str) -> bool:
         p = Path(path)
-        if p.is_file():
-            return p.suffix.lower() == ".txt" and "clipping" in p.stem.lower()
+        # File-name pattern check first — works without filesystem access so
+        # auto-detection can short-circuit on the name alone (matches the
+        # convention used by PDFProvider). The directory checks below DO
+        # require filesystem access because they read directory contents.
+        if p.suffix.lower() == ".txt" and "clipping" in p.stem.lower():
+            return True
         if _is_ebook_dir(p) or _is_kindle_root(p):
             return True
         return False
