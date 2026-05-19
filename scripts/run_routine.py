@@ -67,7 +67,11 @@ def _append_history(history_file: Path, record: dict) -> None:
 
 
 _LOCK_FILE = Path.home() / ".archilles" / "routine.lock"
-_LOCK_MAX_AGE_S = 9 * 3600
+_LOCK_HEARTBEAT_INTERVAL_S = 300
+# 1 h — large enough to tolerate non-heartbeating co-tenants of the same lock
+# (run_link_vault.py, weekly_status_mail.py), short enough to recover from a
+# crashed holder before the next OnLogon trigger.
+_LOCK_STALE_AFTER_S = 3600
 
 
 def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
@@ -76,14 +80,20 @@ def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
     If wait_s > 0, polls every 60 s until the lock is free or the timeout
     expires — tasks that fire simultaneously at login will serialize naturally
     rather than being skipped for the day.
+
+    The lock is considered stale if its mtime has not been updated within
+    _LOCK_STALE_AFTER_S. A live run_routine holder keeps the mtime fresh via
+    _start_lock_heartbeat(); a crashed holder leaves a stale lock that the
+    next acquirer can reclaim.
     """
     poll_interval = 300
     deadline = time.time() + wait_s
+    info = ""
     while True:
         locked = False
         if _LOCK_FILE.exists():
             try:
-                if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_MAX_AGE_S:
+                if time.time() - _LOCK_FILE.stat().st_mtime < _LOCK_STALE_AFTER_S:
                     locked = True
                     info = _LOCK_FILE.read_text(encoding="utf-8").strip()
             except OSError:
@@ -107,6 +117,29 @@ def _acquire_lock(script_name: str, wait_s: int = 0) -> bool:
         time.sleep(poll_interval)
 
 
+def _start_lock_heartbeat(stop_event: threading.Event) -> threading.Thread:
+    """Refresh the lockfile mtime every _LOCK_HEARTBEAT_INTERVAL_S until stopped.
+
+    Prevents a long-running holder (e.g. Phase B running > _LOCK_STALE_AFTER_S)
+    from being mistaken for a crashed process and having its lock overwritten
+    by a concurrent run_routine invocation — which would cause both processes
+    to write to the same LanceDB simultaneously.
+    """
+    def _beat():
+        while not stop_event.wait(_LOCK_HEARTBEAT_INTERVAL_S):
+            try:
+                # os.utime is atomic: raises FileNotFoundError if the lock
+                # was already released, instead of recreating a stray file
+                # like Path.touch() would.
+                os.utime(_LOCK_FILE, None)
+            except OSError:
+                pass
+
+    t = threading.Thread(target=_beat, daemon=True)
+    t.start()
+    return t
+
+
 def _release_lock() -> None:
     try:
         _LOCK_FILE.unlink(missing_ok=True)
@@ -114,7 +147,7 @@ def _release_lock() -> None:
         pass
 
 
-def _build_command(adapter: str, phase: str = "B") -> list[str]:
+def _build_command(adapter: str, phase: str = "A") -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
         cmd = [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
@@ -201,10 +234,11 @@ def main() -> int:
                         help="Poll for the global lock up to SECONDS before giving up "
                              "(default: 0 = skip immediately if locked). "
                              "Recommended value for OnLogon tasks: 7200")
-    parser.add_argument("--phase", choices=["A", "B"], default="B",
+    parser.add_argument("--phase", choices=["A", "B"], default="A",
                         help="Calibre indexing phase: A = metadata stubs for new books "
                              "(fast, daily), B = fulltext for stub-only books (slow, "
-                             "runs until done). Default: B. Ignored for non-Calibre adapters.")
+                             "runs until done). Default: A (safer default — Phase B "
+                             "must be requested explicitly). Ignored for non-Calibre adapters.")
     args = parser.parse_args()
 
     master = load_master_config()
@@ -253,6 +287,8 @@ def main() -> int:
 
     if not _acquire_lock(f"run_routine({args.source})", wait_s=args.wait_for_lock):
         return 1
+    heartbeat_stop = threading.Event()
+    _start_lock_heartbeat(heartbeat_stop)
     try:
         start = datetime.now().astimezone()
         print(f"[{start.isoformat()}] {args.source}: {' '.join(cmd)}")
@@ -351,9 +387,16 @@ def main() -> int:
         t_out.start()
         t_err.start()
 
+        # Phase B drains the fulltext backlog and may run for days; the
+        # Scheduler-Task uses ExecutionTimeLimit=Zero. Phase A is the
+        # fast daily run with an 8h ceiling. For other adapters we keep
+        # the 8h ceiling as a safety net.
+        is_phase_b = adapter == "calibre" and args.phase == "B"
+        wait_timeout = None if is_phase_b else 8 * 3600
+
         timed_out = False
         try:
-            returncode = proc.wait(timeout=8 * 3600)
+            returncode = proc.wait(timeout=wait_timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
             try:
@@ -372,6 +415,9 @@ def main() -> int:
             with log_lock:
                 log_handle.write(f"\n=== {end.isoformat()} TIMEOUT ===\n")
             log_handle.close()
+            # Marker schreiben, damit Phase A am selben Tag nicht erneut startet
+            # (verhindert Endlos-Retry bei wiederholten Logons).
+            marker.write_text(end.isoformat(), encoding="utf-8")
             record = {
                 "timestamp": start.isoformat(), "source": args.source,
                 "adapter": adapter, "frequency": args.frequency,
@@ -419,6 +465,7 @@ def main() -> int:
 
         return returncode
     finally:
+        heartbeat_stop.set()
         _release_lock()
 
 
