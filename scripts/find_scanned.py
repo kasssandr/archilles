@@ -90,7 +90,11 @@ def find_scanned_books(
     )
 
     # --- Content chunk stats per book ---
-    content_df = df[~df['chunk_type'].isin(ChunkType.NON_CONTENT_TYPES)]
+    # Exclude PARENT in addition to NON_CONTENT_TYPES: PARENT chunks repeat
+    # the text that lives in their CHILD chunks under hierarchical chunking,
+    # so counting both would double the word total.
+    _word_count_exclude = ChunkType.NON_CONTENT_TYPES | {ChunkType.PARENT}
+    content_df = df[~df['chunk_type'].isin(_word_count_exclude)]
 
     if not content_df.empty:
         def word_count(texts):

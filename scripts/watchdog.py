@@ -110,7 +110,8 @@ def _print_results(results: dict, json_mode: bool) -> None:
     print(f"\nARCHILLES Watchdog — {header} in {results['total_time']}s")
     print(f"  Scanned:              {results['scanned']} books")
     print(f"  New (not indexed):    {n_new}")
-    print(f"  Fulltext pending:     {n_pending}")
+    if n_pending:
+        print(f"  Fulltext pending:     {n_pending}")
     print(f"  Metadata changed:     {n_meta}")
     print(f"  Annotations changed:  {n_anno}")
     print(f"  Unchanged:            {n_unch}")

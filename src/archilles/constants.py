@@ -20,10 +20,17 @@ class ChunkType:
     # Virtual filter alias used by _build_filter — not stored in the DB
     ANNOTATIONS_AND_COMMENTS = "annotations_and_comments"
 
-    # Sets for common membership tests
-    CONTENT_TYPES = frozenset({CONTENT, CHILD})
+    # Sets for common membership tests.
+    #
+    # CONTENT_TYPES marks chunks that carry actual book text (used by the
+    # watchdog to decide whether a book has fulltext or is still a phase1
+    # stub). PARENT chunks store full section text from hierarchical chunking
+    # and EXCHANGE chunks store dialogue turns — both qualify as content.
+    # NON_CONTENT_TYPES is the complement: metadata-only / annotation /
+    # comment chunks that on their own do NOT count as fulltext.
+    CONTENT_TYPES = frozenset({CONTENT, CHILD, PARENT, EXCHANGE})
     HIERARCHICAL_TYPES = frozenset({CONTENT, CHILD, PARENT})
-    NON_CONTENT_TYPES = frozenset({CALIBRE_COMMENT, ANNOTATION, PHASE1_METADATA, PARENT})
+    NON_CONTENT_TYPES = frozenset({CALIBRE_COMMENT, ANNOTATION, PHASE1_METADATA})
 
 
 class SectionType:

@@ -449,7 +449,7 @@ class archillesRAG:
                     return out
 
                 self.embedding_model.encode = _encode_fp32
-                print(f"  FP16 active (CUDA) — halver VRAM, schnellere Inferenz")
+                print(f"  FP16 active (CUDA) — halbierter VRAM, schnellere Inferenz")
             print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested

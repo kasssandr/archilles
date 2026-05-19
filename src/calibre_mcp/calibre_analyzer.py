@@ -1010,6 +1010,12 @@ Examples:
 
     args = parser.parse_args()
 
+    # --csv currently only exports duplicate reports; treat it as implicit
+    # --duplicates so users don't silently get an empty (json) output when
+    # they forget the flag.
+    if getattr(args, 'csv', None) and not (args.duplicates or args.filter == 'duplicates'):
+        args.duplicates = True
+
     try:
         with CalibreAnalyzer(args.database) as analyzer:
             # Handle duplicates detection

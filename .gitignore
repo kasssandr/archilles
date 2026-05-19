@@ -99,3 +99,7 @@ prepared_chunks_test/
 scripts/migration/
 phase1_review_plan.csv
 extract_reviews_state.json
+
+# Generated analyzer/report exports
+duplicates.csv
+phase1_stubs.csv
