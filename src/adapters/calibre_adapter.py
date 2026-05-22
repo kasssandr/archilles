@@ -282,9 +282,14 @@ class CalibreAdapter(SourceAdapter):
             (book_id,),
         ).fetchone()
         timestamps = DocumentTimestamps()
+        pub_year = None
         if ts_row:
             if ts_row["pubdate"]:
                 timestamps.created_at = str(ts_row["pubdate"])
+                try:
+                    pub_year = int(str(ts_row["pubdate"])[:4])
+                except (ValueError, TypeError):
+                    pass
             if ts_row["last_modified"]:
                 timestamps.modified_at = str(ts_row["last_modified"])
 
@@ -298,6 +303,7 @@ class CalibreAdapter(SourceAdapter):
             comments=comments,
             comments_html=comments_html,
             language=language,
+            year=pub_year,
             publisher=publisher,
             identifiers=identifiers,
             timestamps=timestamps,

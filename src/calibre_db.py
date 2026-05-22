@@ -321,6 +321,7 @@ class CalibreDB:
             books.title,
             books.path,
             books.has_cover,
+            books.pubdate,
             comments.text as comments,
             authors.name as author,
             publishers.name as publisher,
@@ -396,6 +397,13 @@ class CalibreDB:
         except Exception as e:
             logger.debug(f"Could not read custom fields: {e}")
 
+        pub_year = None
+        if row['pubdate']:
+            try:
+                pub_year = int(str(row['pubdate'])[:4])
+            except (ValueError, TypeError):
+                pass
+
         result = {
             'calibre_id': book_id,
             'title': row['title'],
@@ -407,6 +415,7 @@ class CalibreDB:
             'tags': tags,
             'comments': comments_text,
             'comments_html': comments_html,
+            'year': pub_year,
         }
 
         if custom_fields:

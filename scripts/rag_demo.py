@@ -74,7 +74,7 @@ class archillesRAG:
     """
 
     # Fields to copy from Calibre book_data into chunk metadata
-    _CALIBRE_FIELDS = ('author', 'title', 'publisher', 'language', 'isbn',
+    _CALIBRE_FIELDS = ('author', 'title', 'year', 'publisher', 'language', 'isbn',
                        'calibre_id', 'tags', 'comments', 'custom_fields')
 
     # Common stop words for multilingual queries
@@ -716,6 +716,8 @@ class archillesRAG:
                     metadata['author'] = ' & '.join(doc_meta.authors)
                 if doc_meta.title:
                     metadata['title'] = doc_meta.title
+                if doc_meta.year:
+                    metadata['year'] = doc_meta.year
                 if doc_meta.publisher:
                     metadata['publisher'] = doc_meta.publisher
                 if doc_meta.language:
