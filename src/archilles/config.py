@@ -141,6 +141,9 @@ class SourceConfig:
     adapter: str | None = None
     rag_db_path: str | None = None
     excluded_tags: list[str] | None = None
+    # Tags whose books are indexed first (group 0 in _index_priority_key).
+    # Substring match, case-insensitive — e.g. ["prio", "favorites"].
+    priority_tags: list[str] | None = None
     linked_attachment_base: Path | None = None
     enable_reranking: bool | None = None
     reranker_device: str | None = None
@@ -220,6 +223,11 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             raise ValueError(
                 f"Source '{src['name']}': excluded_tags must be a list, got {type(excluded).__name__}"
             )
+        priority = src.get("priority_tags")
+        if priority is not None and not isinstance(priority, list):
+            raise ValueError(
+                f"Source '{src['name']}': priority_tags must be a list, got {type(priority).__name__}"
+            )
         linked = src.get("linked_attachment_base")
         sources.append(SourceConfig(
             name=str(src["name"]),
@@ -227,6 +235,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             adapter=src.get("adapter"),
             rag_db_path=src.get("rag_db_path"),
             excluded_tags=[str(t) for t in excluded] if excluded is not None else None,
+            priority_tags=[str(t) for t in priority] if priority is not None else None,
             linked_attachment_base=Path(linked).expanduser() if linked else None,
             enable_reranking=src.get("enable_reranking"),
             reranker_device=src.get("reranker_device"),

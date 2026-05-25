@@ -66,10 +66,19 @@ def _append_history(history_file: Path, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _build_command(adapter: str, phase: str = "A", max_new: int | None = None) -> list[str]:
+def _build_command(
+    adapter: str,
+    phase: str = "A",
+    max_new: int | None = None,
+    priority_tags: list[str] | None = None,
+) -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
         cmd = [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
+        # Priority tags (group 0 in _index_priority_key) — books carrying one of
+        # these are indexed before everything else, regardless of rating/recency.
+        for tag in priority_tags or []:
+            cmd += ["--first-tag", tag]
         if adapter == "calibre":
             if phase == "A":
                 # Phase A: fast daily scan — create metadata stubs for new books,
@@ -210,7 +219,8 @@ def main() -> int:
         return 0
 
     adapter = src.adapter or "calibre"
-    cmd = _build_command(adapter, phase=phase, max_new=args.max_new)
+    cmd = _build_command(adapter, phase=phase, max_new=args.max_new,
+                         priority_tags=src.priority_tags)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
