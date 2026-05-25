@@ -13,14 +13,14 @@ Usage:
     python scripts/find_scanned.py --threshold 80
 
     # Filter to a specific Calibre tag
-    python scripts/find_scanned.py --tag "Judenkönige"
+    python scripts/find_scanned.py --tag "History"
 
     # Output as JSON
     python scripts/find_scanned.py --json
 
     # Re-index all found books with OCR (dry run first!)
-    python scripts/find_scanned.py --tag "Judenkönige" --reindex --dry-run
-    python scripts/find_scanned.py --tag "Judenkönige" --reindex
+    python scripts/find_scanned.py --tag "History" --reindex --dry-run
+    python scripts/find_scanned.py --tag "History" --reindex
 """
 
 import sys
