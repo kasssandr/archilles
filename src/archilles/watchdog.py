@@ -264,6 +264,7 @@ class WatchdogScanner:
         first_authors: list[str] | None = None,
         first_tags: list[str] | None = None,
         first_titles: list[str] | None = None,
+        rating_filter: int | None = None,
     ) -> dict[str, Any]:
         """
         Run a full scan and return a results dict.
@@ -284,9 +285,12 @@ class WatchdogScanner:
         first_authors          Substring list — books whose author matches come first.
         first_tags             Substring list — books carrying a matching tag come first.
         first_titles           Substring list — books whose title matches come first.
+        rating_filter          Restrict the fulltext-pending backlog (Phase 4) to books
+                               with exactly this star rating. 0 = unrated, 1–5 = N stars.
+                               None = no restriction. Has no effect on other phases.
 
-        Within each priority group, books are ordered 5★ → 4★ → 3★ → unrated →
-        2–1★ (low ratings treated as lower priority than unrated).
+        Within each priority group, books are ordered by rating (5★, then 4★, then
+        everything else) and then by recency (most recently added Calibre ID first).
         """
         t0 = time.time()
         results: dict[str, Any] = {
@@ -482,6 +486,13 @@ class WatchdogScanner:
                 e for e in results['fulltext_pending']
                 if e['calibre_id'] not in done_ids
             ]
+            if rating_filter is not None:
+                # Calibre stores stars on a 0–10 scale (N★ = N*2); unrated → 0.
+                target = rating_filter * 2
+                pending = [
+                    e for e in pending
+                    if (calibre_books.get(e['calibre_id'], {}).get('rating') or 0) == target
+                ]
             pending.sort(key=lambda e: _index_priority_key(
                 e, calibre_books,
                 first_authors or [], first_tags or [], first_titles or [],

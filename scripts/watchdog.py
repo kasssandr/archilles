@@ -210,6 +210,12 @@ def main() -> None:
         help='Index books whose title contains this substring first; repeatable'
     )
     parser.add_argument(
+        '--rating', type=int, choices=[0, 1, 2, 3, 4, 5], default=None, metavar='STARS',
+        help='Restrict the fulltext-pending backlog (--index-fulltext-pending) to books '
+             'with exactly this star rating. 0 = unrated, 1-5 = N stars. No effect on '
+             'other phases.'
+    )
+    parser.add_argument(
         '--max-new', type=int, default=None, metavar='N',
         help='Cap on new books indexed per run (default: no limit). '
              'Use e.g. --max-new 20 in daily routines to drain the backlog gradually.'
@@ -269,6 +275,7 @@ def main() -> None:
         scan_kwargs['index_metadata_only'] = getattr(args, 'index_metadata_only', False)
         scan_kwargs['index_fulltext_pending'] = getattr(args, 'index_fulltext_pending', False)
         scan_kwargs['max_new'] = args.max_new
+        scan_kwargs['rating_filter'] = args.rating
         scan_kwargs['first_authors'] = args.first_authors
         scan_kwargs['first_tags'] = args.first_tags
         scan_kwargs['first_titles'] = args.first_titles

@@ -71,6 +71,7 @@ def _build_command(
     phase: str = "A",
     max_new: int | None = None,
     priority_tags: list[str] | None = None,
+    rating: int | None = None,
 ) -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
@@ -92,6 +93,8 @@ def _build_command(
                 cmd += ["--index-fulltext-pending"]
                 if max_new is not None:
                     cmd += ["--max-new", str(max_new)]
+                if rating is not None:
+                    cmd += ["--rating", str(rating)]
         return cmd
     return [
         sys.executable,
@@ -176,6 +179,11 @@ def main() -> int:
                              "Keeps daily runs short and forces a fresh scan+sort each day "
                              "so newly added / highly rated titles index first. "
                              "Recommended for slow machines, e.g. --max-new 12.")
+    parser.add_argument("--rating", type=int, choices=[0, 1, 2, 3, 4, 5], default=None,
+                        metavar="STARS",
+                        help="Phase B only: restrict the fulltext backlog to books with "
+                             "exactly this star rating (0 = unrated, 1-5 = N stars), newest "
+                             "first. E.g. --phase B --rating 3 --max-new 50.")
     args = parser.parse_args()
     phase_explicit = args.phase is not None
     phase = args.phase or "A"
@@ -220,7 +228,7 @@ def main() -> int:
 
     adapter = src.adapter or "calibre"
     cmd = _build_command(adapter, phase=phase, max_new=args.max_new,
-                         priority_tags=src.priority_tags)
+                         priority_tags=src.priority_tags, rating=args.rating)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
