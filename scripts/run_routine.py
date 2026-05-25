@@ -66,7 +66,7 @@ def _append_history(history_file: Path, record: dict) -> None:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _build_command(adapter: str, phase: str = "A") -> list[str]:
+def _build_command(adapter: str, phase: str = "A", max_new: int | None = None) -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
         cmd = [sys.executable, str(REPO_ROOT / "scripts" / "watchdog.py"), "--json"]
@@ -77,8 +77,12 @@ def _build_command(adapter: str, phase: str = "A") -> list[str]:
                 cmd += ["--index-metadata-only"]
             else:
                 # Phase B: drain the fulltext backlog (phase1-stub → full content).
-                # No --max-new: runs until done or gracefully stopped by the user.
+                # With --max-new the run is capped so it re-scans and re-sorts the
+                # pending pool every day: freshly added (and 5★/4★) titles bubble
+                # to the front instead of waiting behind a multi-day marathon scan.
                 cmd += ["--index-fulltext-pending"]
+                if max_new is not None:
+                    cmd += ["--max-new", str(max_new)]
         return cmd
     return [
         sys.executable,
@@ -158,6 +162,11 @@ def main() -> int:
                              "(fast, daily), B = fulltext for stub-only books (slow, "
                              "runs until done). Default: A (safer default — Phase B "
                              "must be requested explicitly). Ignored for non-Calibre adapters.")
+    parser.add_argument("--max-new", type=int, default=None, metavar="N",
+                        help="Phase B only: cap the fulltext backlog to N books per run. "
+                             "Keeps daily runs short and forces a fresh scan+sort each day "
+                             "so newly added / highly rated titles index first. "
+                             "Recommended for slow machines, e.g. --max-new 12.")
     args = parser.parse_args()
     phase_explicit = args.phase is not None
     phase = args.phase or "A"
@@ -201,7 +210,7 @@ def main() -> int:
         return 0
 
     adapter = src.adapter or "calibre"
-    cmd = _build_command(adapter, phase=phase)
+    cmd = _build_command(adapter, phase=phase, max_new=args.max_new)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"
@@ -229,54 +238,32 @@ def main() -> int:
         stdout_buf: list[str] = []
         log_lock = threading.Lock()
 
-        # Terminal-Transform: schreibt die [N/M]-Buchzeile als Fortschritts-
-        # balken um, drosselt die sehr gespraechige "Embedding: NN%"-Zeile auf
-        # einen Eintrag pro 10 %-Bucket und unterdrueckt den abschliessenden
-        # JSON-Blob von watchdog --json. Alle uebrigen Detail-Zeilen aus
-        # rag.index_book (File:, Extract:, Embed:, Index: …) gehen unveraendert
-        # durch — das ist die gleiche Tiefe wie beim direkten Aufruf von
-        # batch_index.py. Die routine.log bleibt unabhaengig vollstaendig.
-        book_re = re.compile(r"^\[(\d+)/(\d+)\]\s")
-        embed_re = re.compile(r"^\s*Embedding:\s+(\d+)%")
-
+        # Terminal-Transform: Die einzige Aufgabe ist, den abschliessenden
+        # JSON-Blob von ``watchdog --json`` vom Bildschirm zu nehmen (er dient
+        # nur _parse_stats() und wird aus stdout_buf gelesen). Alle uebrigen
+        # Zeilen aus rag.index_book (File:, Extract:, Embed:, Index:, der
+        # Buch-Header [N/M] Autor: Titel …) gehen unveraendert durch — so sieht
+        # der Watchdog im Terminal genauso aus wie ein direkter batch_index-Lauf.
+        #
+        # stderr wird NICHT umgeleitet, sondern erbt das echte Terminal des
+        # Runners (siehe Popen unten). Dadurch rendert die tqdm-"Embedding"-
+        # Leiste als eine sich in-place aktualisierende Zeile statt als hunderte
+        # gestapelter Zeilen (Text-Pipes uebersetzen tqdms \r sonst zu \n).
+        # Trade-off: stderr (tqdm + Fehler) landet nicht in routine.log; die
+        # vollstaendige Zusammenfassung steht weiterhin in watchdog.log und
+        # routine_history.jsonl.
         def _make_book_transform():
-            last_embed_bucket = -1
             in_json = False
-            bar_w = 20
 
             def transform(line: str):
-                nonlocal last_embed_bucket, in_json
-
-                # Final JSON dump from watchdog --json: starts with a single
-                # "{" on its own line and runs to EOF. _parse_stats() reads
-                # the same content from stdout_buf, so we drop it on screen.
+                nonlocal in_json
+                # Final JSON dump from watchdog --json: a single "{" on its own
+                # line that runs to EOF.
                 if line.rstrip() == "{":
                     in_json = True
                     return None
                 if in_json:
                     return None
-
-                m = book_re.match(line)
-                if m:
-                    n, total = int(m.group(1)), max(int(m.group(2)), 1)
-                    pct = n * 100 // total
-                    last_embed_bucket = -1
-                    filled = (pct * bar_w) // 100
-                    bar = "#" * filled + "." * (bar_w - filled)
-                    rest = line[m.end():].rstrip("\r\n")
-                    return f"[{pct:3d}%] [{bar}] {n}/{total}  {rest}\n"
-
-                em = embed_re.match(line)
-                if em:
-                    pct = int(em.group(1))
-                    if pct == 0:
-                        last_embed_bucket = -1
-                    bucket = pct // 10
-                    if bucket > last_embed_bucket or pct == 100:
-                        last_embed_bucket = bucket
-                        return line
-                    return None
-
                 return line
 
             return transform
@@ -299,7 +286,7 @@ def main() -> int:
         try:
             proc = subprocess.Popen(
                 cmd, env=env, cwd=str(REPO_ROOT),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=None,
                 text=True, encoding="utf-8", bufsize=1,
             )
         except OSError as e:
@@ -311,10 +298,7 @@ def main() -> int:
             target=_pump,
             args=(proc.stdout, sys.stdout, stdout_buf, _make_book_transform()),
             daemon=True)
-        t_err = threading.Thread(
-            target=_pump, args=(proc.stderr, sys.stderr, None, None), daemon=True)
         t_out.start()
-        t_err.start()
 
         # Phase B drains the fulltext backlog and may run for days; the
         # Scheduler-Task uses ExecutionTimeLimit=Zero. Phase A is the
@@ -335,7 +319,6 @@ def main() -> int:
             timed_out = True
 
         t_out.join(timeout=5)
-        t_err.join(timeout=5)
 
         end = datetime.now().astimezone()
         duration = (end - start).total_seconds()

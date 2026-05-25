@@ -164,15 +164,21 @@ def _index_priority_key(
     first_authors: list[str],
     first_tags: list[str],
     first_titles: list[str],
-) -> tuple[int, int]:
-    """Sort key for new-book indexing order.
+) -> tuple[int, int, int]:
+    """Sort key for new-book / fulltext-backlog indexing order.
 
-    Returns (group, rating_order) where:
+    Returns (group, rating_order, recency) where:
       group 0 = explicit priority match (first_authors / first_tags / first_titles)
       group 1 = normal queue
 
-    Within each group, rating order: 5★=0, 4★=1, 3★=2, unrated=3, 1–2★=4
+    Within each group, rating order favours only the top two tiers:
+      5★ = 0, 4★ = 1, everything else (3★, unrated, 1–2★) = 2.
     Calibre stores ratings as 2/4/6/8/10; NULL → 0 (unrated).
+
+    Final tiebreaker is recency: most recently added book first. Calibre IDs
+    increase monotonically with add order, so -calibre_id puts the newest book
+    ahead. This is what lets freshly added titles overtake the old backlog
+    instead of sinking to the bottom by ID.
     """
     meta = calibre_books.get(entry['calibre_id'], {})
     rating = meta.get('rating') or 0
@@ -188,14 +194,11 @@ def _index_priority_key(
         title_lc = meta.get('title', '').lower()
         is_priority = any(t.lower() in title_lc for t in first_titles)
 
-    if rating >= 10:   rating_order = 0
-    elif rating >= 8:  rating_order = 1
-    elif rating >= 6:  rating_order = 2
-    elif rating == 0:  rating_order = 3
-    elif rating >= 4:  rating_order = 4  # 2★
-    else:              rating_order = 5  # 1★
+    if rating >= 10:   rating_order = 0  # 5★
+    elif rating >= 8:  rating_order = 1  # 4★
+    else:              rating_order = 2  # 3★, unrated, 1–2★ — all equal
 
-    return (0 if is_priority else 1, rating_order)
+    return (0 if is_priority else 1, rating_order, -entry['calibre_id'])
 
 
 class WatchdogScanner:
@@ -397,7 +400,7 @@ class WatchdogScanner:
                     continue
                 file_path = formats[0]['path']
                 book_id = str(cid)
-                print(f"\n[{i}/{total_p2}] {meta['title']}")
+                print(f"\n[{i}/{total_p2}] {meta.get('author', '')}: {meta['title']}")
                 try:
                     if cid in phase1_only_ids:
                         # Refresh phase1 stub with updated metadata — no full indexing
@@ -447,7 +450,7 @@ class WatchdogScanner:
                     formats = _discover_formats(Path(meta['path']))
                     if not formats:
                         continue
-                    print(f"\n[{already_done + j}/{total_p3}] {entry['title']}")
+                    print(f"\n[{already_done + j}/{total_p3}] {meta.get('author', '')}: {entry['title']}")
                     try:
                         if index_metadata_only:
                             rag.index_book(formats[0]['path'], str(cid), phase='phase1')
@@ -505,7 +508,7 @@ class WatchdogScanner:
                 formats = _discover_formats(Path(meta['path']))
                 if not formats:
                     continue
-                print(f"\n[{already_done + j}/{total_p4}] {entry['title']}")
+                print(f"\n[{already_done + j}/{total_p4}] {meta.get('author', '')}: {entry['title']}")
                 try:
                     rag.index_book(formats[0]['path'], str(cid), force=False)
                     results['fulltext_indexed'] += 1
