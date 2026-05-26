@@ -27,6 +27,15 @@ _redirect_depth = 0
 _redirect_original_stdout: Any = None
 
 
+# Serialises embedding-/reranker-model construction across ALL service instances.
+# transformers/sentence-transformers initialise a model on the 'meta' device and
+# then materialise its weights via .to_empty(); running that from several threads
+# at once — as the unified server does when it initialises every source in
+# parallel — races and raises "Cannot copy out of meta tensor". Holding this lock
+# means at most one model is built at a time (loads run sequentially, once each).
+_model_init_lock = threading.Lock()
+
+
 @contextmanager
 def _redirect_stdout_to_stderr():
     """Temporarily redirect stdout to stderr (prevents MCP JSON-RPC corruption).
@@ -150,24 +159,36 @@ class ArchillesService:
         if self._init_attempted:
             return False
 
-        self._init_attempted = True
+        # Serialise model construction across all sources: the unified server
+        # initialises every source in parallel threads, and concurrent
+        # meta-device weight materialisation races ("Cannot copy out of meta
+        # tensor"). The lock ensures models load one at a time.
+        with _model_init_lock:
+            # Re-check under the lock — another thread may have advanced state
+            # while we were waiting.
+            if self._rag is not None:
+                return True
+            if self._init_attempted:
+                return False
 
-        try:
-            from scripts.rag_demo import archillesRAG
-        except ImportError:
-            logger.warning("archillesRAG not available (import failed)")
-            return False
+            self._init_attempted = True
 
-        try:
-            logger.info("Initializing RAG system (lazy loading)...")
-            with _redirect_stdout_to_stderr():
-                self._rag = archillesRAG(**self._config)
-            logger.info(f"RAG system initialized: {self._config['db_path']}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
-            self._rag = None
-            return False
+            try:
+                from scripts.rag_demo import archillesRAG
+            except ImportError:
+                logger.warning("archillesRAG not available (import failed)")
+                return False
+
+            try:
+                logger.info("Initializing RAG system (lazy loading)...")
+                with _redirect_stdout_to_stderr():
+                    self._rag = archillesRAG(**self._config)
+                logger.info(f"RAG system initialized: {self._config['db_path']}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
+                self._rag = None
+                return False
 
     def _get_reranker(self):
         """Lazy-load the cross-encoder reranker."""
@@ -176,17 +197,24 @@ class ArchillesService:
         if not self._enable_reranking:
             return None
 
-        try:
-            from src.retriever import CrossEncoderReranker
-            self._reranker = CrossEncoderReranker(
-                model_name=self._reranker_model,
-                device=self._reranker_device,
-            )
-            return self._reranker
-        except Exception as e:
-            logger.warning(f"Failed to create reranker: {e}")
-            self._enable_reranking = False
-            return None
+        # Same race as the embedding model: serialise reranker construction so
+        # parallel sources don't materialise meta tensors concurrently.
+        with _model_init_lock:
+            if self._reranker is not None:
+                return self._reranker
+            if not self._enable_reranking:
+                return None
+            try:
+                from src.retriever import CrossEncoderReranker
+                self._reranker = CrossEncoderReranker(
+                    model_name=self._reranker_model,
+                    device=self._reranker_device,
+                )
+                return self._reranker
+            except Exception as e:
+                logger.warning(f"Failed to create reranker: {e}")
+                self._enable_reranking = False
+                return None
 
     @property
     def is_initialized(self) -> bool:
