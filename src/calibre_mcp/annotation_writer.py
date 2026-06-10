@@ -81,16 +81,19 @@ def write_annotations(
     Returns:
         (n_books_written, n_annotations_written)
     """
-    notes_only = [
-        m for m in matched
-        if m["annotation"].type == "note" and (m["annotation"].text or "").strip()
+    # Finding 6.1: persist EVERY annotation that carries text — highlights
+    # from My Clippings.txt etc. arrive with their full highlighted text and
+    # were silently dropped by the old type=='note' filter. Only textless
+    # entries (bare bookmarks/positions) are skipped, as documented.
+    with_text = [
+        m for m in matched if (m["annotation"].text or "").strip()
     ]
-    if not notes_only:
+    if not with_text:
         return 0, 0
 
     # Group by calibre_id, preserving annotation order within each book
     by_book: dict[int, list[dict]] = {}
-    for item in notes_only:
+    for item in with_text:
         by_book.setdefault(item["calibre_id"], []).append(item)
 
     extras = _load_calibre_extras(library, list(by_book))
@@ -117,8 +120,15 @@ def write_annotations(
             f"AND annotation_source = '{source}'"
         )
 
-        texts = [m["annotation"].text for m in items]
-        emb = embedder.embed_batch(texts)
+        def _body(a: Annotation) -> str:
+            """Highlight text plus attached user note (if any)."""
+            body = (a.text or "").strip()
+            if a.note and a.note.strip():
+                body = f"{body} | Note: {a.note.strip()}"
+            return body
+
+        bodies = [_body(m["annotation"]) for m in items]
+        emb = embedder.embed_batch(bodies)
         embeddings = emb.embeddings
 
         cal_meta = extras.get(cid, {})
@@ -131,7 +141,7 @@ def write_annotations(
             ).hexdigest()
             chunks.append({
                 "id": _id_for_annotation(source, asin, cid, i),
-                "text": f"[ANNOTATION] {a.text}",
+                "text": f"[ANNOTATION] {bodies[i]}",
                 "book_id": str(cid),
                 "book_title": m["calibre_title"],
                 "author": m["calibre_author"],

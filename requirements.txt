@@ -29,7 +29,10 @@ lingua-language-detector==2.1.1  # Modern, accurate language detection (supports
 
 # Embeddings & Vector Search
 sentence-transformers==2.3.1  # BGE-M3 embeddings (multilingual)
-lancedb>=0.5.0  # Vector database with native hybrid search
+# Pinned to 0.27.x (finding 1.2/1.11): prefilter-by-default on .where() and
+# merge_insert upsert semantics verified on this series — older versions
+# post-filter after the ANN cutoff and lack merge_insert.
+lancedb>=0.27,<0.28  # Vector database with native hybrid search
 pyarrow>=14.0.0  # Arrow format for LanceDB
 
 # Fuzzy matching (annotation import)

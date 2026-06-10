@@ -18,6 +18,8 @@ Findings covered:
     2.8  roman numeral regex matching the English word "I"
     4.5  research boost matching substrings ("Kant" boosts "Kantine")
     6.2  TOC marker filter dropping highlights via substrings
+    6.1  write_annotations dropping highlights WITH text
+    1.2  filters must act as PRE-filter, not post-ANN-cutoff filter
 """
 
 import numpy as np
@@ -596,3 +598,151 @@ class TestResearchBoostBoundaries:
         results = [{"text": "Kant und die Aufklärung", "score": 0.02}]
         boosted = apply_research_boost(results, ["Kant"], boost_factor=0.15)
         assert boosted[0]["score"] == pytest.approx(0.02 * 1.15)
+
+
+# ── 6.1: highlights WITH text must be persisted ───────────────────────────
+
+class _FakeEmbedder:
+    def embed_batch(self, texts):
+        class _Result:
+            pass
+
+        result = _Result()
+        result.embeddings = np.random.rand(len(texts), 8).astype(np.float32)
+        return result
+
+
+@pytest.fixture
+def annotation_env(tmp_path):
+    """Minimal Calibre metadata.db + seeded LanceDB for write_annotations."""
+    import sqlite3
+
+    lib = tmp_path / "library"
+    lib.mkdir()
+    con = sqlite3.connect(lib / "metadata.db")
+    con.executescript(
+        """
+        CREATE TABLE books (id INTEGER PRIMARY KEY, title TEXT);
+        CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE books_tags_link (id INTEGER PRIMARY KEY, book INTEGER, tag INTEGER);
+        CREATE TABLE languages (id INTEGER PRIMARY KEY, lang_code TEXT);
+        CREATE TABLE books_languages_link (id INTEGER PRIMARY KEY, book INTEGER, lang_code INTEGER);
+        """
+    )
+    con.execute("INSERT INTO books (id, title) VALUES (7, 'Testbuch')")
+    con.commit()
+    con.close()
+
+    store = _store(tmp_path)
+    store.add_chunks(_chunks("seed_1", 1), _emb(1))  # table must exist
+    return lib, tmp_path / "db", store
+
+
+def test_write_annotations_persists_highlights_with_text(annotation_env):
+    """Pre-fix: only type=='note' was written — highlights with full text
+    (e.g. from My Clippings.txt) were silently dropped, contradicting the
+    documented behaviour ('Highlights without text are skipped')."""
+    from src.archilles.annotation_providers.base import Annotation
+    from src.calibre_mcp.annotation_writer import write_annotations
+
+    lib, db_path, store = annotation_env
+    matched = [
+        {
+            "calibre_id": 7,
+            "calibre_title": "Testbuch",
+            "calibre_author": "Anna Autor",
+            "annotation": Annotation(
+                source="kindle", type="highlight",
+                text="Der markierte Satz aus dem Buch.",
+            ),
+        },
+        {
+            "calibre_id": 7,
+            "calibre_title": "Testbuch",
+            "calibre_author": "Anna Autor",
+            "annotation": Annotation(
+                source="kindle", type="note", text="Eine reine Notiz.",
+            ),
+        },
+        {
+            "calibre_id": 7,
+            "calibre_title": "Testbuch",
+            "calibre_author": "Anna Autor",
+            "annotation": Annotation(
+                source="kindle", type="bookmark", text="",  # no text -> skip
+            ),
+        },
+    ]
+
+    n_books, n_annots = write_annotations(
+        matched, lib, db_path, embedder=_FakeEmbedder(), progress=lambda *_: None,
+    )
+
+    assert n_books == 1
+    assert n_annots == 2
+    # Fresh handle — the fixture's table reference predates the write
+    rows = _store(lib.parent).get_by_book_id("7", limit=100)
+    texts = sorted(r["text"] for r in rows)
+    assert any("markierte Satz" in t for t in texts)
+    assert any("reine Notiz" in t for t in texts)
+    types = {r["annotation_type"] for r in rows}
+    assert types == {"highlight", "note"}
+
+
+def test_write_annotations_includes_attached_note(annotation_env):
+    """A highlight with an attached user note must keep both parts."""
+    from src.archilles.annotation_providers.base import Annotation
+    from src.calibre_mcp.annotation_writer import write_annotations
+
+    lib, db_path, store = annotation_env
+    matched = [{
+        "calibre_id": 7,
+        "calibre_title": "Testbuch",
+        "calibre_author": "Anna Autor",
+        "annotation": Annotation(
+            source="kindle", type="highlight",
+            text="Markierter Text.", note="Mein Kommentar dazu.",
+        ),
+    }]
+
+    write_annotations(matched, lib, db_path,
+                      embedder=_FakeEmbedder(), progress=lambda *_: None)
+
+    rows = _store(lib.parent).get_by_book_id("7", limit=100)
+    assert len(rows) == 1
+    assert "Markierter Text." in rows[0]["text"]
+    assert "Mein Kommentar dazu." in rows[0]["text"]
+
+
+# ── 1.2: filters must act as PRE-filter (not post-ANN-cutoff) ─────────────
+
+def test_vector_search_filter_reaches_beyond_topk_window(tmp_path):
+    """Searching WITHIN one book must return that book's chunks even when
+    they are far from the query vector. A post-filter applied after the
+    ANN top_k cutoff would return zero results here — older LanceDB
+    versions did exactly that, which is why the version is pinned."""
+    from src.storage.lancedb_store import LanceDBStore
+
+    store = LanceDBStore(db_path=str(tmp_path / "db"))
+
+    rng = np.random.default_rng(42)
+    base = np.ones(8, dtype=np.float32)
+
+    # 120 chunks of book A clustered tightly around the query vector …
+    chunks_a = [
+        {"id": f"A_chunk_{i}", "text": f"a{i}", "book_id": "A"} for i in range(120)
+    ]
+    emb_a = (base + rng.normal(0, 0.01, (120, 8))).astype(np.float32)
+
+    # … and 2 chunks of book B, far away in vector space.
+    chunks_b = [
+        {"id": f"B_chunk_{i}", "text": f"b{i}", "book_id": "B"} for i in range(2)
+    ]
+    emb_b = (-base + rng.normal(0, 0.01, (2, 8))).astype(np.float32)
+
+    store.add_chunks(chunks_a, emb_a)
+    store.add_chunks(chunks_b, emb_b)
+
+    results = store.vector_search(base, top_k=5, book_id="B")
+    assert len(results) == 2
+    assert {r["book_id"] for r in results} == {"B"}
