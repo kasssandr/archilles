@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.constants import ChunkType, SectionType
-from src.service.archilles_service import diversify_results, matches_tag_filter
+from src.retriever.results import diversify_results, matches_tag_filter
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
 from src.storage import LanceDBStore

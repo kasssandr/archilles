@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from src.archilles.constants import ChunkType, SectionType
+from src.retriever.results import diversify_results, matches_tag_filter  # noqa: F401  (Re-Export — Alt-Abnehmer importieren von hier)
 
 logger = logging.getLogger(__name__)
 
@@ -61,44 +62,6 @@ def _redirect_stdout_to_stderr():
             if _redirect_depth == 0:
                 sys.stdout = _redirect_original_stdout
                 _redirect_original_stdout = None
-
-
-def matches_tag_filter(result_tags: str, tag_filter: list[str]) -> bool:
-    """True if a result's tag string contains ALL requested tags (AND logic).
-
-    The MCP tool schema documents AND semantics ("Results must match ALL
-    tags"); the previous implementation used OR (code review finding 8.1).
-    Comparison is case-insensitive on whole tag names, not substrings.
-    """
-    if not result_tags:
-        return False
-    result_tag_set = {t.strip().lower() for t in result_tags.split(',')}
-    return all(ft.strip().lower() in result_tag_set for ft in tag_filter)
-
-
-def diversify_results(
-    results: list[dict[str, Any]],
-    max_per_book: int,
-    top_k: int,
-) -> list[dict[str, Any]]:
-    """Limit results to *max_per_book* per book, keeping top-ranked first."""
-    diversified: list[dict[str, Any]] = []
-    book_counts: dict[str, int] = {}
-
-    for r in results:
-        metadata = r.get("metadata", {})
-        bid = metadata.get("book_id", r.get("book_id", "unknown"))
-        count = book_counts.get(bid, 0)
-        if count < max_per_book:
-            diversified.append(r)
-            book_counts[bid] = count + 1
-        if len(diversified) >= top_k:
-            break
-
-    for i, r in enumerate(diversified):
-        r["rank"] = i + 1
-
-    return diversified
 
 
 def _filter_by_rerank_score(results: list[dict], min_similarity: float) -> list[dict]:
