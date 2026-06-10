@@ -974,11 +974,12 @@ class archillesRAG:
         print(f"  File: {book_path.name}")
 
         # Check for existing CONTENT chunks (not just metadata)
-        # Books with only phase1_metadata chunks still need full content indexing
-        existing = self.store.get_by_book_id(book_id, limit=100)
-        content_chunks = [c for c in existing
-                          if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
-        if content_chunks:
+        # Books with only phase1_metadata chunks still need full content indexing.
+        # Finding 8.7: targeted, windowless state query — the previous
+        # get_by_book_id(limit=100) window missed the annotation/metadata
+        # hashes for books with many chunks and re-embedded them every scan.
+        state = self.store.get_book_state(book_id)
+        if state['has_content']:
             if force:
                 print(f"  Deleting existing chunks for {book_id}...", flush=True)
                 deleted = self.store.delete_by_book_id(book_id)
@@ -987,7 +988,6 @@ class archillesRAG:
                 # Check if metadata or annotations have changed (smart update without full re-index)
                 book_metadata = self._extract_metadata(book_path)
                 current_meta_hash = self._compute_metadata_hash(book_metadata)
-                stored_meta_hash = content_chunks[0].get('metadata_hash', '')
 
                 # Check annotation changes
                 try:
@@ -1000,30 +1000,28 @@ class archillesRAG:
                 except Exception:
                     current_annotations = []
                     current_annot_hash = ''
-                existing_annot_chunks = [c for c in existing if c.get('chunk_type') == ChunkType.ANNOTATION]
-                stored_annot_hash = existing_annot_chunks[0].get('annotation_hash', '') if existing_annot_chunks else ''
 
-                meta_changed = current_meta_hash != stored_meta_hash
-                annot_changed = current_annot_hash != stored_annot_hash
+                meta_changed = current_meta_hash != state['metadata_hash']
+                annot_changed = current_annot_hash != state['annotation_hash']
 
                 if meta_changed or annot_changed:
                     return self._update_metadata_only(
-                        book_id, book_metadata, current_meta_hash, existing,
+                        book_id, book_metadata, current_meta_hash, state,
                         annotations=current_annotations if annot_changed else None,
                         annotation_hash=current_annot_hash if annot_changed else None,
                         book_path=book_path,
                     )
 
-                print(f"  Book already indexed ({len(content_chunks)} content chunks). Use --force to reindex.")
+                print(f"  Book already indexed ({state['content_count']} content chunks). Use --force to reindex.")
                 return {
                     'book_id': book_id,
                     'status': 'already_indexed',
-                    'chunks_indexed': len(content_chunks),
-                    'existing_chunks': len(existing)
+                    'chunks_indexed': state['content_count'],
+                    'existing_chunks': state['total']
                 }
-        elif existing and not force:
+        elif state['total'] and not force:
             # Has metadata-only chunks — delete them before full indexing
-            print(f"  Replacing {len(existing)} metadata-only chunks with full content...")
+            print(f"  Replacing {state['total']} metadata-only chunks with full content...")
             self.store.delete_by_book_id(book_id)
 
         # Extract metadata (author, title, year, ISBN, publisher, etc.)
@@ -1606,7 +1604,7 @@ class archillesRAG:
         return chunks, embeddings
 
     def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
-                               new_hash: str, existing_chunks: list,
+                               new_hash: str, state: Dict[str, Any],
                                annotations: Optional[List[Dict[str, Any]]] = None,
                                annotation_hash: Optional[str] = None,
                                book_path: Optional[Path] = None) -> Dict[str, Any]:
@@ -1615,9 +1613,13 @@ class archillesRAG:
         WITHOUT re-extracting or re-embedding the book text.
 
         This is ~50-100x faster than a full re-index (~1-2s vs ~90s).
+
+        Args:
+            state: Book state from store.get_book_state() (finding 8.7 —
+                replaces the old row-window view of existing chunks).
         """
         start_time = time.time()
-        meta_changed = new_hash != (existing_chunks[0].get('metadata_hash', '') if existing_chunks else '')
+        meta_changed = new_hash != state.get('metadata_hash', '')
         annot_changed = annotations is not None
 
         if meta_changed and annot_changed:
@@ -1646,13 +1648,15 @@ class archillesRAG:
         # 2. Replace calibre_comment chunk if metadata changed
         comment_added = False
         if meta_changed:
-            old_comment_chunks = [c for c in existing_chunks if c.get('chunk_type') == ChunkType.CALIBRE_COMMENT]
-            if old_comment_chunks:
-                deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
+            # Finding 8.7: delete unconditionally — the old guard depended on
+            # a row window that could miss the comment chunk, so the re-add
+            # below silently accumulated duplicates.
+            deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
+            if deleted:
                 print(f"    Deleted {deleted} old comment chunk(s)")
 
             if book_metadata.get('comments') or book_metadata.get('comments_html'):
-                book_format = existing_chunks[0].get('format', '') if existing_chunks else ''
+                book_format = state.get('format', '')
                 comment_chunks, comment_embeddings = self._build_comment_chunks(
                     book_metadata=book_metadata,
                     book_id=book_id,
@@ -1668,10 +1672,11 @@ class archillesRAG:
         # 3. Replace annotation chunks if annotations changed
         annot_updated = False
         if annot_changed and annotations is not None:
-            # Delete old annotation chunks
-            old_annot_count = len([c for c in existing_chunks if c.get('chunk_type') == ChunkType.ANNOTATION])
-            if old_annot_count:
-                deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.ANNOTATION)
+            # Finding 8.7: delete old annotation chunks unconditionally — the
+            # old window-based guard skipped the delete for books with many
+            # chunks, adding one duplicate copy per routine run.
+            deleted = self.store.delete_by_book_id_and_type(book_id, ChunkType.ANNOTATION)
+            if deleted:
                 print(f"    Deleted {deleted} old annotation chunk(s)")
 
             # Add new annotation chunks
@@ -1698,7 +1703,7 @@ class archillesRAG:
                         'annotation_source': annot.get('source', ''),
                         'annotation_hash': annotation_hash or '',
                         'page_number': annot.get('page', 0) or 0,
-                        'format': existing_chunks[0].get('format', ''),
+                        'format': state.get('format', ''),
                         'indexed_at': datetime.now().isoformat(),
                         'metadata_hash': new_hash,
                     }
@@ -1716,8 +1721,7 @@ class archillesRAG:
                 print(f"    No annotations found (removed all)")
 
         elapsed = time.time() - start_time
-        content_count = len([c for c in existing_chunks
-                           if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES])
+        content_count = state.get('content_count', 0)
         print(f"  ✅ Updated in {elapsed:.1f}s (content chunks untouched: {content_count})\n")
 
         return {

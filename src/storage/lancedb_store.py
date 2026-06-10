@@ -279,7 +279,15 @@ class LanceDBStore:
         if self.table is None:
             self._create_table_with_data(records)
         else:
-            self.table.add(records)
+            # Finding 1.11: LanceDB enforces no ID uniqueness — re-indexing
+            # without a prior delete silently duplicated chunks. Upsert on
+            # `id` so the newest write wins instead of accumulating copies.
+            (
+                self.table.merge_insert("id")
+                .when_matched_update_all()
+                .when_not_matched_insert_all()
+                .execute(records)
+            )
 
         return len(records)
 
@@ -704,6 +712,73 @@ class LanceDBStore:
     def get_by_calibre_id(self, calibre_id: int, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a specific Calibre ID."""
         return self._query_where(f"calibre_id = {calibre_id}", limit)
+
+    def get_book_state(self, book_id: str) -> dict[str, Any]:
+        """Targeted single-book state for smart-update decisions (finding 8.7).
+
+        Reads only small columns, but for ALL chunks of the book — unlike
+        get_by_book_id(limit=...), whose arbitrary row window missed the
+        annotation/metadata hashes for books with many chunks and thereby
+        triggered pointless re-embedding on every scan.
+
+        Returns:
+            Dict with 'total', 'has_content', 'content_count' (counting
+            HIERARCHICAL_TYPES), 'metadata_hash' (from content chunks,
+            comment chunks as fallback), 'annotation_hash' (from annotation
+            chunks) and 'format'.
+        """
+        state: dict[str, Any] = {
+            'total': 0, 'has_content': False, 'content_count': 0,
+            'metadata_hash': '', 'annotation_hash': '', 'format': '',
+        }
+        if self.table is None:
+            return state
+
+        condition = f"book_id = '{_sql_quote(book_id)}'"
+        columns = ['chunk_type', 'metadata_hash', 'annotation_hash', 'format']
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            projection = [c for c in columns if c in existing]
+            rows = lance_dataset.to_table(columns=projection, filter=condition).to_pylist()
+        except Exception as e:
+            logger.warning(f"Column projection failed in get_book_state, using search fallback: {e}")
+            df = self.table.search().where(condition).limit(10_000_000).to_pandas()
+            rows = df.to_dict(orient='records')
+
+        def _clean(value: Any) -> str:
+            if value is None:
+                return ''
+            if isinstance(value, float) and value != value:  # NaN check
+                return ''
+            s = str(value)
+            return '' if s == 'nan' else s
+
+        meta_from_content = ''
+        meta_from_comment = ''
+        state['total'] = len(rows)
+        for row in rows:
+            ctype = row.get('chunk_type')
+            if ctype in ChunkType.HIERARCHICAL_TYPES:
+                state['content_count'] += 1
+                if not meta_from_content:
+                    meta_from_content = _clean(row.get('metadata_hash'))
+                if not state['format']:
+                    state['format'] = _clean(row.get('format'))
+            elif ctype == ChunkType.CALIBRE_COMMENT and not meta_from_comment:
+                meta_from_comment = _clean(row.get('metadata_hash'))
+            elif ctype == ChunkType.ANNOTATION and not state['annotation_hash']:
+                state['annotation_hash'] = _clean(row.get('annotation_hash'))
+
+        state['metadata_hash'] = meta_from_content or meta_from_comment
+        state['has_content'] = state['content_count'] > 0
+        if not state['format']:
+            for row in rows:
+                fmt = _clean(row.get('format'))
+                if fmt:
+                    state['format'] = fmt
+                    break
+        return state
 
     def get_by_source_id(self, source_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a source ID (with calibre_id fallback)."""
