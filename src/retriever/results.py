@@ -3,6 +3,8 @@
 Lives below both the service facade and the RAG engine so that neither
 has to import the other (breaks the service ↔ engine import cycle,
 review 2026-06-10, finding 4.9 context).
+
+Canonical import path: ``from src.retriever.results import ...`` — deliberately not re-exported via the package __init__.
 """
 from typing import Any
 
