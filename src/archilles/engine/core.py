@@ -32,7 +32,6 @@ class LanceDBError(Exception):
     pass
 
 
-
 class ArchillesRAG:
     """
     Simple RAG system for academic books.
