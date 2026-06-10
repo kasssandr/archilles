@@ -53,6 +53,48 @@ def _year_sort_key(value) -> int:
         return 0
 
 
+def merge_source_results(per_source: list, top_k: int) -> list:
+    """Merge per-source result lists into one ranking (finding 5.4).
+
+    Raw scores from separate LanceDB instances are NOT comparable — RRF
+    scores are a function of local candidate ranks, so a raw-score sort put
+    every result of the 'louder' source above all results of the others.
+
+    Strategy:
+    - If EVERY result carries a rerank_score, sort by it: cross-encoder
+      scores are query-document specific and therefore comparable across
+      sources (sigmoid-bounded 0-1, see CrossEncoderReranker).
+    - Otherwise merge rank-based: RRF over sources (k=60), i.e. results are
+      interleaved by their rank within their own source.
+
+    Args:
+        per_source: List of (source_name, results) tuples; each result may
+            carry 'rank' (1-based within its source) and 'rerank_score'.
+        top_k: Number of merged results to return (re-ranked 1..top_k).
+    """
+    merged = []
+    for _name, results in per_source:
+        for fallback_rank, result in enumerate(results, 1):
+            result["_merge_rank"] = result.get("rank") or fallback_rank
+            merged.append(result)
+
+    if not merged:
+        return []
+
+    if all(r.get("rerank_score") is not None for r in merged):
+        merged.sort(key=lambda r: r["rerank_score"], reverse=True)
+    else:
+        merged.sort(key=lambda r: 1.0 / (60 + r["_merge_rank"]), reverse=True)
+
+    for result in merged:
+        result.pop("_merge_rank", None)
+
+    merged = merged[:top_k]
+    for i, result in enumerate(merged, 1):
+        result["rank"] = i
+    return merged
+
+
 # ── Tool classification (used by create_unified_tools) ────────────────────
 
 _REMOVED_TOOLS = {"get_doublette_tag_instruction"}
@@ -297,11 +339,12 @@ class UnifiedMCPServer:
         with ThreadPoolExecutor(max_workers=len(self.servers)) as ex:
             per_source = list(ex.map(_search_one, self.servers.items()))
 
-        merged: list = []
-        per_source_counts: dict[str, int] = {}
-        for name, results in per_source:
-            per_source_counts[name] = len(results)
-            merged.extend(results)
+        per_source_counts: dict[str, int] = {
+            name: len(results) for name, results in per_source
+        }
+        # Finding 5.4: rank-based merge — raw RRF scores from separate
+        # LanceDB instances are not comparable across sources.
+        merged = merge_source_results(per_source, top_k)
 
         if not merged:
             return {
@@ -310,14 +353,6 @@ class UnifiedMCPServer:
                 "message": "No results found across any source",
                 "per_source_counts": per_source_counts,
             }
-
-        merged.sort(
-            key=lambda r: r.get("rerank_score", r.get("score", 0.0)),
-            reverse=True,
-        )
-        merged = merged[:top_k]
-        for i, r in enumerate(merged, 1):
-            r["rank"] = i
 
         # Generate ONE citation block via the default-source's _rag instance.
         # The Citation-Builder formats result dicts to XML — it does not need

@@ -101,6 +101,23 @@ def diversify_results(
     return diversified
 
 
+def _filter_by_rerank_score(results: list[dict], min_similarity: float) -> list[dict]:
+    """Filter reranked results by min_similarity (finding 4.1).
+
+    rerank_score is sigmoid-bounded 0-1 (see CrossEncoderReranker), so a
+    cosine-style threshold is meaningful there. Results WITHOUT a
+    rerank_score (reranker unavailable mid-flight) pass through unfiltered —
+    their RRF-scale score (~1/60) must never be compared against a 0-1
+    threshold, which would silently empty the list.
+    """
+    if min_similarity <= 0:
+        return results
+    return [
+        r for r in results
+        if r.get("rerank_score") is None or r["rerank_score"] >= min_similarity
+    ]
+
+
 class ArchillesService:
     """Central service facade for ARCHILLES RAG system."""
 
@@ -295,12 +312,7 @@ class ArchillesService:
         reranked = reranker.rerank(query, raw_results, top_k=top_k * 3)
         results = self._diversify(reranked, max_per_book, top_k)
 
-        if min_similarity > 0:
-            results = [
-                r for r in results
-                if r.get("rerank_score", r.get("score", 0)) >= min_similarity
-            ]
-        return results
+        return _filter_by_rerank_score(results, min_similarity)
 
     def search_with_citations(
         self,
@@ -329,15 +341,32 @@ class ArchillesService:
                 "help": "Check ~/.archilles/mcp_server.log for details",
             }
 
+        reranker = self._get_reranker()
+
         with _redirect_stdout_to_stderr():
-            results = self._rag.query(
-                query_text=query,
-                top_k=top_k,
-                mode=mode,
-                language=language,
-                tag_filter=tags,
-                max_per_book=max_per_book,
-            )
+            if reranker is None:
+                results = self._rag.query(
+                    query_text=query,
+                    top_k=top_k,
+                    mode=mode,
+                    language=language,
+                    tag_filter=tags,
+                    max_per_book=max_per_book,
+                )
+            else:
+                # Finding 4.3: the citation path (primary MCP path) used to
+                # skip the cross-encoder while search() reranked — same
+                # pattern as search(): broad fetch, rerank, then diversify.
+                raw_results = self._rag.query(
+                    query_text=query,
+                    top_k=30,
+                    mode=mode,
+                    language=language,
+                    tag_filter=tags,
+                    max_per_book=999,
+                )
+                reranked = reranker.rerank(query, raw_results, top_k=top_k * 3)
+                results = self._diversify(reranked, max_per_book, top_k)
 
         if boost_research_interests and self._archilles_dir:
             try:

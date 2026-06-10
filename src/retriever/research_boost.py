@@ -92,8 +92,17 @@ def apply_research_boost(
     """Boost results containing research interest keywords.
 
     For each result, counts how many keywords appear in its text or tags
-    and applies an additive boost to the score (capped at 1.0).
-    Results are re-sorted by score descending.
+    and applies a multiplicative boost: ``score *= (1 + boost_factor *
+    matches)``. Finding 4.2: an additive boost drowned RRF-scale scores
+    (~1/60), letting keyword counts dominate search relevance; the
+    multiplicative form is scale-stable and consistent with the existing
+    in-engine boosts (x1.2 comments, x1.15 tag matches).
+
+    Operates on ``rerank_score`` when present — after cross-encoder
+    reranking that is the governing scale; boosting the stale RRF score
+    would silently discard the reranker's ordering.
+
+    Results are re-sorted by the boosted governing score, descending.
     """
     if not keywords or not results:
         return results
@@ -104,6 +113,11 @@ def apply_research_boost(
         tags_lower = result.get("tags", "").lower()
         matches = sum(1 for kw in keywords_lower if kw in text_lower or kw in tags_lower)
         if matches > 0:
-            result["score"] = min(1.0, result.get("score", 0) + boost_factor * matches)
+            key = "rerank_score" if result.get("rerank_score") is not None else "score"
+            result[key] = result.get(key, 0) * (1.0 + boost_factor * matches)
 
-    return sorted(results, key=lambda x: x.get("score", 0), reverse=True)
+    def _governing_score(result: dict) -> float:
+        rerank = result.get("rerank_score")
+        return rerank if rerank is not None else result.get("score", 0)
+
+    return sorted(results, key=_governing_score, reverse=True)

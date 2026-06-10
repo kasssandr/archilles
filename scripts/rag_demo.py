@@ -1789,8 +1789,10 @@ class archillesRAG:
                               'calibre_comment' = Calibre comments only
                               None = all chunk types (book text + comments mixed)
             max_per_book: Maximum results per book (default: 2, use 999 for unlimited)
-            min_similarity: Minimum similarity score for semantic results (0.0-1.0, default: 0.0)
+            min_similarity: Minimum similarity score (0.0-1.0, default: 0.0)
                            Higher = stricter, fewer but more relevant results
+                           ONLY applied in semantic mode (cosine scale) — hybrid
+                           (RRF) and keyword (BM25) scores are incompatible scales
 
         Returns:
             List of relevant chunks with metadata and scores
@@ -1872,15 +1874,31 @@ class archillesRAG:
         else:
             results = results[:top_k]
 
-        # Apply minimum similarity threshold (for semantic/hybrid modes)
-        if min_similarity > 0.0 and mode in ['semantic', 'hybrid']:
-            original_count = len(results)
-            results = [r for r in results if r.get('score', 0) >= min_similarity]
-            filtered_count = original_count - len(results)
-            if filtered_count > 0:
-                print(f"  🎯 Filtered {filtered_count} results below {min_similarity:.0%} similarity")
+        # Apply minimum similarity threshold (semantic mode only — finding 8.2)
+        results = self._apply_min_similarity(results, min_similarity, mode)
 
         return results
+
+    @staticmethod
+    def _apply_min_similarity(results: List[Dict[str, Any]], min_similarity: float,
+                              mode: str) -> List[Dict[str, Any]]:
+        """Apply the min_similarity threshold (finding 8.2).
+
+        min_similarity is a cosine-scale (0-1) threshold — only the semantic
+        mode produces cosine scores. Hybrid (RRF, ~1/60) and keyword (BM25)
+        scores live on incompatible scales where any cosine-style threshold
+        silently empties or arbitrarily truncates the result list.
+        """
+        if min_similarity <= 0.0:
+            return results
+        if mode != 'semantic':
+            print(f"  ℹ️ min_similarity={min_similarity} ignored — only applies to semantic mode")
+            return results
+        filtered = [r for r in results if r.get('score', 0) >= min_similarity]
+        removed = len(results) - len(filtered)
+        if removed > 0:
+            print(f"  🎯 Filtered {removed} results below {min_similarity:.0%} similarity")
+        return filtered
 
     def _semantic_search(
         self,
@@ -1984,8 +2002,12 @@ class archillesRAG:
                     'rank': 0,
                     'text': doc_text,
                     'metadata': chunk,
+                    # Raw occurrence count — own scale, labelled via
+                    # score_type so consumers don't mix it with RRF/cosine
+                    # scores (finding 8.4).
                     'score': count,
                     'similarity': min(count / 10.0, 1.0),
+                    'score_type': 'exact_phrase',
                 })
 
         matches.sort(key=lambda x: x['score'], reverse=True)

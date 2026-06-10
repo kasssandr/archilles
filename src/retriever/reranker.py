@@ -49,14 +49,29 @@ class CrossEncoderReranker:
 
         self._load_attempted = True
         try:
+            import torch
             from sentence_transformers import CrossEncoder
 
             logger.info(f"Loading cross-encoder: {self._model_name}")
-            self._model = CrossEncoder(
-                self._model_name,
-                max_length=self._max_length,
-                **({"device": self._device} if self._device else {}),
-            )
+            # Finding 4.1: pin the activation explicitly — sentence-transformers
+            # changed its default across major versions (raw logits vs. sigmoid
+            # for num_labels=1). Sigmoid keeps rerank_score on a stable 0-1
+            # scale, so min_similarity comparisons stay meaningful.
+            activation = torch.nn.Sigmoid()
+            kwargs = {"max_length": self._max_length}
+            if self._device:
+                kwargs["device"] = self._device
+            try:
+                self._model = CrossEncoder(
+                    self._model_name, activation_fn=activation, **kwargs
+                )
+            except TypeError:
+                # sentence-transformers < 4 used a different parameter name
+                self._model = CrossEncoder(
+                    self._model_name,
+                    default_activation_function=activation,
+                    **kwargs,
+                )
             logger.info(f"Cross-encoder loaded successfully on {self._model.device}")
             return True
         except Exception as e:
@@ -86,7 +101,8 @@ class CrossEncoderReranker:
             top_k: Number of results to return after reranking
 
         Returns:
-            Reranked list truncated to top_k.
+            Reranked list truncated to top_k. Each result gains a
+            'rerank_score' on a sigmoid-bounded 0-1 scale.
             If model unavailable, returns input unchanged (truncated to top_k).
         """
         if not results:

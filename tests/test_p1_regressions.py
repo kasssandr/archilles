@@ -7,6 +7,12 @@ on the pre-fix code and passes after the fix.
 Findings covered:
     1.11 duplicate chunk IDs on re-indexing without prior delete
     8.7  hash reads and delete decisions based on a 100-row window
+    4.2  additive research boost drowning RRF-scale scores
+    8.2  min_similarity applied to RRF scores in hybrid mode
+    4.1  min_similarity vs. reranker scale; explicit bounded activation
+    4.3  search_with_citations bypassing the reranker
+    8.4  exact_phrase results without score_type marker
+    5.4  cross-source merge comparing incomparable raw scores
 """
 
 import numpy as np
@@ -265,3 +271,211 @@ class TestSmartUpdateUnconditionalDelete:
         assert comments == []
         # content chunks stay untouched
         assert [c for c in rows if c["chunk_type"] == ChunkType.CONTENT]
+
+
+# ── 4.2: research boost must not drown RRF-scale scores ──────────────────
+
+class TestResearchBoostScale:
+    def test_boost_is_multiplicative(self):
+        """Pre-fix: +0.15 per keyword on RRF scores (~0.016) meant a single
+        keyword match outweighed the search relevance ~10x."""
+        from src.retriever.research_boost import apply_research_boost
+
+        results = [
+            {"text": "highly relevant, no keyword", "score": 0.032},
+            {"text": "weak hit mentioning Kant", "score": 0.016},
+        ]
+        boosted = apply_research_boost(results, ["kant"], boost_factor=0.15)
+
+        assert boosted[0]["text"] == "highly relevant, no keyword"
+        assert boosted[1]["score"] == pytest.approx(0.016 * 1.15)
+
+    def test_boost_operates_on_rerank_score_when_present(self):
+        """After reranking, rerank_score governs the order — boosting the
+        stale RRF score would silently discard the reranker's work."""
+        from src.retriever.research_boost import apply_research_boost
+
+        results = [
+            {"text": "no keyword", "score": 0.01, "rerank_score": 0.90},
+            {"text": "kant appears", "score": 0.02, "rerank_score": 0.85},
+        ]
+        boosted = apply_research_boost(results, ["kant"], boost_factor=0.15)
+
+        assert boosted[0]["text"] == "kant appears"  # 0.85*1.15 > 0.90
+        assert boosted[0]["rerank_score"] == pytest.approx(0.85 * 1.15)
+        assert boosted[0]["score"] == pytest.approx(0.02)  # untouched
+
+
+# ── 8.2 / 4.1: min_similarity must only apply to bounded scales ──────────
+
+class TestMinSimilarityScales:
+    def test_hybrid_rrf_results_not_filtered(self):
+        """Pre-fix: hybrid mode filtered RRF scores (~0.016) against a
+        cosine-style threshold — anything >0.1 silently emptied results."""
+        from scripts.rag_demo import archillesRAG
+
+        results = [{"score": 0.016}, {"score": 0.032}]
+        out = archillesRAG._apply_min_similarity(results, 0.3, "hybrid")
+        assert out == results
+
+    def test_semantic_results_filtered(self):
+        from scripts.rag_demo import archillesRAG
+
+        results = [{"score": 0.8}, {"score": 0.2}]
+        out = archillesRAG._apply_min_similarity(results, 0.5, "semantic")
+        assert out == [{"score": 0.8}]
+
+    def test_rerank_filter_passes_results_without_rerank_score(self):
+        """If the reranker silently failed, results carry only RRF scores —
+        filtering those against min_similarity would empty the list."""
+        from src.service.archilles_service import _filter_by_rerank_score
+
+        results = [{"score": 0.016}, {"rerank_score": 0.7}, {"rerank_score": 0.2}]
+        out = _filter_by_rerank_score(results, 0.5)
+        assert out == [{"score": 0.016}, {"rerank_score": 0.7}]
+
+
+# ── 4.1: reranker must produce a bounded, version-independent scale ──────
+
+class TestRerankerBoundedActivation:
+    def test_explicit_sigmoid_activation_passed(self, monkeypatch):
+        """sentence-transformers changed the default activation across major
+        versions (logits vs. sigmoid). Pin it explicitly to sigmoid so
+        rerank_score is always 0-1."""
+        import sentence_transformers
+
+        captured = {}
+
+        class _FakeCE:
+            def __init__(self, name, **kwargs):
+                captured.update(kwargs)
+                self.device = "cpu"
+
+        monkeypatch.setattr(sentence_transformers, "CrossEncoder", _FakeCE)
+        from src.retriever.reranker import CrossEncoderReranker
+
+        rr = CrossEncoderReranker(device="cpu")
+        assert rr._ensure_loaded()
+        act = captured.get("activation_fn") or captured.get("default_activation_function")
+        assert act is not None and "Sigmoid" in type(act).__name__
+
+
+# ── 4.3: search_with_citations must use the reranker when enabled ────────
+
+class _FakeRagForService:
+    def __init__(self):
+        self.query_kwargs = None
+
+    def query(self, **kwargs):
+        self.query_kwargs = kwargs
+        results = [
+            {"text": "a", "score": 0.016, "metadata": {"book_id": "A"}},
+            {"text": "b", "score": 0.015, "metadata": {"book_id": "B"}},
+            {"text": "c", "score": 0.014, "metadata": {"book_id": "C"}},
+        ]
+        return results[: kwargs.get("top_k", 10)]
+
+    def create_claude_prompt(self, results, query_text, expand_context=False,
+                             citation_config=None):
+        return {"system": "s", "user": "u"}
+
+
+class _FakeReranker:
+    def __init__(self):
+        self.called = False
+
+    def rerank(self, query, results, top_k=10):
+        self.called = True
+        for i, r in enumerate(results):
+            r["rerank_score"] = 0.9 - i * 0.1
+        return results[:top_k]
+
+
+class TestCitationPathReranking:
+    def test_search_with_citations_reranks_when_enabled(self, tmp_path):
+        from src.service.archilles_service import ArchillesService
+
+        svc = ArchillesService(db_path=str(tmp_path), enable_reranking=True)
+        svc._rag = _FakeRagForService()
+        svc._reranker = _FakeReranker()
+
+        out = svc.search_with_citations("query", top_k=2,
+                                        boost_research_interests=False)
+
+        assert svc._reranker.called, "citation path skipped the reranker"
+        assert out["num_results"] == 2
+        # Candidate fetch must be broader than top_k (like search() does)
+        assert svc._rag.query_kwargs["top_k"] > 2
+
+    def test_search_with_citations_works_without_reranker(self, tmp_path):
+        from src.service.archilles_service import ArchillesService
+
+        svc = ArchillesService(db_path=str(tmp_path), enable_reranking=False)
+        svc._rag = _FakeRagForService()
+
+        out = svc.search_with_citations("query", top_k=2,
+                                        boost_research_interests=False)
+        assert out["num_results"] == 2
+
+
+# ── 8.4: exact_phrase results must carry a score_type marker ──────────────
+
+def test_exact_phrase_results_have_score_type(tmp_path):
+    """exact_phrase scores are raw occurrence counts — downstream consumers
+    can only treat them correctly if the scale is labelled."""
+    from scripts.rag_demo import archillesRAG
+
+    rag = archillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+    rag.store.add_chunks(
+        [{"id": "B_chunk_0", "text": "Sein und Zeit ist ein Hauptwerk.",
+          "book_id": "B", "chunk_type": "content"}],
+        _emb(1),
+    )
+    rag.store.create_fts_index()
+
+    results = rag._exact_phrase_search("Sein und Zeit", top_k=5)
+    assert results, "exact phrase not found"
+    assert results[0]["score_type"] == "exact_phrase"
+
+
+# ── 5.4: cross-source merge must not compare raw RRF scores ──────────────
+
+class TestCrossSourceMerge:
+    def test_interleaves_by_rank_when_scores_incomparable(self):
+        """RRF scores from separate LanceDB instances are not comparable —
+        pre-fix the raw-score sort put every result of the 'louder' source
+        above all results of the other."""
+        from src.calibre_mcp.unified_server import merge_source_results
+
+        cal = [
+            {"text": "a1", "score": 0.030, "rank": 1, "source": "calibre"},
+            {"text": "a2", "score": 0.029, "rank": 2, "source": "calibre"},
+        ]
+        zot = [
+            {"text": "b1", "score": 0.016, "rank": 1, "source": "zotero"},
+            {"text": "b2", "score": 0.015, "rank": 2, "source": "zotero"},
+        ]
+        merged = merge_source_results([("calibre", cal), ("zotero", zot)], top_k=4)
+
+        assert {merged[0]["text"], merged[1]["text"]} == {"a1", "b1"}
+        assert {merged[2]["text"], merged[3]["text"]} == {"a2", "b2"}
+        assert [r["rank"] for r in merged] == [1, 2, 3, 4]
+
+    def test_uses_rerank_score_when_all_results_reranked(self):
+        """Cross-encoder scores are query-document specific and therefore
+        comparable across sources — they take precedence."""
+        from src.calibre_mcp.unified_server import merge_source_results
+
+        cal = [{"text": "a1", "score": 0.030, "rerank_score": 0.7, "rank": 1}]
+        zot = [{"text": "b1", "score": 0.010, "rerank_score": 0.9, "rank": 1}]
+        merged = merge_source_results([("calibre", cal), ("zotero", zot)], top_k=2)
+
+        assert merged[0]["text"] == "b1"
+        assert merged[0]["rank"] == 1
+
+    def test_truncates_to_top_k(self):
+        from src.calibre_mcp.unified_server import merge_source_results
+
+        cal = [{"text": f"a{i}", "score": 0.03, "rank": i} for i in range(1, 6)]
+        merged = merge_source_results([("calibre", cal)], top_k=3)
+        assert len(merged) == 3
