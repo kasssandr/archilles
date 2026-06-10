@@ -1,10 +1,12 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Codex when working with code in this repository.
 
 ## Project Overview
 
-ARCHILLES is a privacy-first, local-first RAG (Retrieval-Augmented Generation) system for semantic search across Calibre e-book libraries. It provides hybrid vector+BM25 search with academic-grade citations, MCP integration for Codex Desktop; it will provide MCP intergration for other LLMs soon, and finally a Streamlit web UI.
+ARCHILLES is a privacy-first, local-first RAG (Retrieval-Augmented Generation) system for semantic search across Calibre e-book libraries. It provides hybrid vector+BM25 search with academic-grade citations, MCP integration for Claude Desktop; it will provide MCP integration for other LLMs soon, and finally a Streamlit web UI.
+
+Note for Codex: ARCHILLES cannot currently be consumed via MCP from Codex — local MCP servers are not supported there. If that policy changes, wiring it up is worth a new attempt.
 
 ## Commands
 
@@ -32,7 +34,7 @@ python scripts/rag_demo.py list-indexed
 python scripts/web_ui.py
 ```
 
-### MCP Server (Codex Desktop)
+### MCP Server (Claude Desktop)
 ```bash
 python mcp_server.py
 ```
@@ -72,7 +74,7 @@ Consumers: MCP Server | Web UI (Streamlit) | CLI
 - **`src/storage/lancedb_store.py`** — LanceDB backend. Stores 1024-dim BGE-M3 vectors with rich metadata. Two tables: `chunks` (main content) and `annotations` (user highlights/notes).
 - **`src/service/archilles_service.py`** — Single facade used by MCP server, web UI, and CLI. Start here when adding new features.
 - **`src/calibre_mcp/server.py`** — MCP server exposing 10 tools (search, metadata, citations, annotations, stats). Carefully manages stdout/stderr to avoid JSON-RPC protocol corruption.
-- **`mcp_server.py`** — Entry point for Codex Desktop MCP integration.
+- **`mcp_server.py`** — Entry point for Claude Desktop MCP integration.
 - **`scripts/rag_demo.py`** — Primary CLI (2,479 lines). Index, query, stats, list-indexed.
 
 ### Search Architecture (Two-Stage)
