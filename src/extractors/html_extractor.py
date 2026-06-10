@@ -43,11 +43,12 @@ class HTMLExtractor(BaseExtractor):
                 raw_data = f.read()
 
             detected = chardet.detect(raw_data)
-            encoding = detected.get('encoding', 'utf-8')
+            # chardet returns {'encoding': None} when unsure — use `or` (2.6)
+            encoding = detected.get('encoding') or 'utf-8'
 
             try:
                 html_content = raw_data.decode(encoding)
-            except UnicodeDecodeError:
+            except (UnicodeDecodeError, LookupError):
                 # Fallback to utf-8
                 html_content = raw_data.decode('utf-8', errors='ignore')
 

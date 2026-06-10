@@ -126,7 +126,9 @@ def _print_results(results: dict, json_mode: bool) -> None:
     if n_err:
         print(f"  Errors:               {n_err}")
         for e in results['errors']:
-            print(f"    calibre_id={e['calibre_id']}: {e['error']}")
+            # Calibre errors carry 'calibre_id', Zotero errors 'doc_id' (7.6)
+            ident = e.get('calibre_id', e.get('doc_id', '?'))
+            print(f"    id={ident}: {e['error']}")
 
     if results['new_books']:
         print(f"\n  New books queued for indexing:")

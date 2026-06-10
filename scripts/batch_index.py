@@ -449,6 +449,8 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None,
     FROM books
     LEFT JOIN books_authors_link ON books.id = books_authors_link.book
     LEFT JOIN authors ON books_authors_link.author = authors.id
+    LEFT JOIN books_ratings_link ON books.id = books_ratings_link.book
+    LEFT JOIN ratings ON books_ratings_link.rating = ratings.id
     """
 
     params: List[Any] = []
@@ -783,6 +785,19 @@ def _adapter_list_books(
         })
 
     return books
+
+
+def _reset_progress_tracker(db_path: str) -> None:
+    """Delete the SafeIndexer progress DB that lives next to the RAG database.
+
+    --reset-db wipes LanceDB, but a surviving progress.db would make
+    --skip-existing skip books that no longer exist in the fresh index
+    (code review finding 7.5).
+    """
+    progress_db = Path(db_path).parent / "progress.db"
+    if progress_db.exists():
+        progress_db.unlink()
+        print(f"    Deleted stale progress tracker: {progress_db}")
 
 
 def create_book_id(book: Dict[str, Any]) -> str:
@@ -1661,6 +1676,11 @@ Profiles:
             print(str(e))
             print(f"\n{'='*60}\n")
             sys.exit(1)
+
+        # A DB reset must also clear the progress tracker, otherwise
+        # --skip-existing would skip books missing from the fresh index (7.5).
+        if args.reset_db:
+            _reset_progress_tracker(args.db_path)
 
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"

@@ -41,6 +41,18 @@ from src.calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 logger = logging.getLogger(__name__)
 
 
+def _year_sort_key(value) -> int:
+    """Coerce a year value (int, str, or None) to int for cross-source sorting.
+
+    Calibre paths historically deliver years as strings ('2019'), adapter
+    paths as ints — mixing them in sort() raised TypeError (finding 5.2).
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 # ── Tool classification (used by create_unified_tools) ────────────────────
 
 _REMOVED_TOOLS = {"get_doublette_tag_instruction"}
@@ -448,7 +460,7 @@ class UnifiedMCPServer:
             per_source_counts[name] = len(books)
 
         if sort_by == "year":
-            all_books.sort(key=lambda x: x.get("year") or 0, reverse=True)
+            all_books.sort(key=lambda x: _year_sort_key(x.get("year")), reverse=True)
         else:
             all_books.sort(key=lambda x: (x.get("title") or "").lower())
 

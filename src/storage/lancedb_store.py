@@ -23,6 +23,16 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _sql_quote(value: str) -> str:
+    """Escape a string for use inside a single-quoted LanceDB SQL literal.
+
+    book_id values are built from author + title, so apostrophes
+    ("O'Brien_Ulysses_42") are realistic and would otherwise break every
+    filter, delete and update expression (code review finding 1.1).
+    """
+    return str(value).replace("'", "''")
+
+
 class LanceDBStore:
     """
     LanceDB storage backend for ARCHILLES.
@@ -554,14 +564,14 @@ class LanceDBStore:
         conditions = []
 
         if book_id:
-            conditions.append(f"book_id = '{book_id}'")
+            conditions.append(f"book_id = '{_sql_quote(book_id)}'")
 
         if source_id:
             # Prefer source_id; fall back to calibre_id for old data
             conditions.append(
                 f"(source_id = '{source_id}' OR calibre_id = {source_id})"
                 if source_id.isdigit()
-                else f"source_id = '{source_id}'"
+                else f"source_id = '{_sql_quote(source_id)}'"
             )
         elif calibre_id:
             conditions.append(f"calibre_id = {calibre_id}")
@@ -584,7 +594,7 @@ class LanceDBStore:
                 conditions.append(f"chunk_type = '{chunk_type}'")
 
         if language:
-            conditions.append(f"language = '{language}'")
+            conditions.append(f"language = '{_sql_quote(language)}'")
 
         return " AND ".join(conditions) if conditions else None
 
@@ -630,11 +640,13 @@ class LanceDBStore:
 
     def delete_by_book_id(self, book_id: str) -> int:
         """Delete all chunks for a specific book."""
-        return self._delete_where(f"book_id = '{book_id}'")
+        return self._delete_where(f"book_id = '{_sql_quote(book_id)}'")
 
     def delete_by_book_id_and_type(self, book_id: str, chunk_type: str) -> int:
         """Delete chunks for a specific book filtered by chunk_type."""
-        return self._delete_where(f"book_id = '{book_id}' AND chunk_type = '{chunk_type}'")
+        return self._delete_where(
+            f"book_id = '{_sql_quote(book_id)}' AND chunk_type = '{_sql_quote(chunk_type)}'"
+        )
 
     def update_metadata_fields(self, book_id: str, updates: dict) -> int:
         """
@@ -666,10 +678,10 @@ class LanceDBStore:
             return 0
 
         # LanceDB update: set columns where condition matches
-        self.table.update(where=f"book_id = '{book_id}'", values=safe_updates)
+        self.table.update(where=f"book_id = '{_sql_quote(book_id)}'", values=safe_updates)
         # We can't easily count updates, so return total chunks for this book
         try:
-            results = self.table.search().where(f"book_id = '{book_id}'").limit(10000).to_list()
+            results = self.table.search().where(f"book_id = '{_sql_quote(book_id)}'").limit(10000).to_list()
             return len(results)
         except Exception:
             return 0
@@ -687,7 +699,7 @@ class LanceDBStore:
 
     def get_by_book_id(self, book_id: str, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a specific book."""
-        return self._query_where(f"book_id = '{book_id}'", limit)
+        return self._query_where(f"book_id = '{_sql_quote(book_id)}'", limit)
 
     def get_by_calibre_id(self, calibre_id: int, limit: int = 100) -> list[dict[str, Any]]:
         """Get all chunks for a specific Calibre ID."""
@@ -699,7 +711,7 @@ class LanceDBStore:
             return self._query_where(
                 f"(source_id = '{source_id}' OR calibre_id = {source_id})", limit
             )
-        return self._query_where(f"source_id = '{source_id}'", limit)
+        return self._query_where(f"source_id = '{_sql_quote(source_id)}'", limit)
 
     def delete_by_source_id(self, source_id: str) -> int:
         """Delete all chunks for a source ID (with calibre_id fallback)."""
@@ -707,11 +719,11 @@ class LanceDBStore:
             return self._delete_where(
                 f"(source_id = '{source_id}' OR calibre_id = {source_id})"
             )
-        return self._delete_where(f"source_id = '{source_id}'")
+        return self._delete_where(f"source_id = '{_sql_quote(source_id)}'")
 
     def get_by_id(self, chunk_id: str) -> dict[str, Any] | None:
         """Get a single chunk by its ID (used for parent lookup)."""
-        results = self._query_where(f"id = '{chunk_id}'", limit=1)
+        results = self._query_where(f"id = '{_sql_quote(chunk_id)}'", limit=1)
         return results[0] if results else None
 
     def get_book_ids_for_skip_check(self) -> list[dict[str, Any]]:

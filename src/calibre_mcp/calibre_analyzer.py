@@ -786,7 +786,11 @@ class CalibreAnalyzer:
         books = []
         for row in rows:
             d = details.get(row['id'], {})
-            year = row['pubdate'][:4] if row['pubdate'] else None
+            # int year (not str) — keeps cross-source sorting type-stable (5.2)
+            try:
+                year = int(row['pubdate'][:4]) if row['pubdate'] else None
+            except (ValueError, TypeError):
+                year = None
             books.append({
                 'calibre_id': row['id'],
                 'title': row['title'],

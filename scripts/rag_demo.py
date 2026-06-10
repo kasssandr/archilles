@@ -46,7 +46,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.constants import ChunkType, SectionType
-from src.service.archilles_service import diversify_results
+from src.service.archilles_service import diversify_results, matches_tag_filter
 from src.extractors import UniversalExtractor
 from src.calibre_db import CalibreDB
 from src.storage import LanceDBStore
@@ -1774,7 +1774,8 @@ class archillesRAG:
             language: Filter by language (e.g., 'de', 'en', 'la') or comma-separated list
             book_id: Filter by specific book ID
             exact_phrase: Use exact phrase matching (for Latin quotes, etc.)
-            tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie'])
+            tag_filter: Filter by Calibre tags (e.g., ['Geschichte', 'Philosophie']).
+                       AND logic: results must carry ALL given tags.
             section_filter: Filter by section type (default: 'main' = exclude front/back matter)
                            'main' = main content only (excludes bibliography, index, etc.)
                            'main_content' / 'front_matter' / 'back_matter' = exact match
@@ -1847,17 +1848,13 @@ class archillesRAG:
         if short_count > 0:
             print(f"  Filtered {short_count} trivially short chunks (<{min_chunk_length} chars)")
 
-        # Post-filter by tags (if specified)
+        # Post-filter by tags (if specified) — AND logic: a result must carry
+        # ALL requested tags, as documented in the MCP tool schema (fix 8.1).
         if tag_filter:
-            filtered_results = []
-            for result in results:
-                result_tags = result['metadata'].get('tags', '')
-                if result_tags:
-                    # Check if any of the filter tags match
-                    result_tag_list = [t.strip().lower() for t in result_tags.split(',')]
-                    filter_tag_list = [t.strip().lower() for t in tag_filter]
-                    if any(ft in result_tag_list for ft in filter_tag_list):
-                        filtered_results.append(result)
+            filtered_results = [
+                result for result in results
+                if matches_tag_filter(result['metadata'].get('tags', ''), tag_filter)
+            ]
 
             # Re-rank after filtering
             for i, result in enumerate(filtered_results):

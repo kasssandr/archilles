@@ -55,7 +55,9 @@ class TXTExtractor(BaseExtractor):
                     raw_data = f.read()
 
             detected = chardet.detect(raw_data)
-            encoding = detected.get('encoding', 'utf-8')
+            # chardet returns {'encoding': None} when unsure — `.get` with a
+            # default does NOT catch that (key exists), so use `or` (2.6).
+            encoding = detected.get('encoding') or 'utf-8'
 
             # Fallback encodings to try if detection fails
             # Note: latin-1 never raises UnicodeDecodeError, so it acts as a
@@ -69,7 +71,7 @@ class TXTExtractor(BaseExtractor):
                     text = raw_data.decode(enc)
                     used_encoding = enc
                     break
-                except (UnicodeDecodeError, AttributeError):
+                except (UnicodeDecodeError, LookupError):
                     continue
 
             if text is None:

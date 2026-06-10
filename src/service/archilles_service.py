@@ -63,6 +63,19 @@ def _redirect_stdout_to_stderr():
                 _redirect_original_stdout = None
 
 
+def matches_tag_filter(result_tags: str, tag_filter: list[str]) -> bool:
+    """True if a result's tag string contains ALL requested tags (AND logic).
+
+    The MCP tool schema documents AND semantics ("Results must match ALL
+    tags"); the previous implementation used OR (code review finding 8.1).
+    Comparison is case-insensitive on whole tag names, not substrings.
+    """
+    if not result_tags:
+        return False
+    result_tag_set = {t.strip().lower() for t in result_tags.split(',')}
+    return all(ft.strip().lower() in result_tag_set for ft in tag_filter)
+
+
 def diversify_results(
     results: list[dict[str, Any]],
     max_per_book: int,

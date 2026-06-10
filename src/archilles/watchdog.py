@@ -101,13 +101,19 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
                     ) a2
                 ) AS author,
                 comments.text                       AS comments,
-                GROUP_CONCAT(DISTINCT tags.name)    AS tags,
+                (
+                    -- CHAR(31) (unit separator) instead of ',' so tags that
+                    -- contain commas ("Blut, Bund, Buch") survive the split;
+                    -- a comma split made the hash diverge permanently (7.3).
+                    SELECT GROUP_CONCAT(t2.name, CHAR(31))
+                    FROM tags t2
+                    INNER JOIN books_tags_link btl2 ON t2.id = btl2.tag
+                    WHERE btl2.book = books.id
+                )                                   AS tags,
                 publishers.name                     AS publisher,
                 ratings.rating                      AS rating
             FROM books
             LEFT JOIN comments              ON books.id = comments.book
-            LEFT JOIN books_tags_link       ON books.id = books_tags_link.book
-            LEFT JOIN tags                  ON books_tags_link.tag = tags.id
             LEFT JOIN books_publishers_link ON books.id = books_publishers_link.book
             LEFT JOIN publishers            ON books_publishers_link.publisher = publishers.id
             LEFT JOIN books_ratings_link    ON books.id = books_ratings_link.book
@@ -121,7 +127,7 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
     for row in rows:
         cid = int(row['id'])
         raw_tags = row['tags'] or ''
-        tags_list = sorted(t.strip() for t in raw_tags.split(',') if t.strip())
+        tags_list = sorted(t.strip() for t in raw_tags.split('\x1f') if t.strip())
         result[cid] = {
             'title':     row['title'] or '',
             'author':    row['author'] or '',
