@@ -15,6 +15,7 @@ except ImportError:
     EBOOKLIB_AVAILABLE = False
 
 from src.archilles.constants import SectionType
+from src.archilles.text_match import contains_keyword
 from .base import BaseExtractor
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import EPUBExtractionError
@@ -367,11 +368,11 @@ class EPUBExtractor(BaseExtractor):
         Returns:
             'front_matter', 'main_content', or 'back_matter'
         """
-        title_lower = title.lower()
-
-        if any(pattern in title_lower for pattern in _FRONT_MATTER_PATTERNS):
+        # Word-boundary matching (finding 2.2): substring checks turned
+        # 'protocol' into front matter ('toc') and excluded chapters.
+        if contains_keyword(title, _FRONT_MATTER_PATTERNS):
             return SectionType.FRONT_MATTER
-        if any(pattern in title_lower for pattern in _BACK_MATTER_PATTERNS):
+        if contains_keyword(title, _BACK_MATTER_PATTERNS):
             return SectionType.BACK_MATTER
         return SectionType.MAIN_CONTENT
 

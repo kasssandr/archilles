@@ -13,6 +13,11 @@ Findings covered:
     4.3  search_with_citations bypassing the reranker
     8.4  exact_phrase results without score_type marker
     5.4  cross-source merge comparing incomparable raw scores
+    2.2  substring keyword matching in section classification
+    2.3  contradictory introduction handling (TOC vs. page heuristic)
+    2.8  roman numeral regex matching the English word "I"
+    4.5  research boost matching substrings ("Kant" boosts "Kantine")
+    6.2  TOC marker filter dropping highlights via substrings
 """
 
 import numpy as np
@@ -479,3 +484,115 @@ class TestCrossSourceMerge:
         cal = [{"text": f"a{i}", "score": 0.03, "rank": i} for i in range(1, 6)]
         merged = merge_source_results([("calibre", cal)], top_k=3)
         assert len(merged) == 3
+
+
+# ── Wortgrenzen-Familie: 2.2 / 2.3 / 2.8 / 4.5 / 6.2 ─────────────────────
+
+class TestWordBoundaryHelper:
+    def test_contains_keyword_respects_word_boundaries(self):
+        from src.archilles.text_match import contains_keyword
+
+        assert contains_keyword("Notes on method", ["notes"])
+        assert not contains_keyword("Banknotes of the empire", ["notes"])
+        assert not contains_keyword("The Geneva protocol", ["toc"])
+        assert contains_keyword("Table of Contents", ["table of contents"])
+        assert not contains_keyword("Der Vorteil des Zweifels", ["teil"])
+        assert not contains_keyword("Indexikalität als Begriff", ["index"])
+        assert contains_keyword("Index", ["index"])
+
+    def test_count_keyword_matches(self):
+        from src.archilles.text_match import count_keyword_matches
+
+        assert count_keyword_matches("Kant und Hegel", ["kant", "hegel"]) == 2
+        assert count_keyword_matches("Die Kantine", ["kant"]) == 0
+
+
+class TestSectionClassificationBoundaries:
+    def test_toc_title_banknotes_not_back_matter(self):
+        """2.2: 'notes' in 'Banknotes' classified chapters as back_matter,
+        silently excluding them from default search."""
+        from src.extractors.pdf_extractor import PDFExtractor
+        from src.archilles.constants import SectionType
+
+        assert PDFExtractor._section_type_from_toc_title("A History of Banknotes") is None
+        assert (PDFExtractor._section_type_from_toc_title("Notes")
+                == SectionType.BACK_MATTER)
+
+    def test_page_heuristic_banknotes_stays_main(self):
+        from src.extractors.pdf_extractor import PDFExtractor
+        from src.archilles.constants import SectionType
+
+        ext = PDFExtractor()
+        page = "Banknotes and credit in early modern Europe\n" + "Text. " * 50
+        assert ext._detect_section_type(page, 50, 300) == SectionType.MAIN_CONTENT
+
+    def test_epub_protocol_chapter_not_front_matter(self):
+        """2.2: 'toc' in 'protocol' made EPUB chapters front_matter."""
+        from src.extractors.epub_extractor import EPUBExtractor
+        from src.archilles.constants import SectionType
+
+        assert (EPUBExtractor._detect_section_type("The Geneva Protocol")
+                == SectionType.MAIN_CONTENT)
+        assert (EPUBExtractor._detect_section_type("TOC")
+                == SectionType.FRONT_MATTER)
+
+    def test_introduction_page_stays_main_content(self):
+        """2.3: TOC keywords deliberately treat introductions as main content
+        ('inhaltlich relevant') — the page heuristic must agree, otherwise
+        TOC-less PDFs lose their introduction from search."""
+        from src.extractors.pdf_extractor import PDFExtractor
+        from src.archilles.constants import SectionType
+
+        ext = PDFExtractor()
+        page = "Introduction\n" + "This study examines historical sources. " * 20
+        assert ext._detect_section_type(page, 10, 300) == SectionType.MAIN_CONTENT
+
+    def test_english_pronoun_i_not_front_matter(self):
+        """2.8: the roman numeral regex matched the English word 'I'."""
+        from src.extractors.pdf_extractor import PDFExtractor
+        from src.archilles.constants import SectionType
+
+        ext = PDFExtractor()
+        page = "I have always thought that the question deserves study.\n" \
+               + "More prose follows here without any special markers. " * 10
+        assert ext._detect_section_type(page, 2, 300) == SectionType.MAIN_CONTENT
+
+    def test_standalone_roman_label_still_front_matter(self):
+        from src.extractors.pdf_extractor import PDFExtractor
+        from src.archilles.constants import SectionType
+
+        ext = PDFExtractor()
+        page = "iv\nNeutral prose without special markers follows here."
+        assert ext._detect_section_type(page, 2, 300) == SectionType.FRONT_MATTER
+
+
+class TestTocMarkerBoundaries:
+    def test_vorteil_highlight_not_dropped(self):
+        """6.2: 'teil' in 'Vorteil' silently dropped short highlights."""
+        from src.calibre_mcp.annotations import is_toc_marker
+
+        ann = {"highlighted_text": "Der Vorteil des Zweifels", "notes": ""}
+        assert not is_toc_marker(ann)
+
+    def test_real_chapter_marker_still_dropped(self):
+        from src.calibre_mcp.annotations import is_toc_marker
+
+        ann = {"highlighted_text": "Kapitel 3: Die Anfänge der Stadt", "notes": ""}
+        assert is_toc_marker(ann)
+
+
+class TestResearchBoostBoundaries:
+    def test_kant_does_not_boost_kantine(self):
+        """4.5: substring matching boosted 'Kantine' for keyword 'Kant'."""
+        from src.retriever.research_boost import apply_research_boost
+
+        results = [{"text": "Die Kantine war geschlossen", "score": 0.02}]
+        boosted = apply_research_boost(results, ["Kant"], boost_factor=0.15)
+        assert boosted[0]["score"] == pytest.approx(0.02)
+
+    def test_kant_still_boosts_kant(self):
+        from src.retriever.research_boost import apply_research_boost
+
+        results = [{"text": "Kant und die Aufklärung", "score": 0.02}]
+        boosted = apply_research_boost(results, ["Kant"], boost_factor=0.15)
+        assert boosted[0]["score"] == pytest.approx(0.02 * 1.15)

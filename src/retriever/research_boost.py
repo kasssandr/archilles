@@ -4,6 +4,8 @@ import json
 import logging
 from pathlib import Path
 
+from src.archilles.text_match import count_keyword_matches
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_BOOST_FACTOR = 0.15
@@ -107,11 +109,11 @@ def apply_research_boost(
     if not keywords or not results:
         return results
 
-    keywords_lower = [kw.lower() for kw in keywords]
     for result in results:
-        text_lower = result.get("text", "").lower()
-        tags_lower = result.get("tags", "").lower()
-        matches = sum(1 for kw in keywords_lower if kw in text_lower or kw in tags_lower)
+        # Word-boundary matching (finding 4.5): substring checks boosted
+        # 'Kantine' for the keyword 'Kant'.
+        haystack = f"{result.get('text', '')} {result.get('tags', '')}"
+        matches = count_keyword_matches(haystack, keywords)
         if matches > 0:
             key = "rerank_score" if result.get("rerank_score") is not None else "score"
             result[key] = result.get(key, 0) * (1.0 + boost_factor * matches)

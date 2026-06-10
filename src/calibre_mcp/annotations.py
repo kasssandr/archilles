@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime
 
+from src.archilles.text_match import contains_keyword
+
 logger = logging.getLogger(__name__)
 
 _TOC_KEYWORDS = frozenset([
@@ -295,10 +297,12 @@ def is_toc_marker(
     if len(text) < min_length and not notes:
         return True
 
-    combined = f"{text} {notes}".lower()
+    combined = f"{text} {notes}"
 
     if len(text) < 50:
-        if any(keyword in combined for keyword in _TOC_KEYWORDS):
+        # Word-boundary matching (finding 6.2): substring checks dropped
+        # legitimate highlights ('teil' in 'Vorteil', 'part' in 'particular').
+        if contains_keyword(combined, _TOC_KEYWORDS):
             return True
 
     pos_frac = annotation.get('pos_frac')

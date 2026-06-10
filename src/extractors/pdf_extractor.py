@@ -19,6 +19,7 @@ except ImportError:
     PYMUPDF_AVAILABLE = False
 
 from src.archilles.constants import SectionType
+from src.archilles.text_match import contains_keyword
 from .base import BaseExtractor
 from .exceptions import PDFExtractionError
 from .models import ChunkMetadata, ExtractedText
@@ -527,14 +528,17 @@ class PDFExtractor(BaseExtractor):
 
     @classmethod
     def _section_type_from_toc_title(cls, title: str) -> Optional[str]:
-        """Derive section_type from a TOC entry title, or None if unclear."""
-        t = title.strip().lower()
-        for kw in cls._BACK_MATTER_TOC_KEYWORDS:
-            if kw in t:
-                return SectionType.BACK_MATTER
-        for kw in cls._FRONT_MATTER_TOC_KEYWORDS:
-            if kw in t:
-                return SectionType.FRONT_MATTER
+        """Derive section_type from a TOC entry title, or None if unclear.
+
+        Keyword matching uses word boundaries (finding 2.2): substring
+        checks classified 'Banknotes' as back matter ('notes') and thereby
+        excluded whole chapters from the default search.
+        """
+        t = title.strip()
+        if contains_keyword(t, cls._BACK_MATTER_TOC_KEYWORDS):
+            return SectionType.BACK_MATTER
+        if contains_keyword(t, cls._FRONT_MATTER_TOC_KEYWORDS):
+            return SectionType.FRONT_MATTER
         return None
 
     def _create_chunks_with_pages(
@@ -1034,13 +1038,17 @@ class PDFExtractor(BaseExtractor):
         """Check if string is a valid Roman numeral."""
         return len(s) > 0 and bool(cls._ROMAN_RE.match(s))
 
+    # Finding 2.8: the numeral must stand alone on its line (a page label).
+    # A plain \b...\b matched the English word "I" in running prose, turning
+    # early pages of English texts into front matter.
     _ROMAN_NUMERAL_RE = re.compile(
-        r'\b(i{1,3}|iv|v|vi{0,3}|ix|x|xi{0,3}|xiv|xv|xvi{0,3}|xix|xx)\b'
+        r'^\s*(i{1,3}|iv|v|vi{0,3}|ix|x|xi{0,3}|xiv|xv|xvi{0,3}|xix|xx)\s*$',
+        re.MULTILINE,
     )
 
     @classmethod
     def _detect_roman_numerals(cls, text: str) -> bool:
-        """Detect if text contains roman numeral page numbers."""
+        """Detect roman numeral page labels (standalone on their own line)."""
         return bool(cls._ROMAN_NUMERAL_RE.search(text.lower()))
 
     # ------------------------------------------------------------------
@@ -1259,8 +1267,11 @@ class PDFExtractor(BaseExtractor):
 
     _FRONT_MATTER_KEYWORDS = [
         'table of contents', 'contents', 'inhaltsverzeichnis',
-        'preface', 'vorwort', 'introduction', 'einleitung',
+        'preface', 'vorwort',
         'acknowledgments', 'danksagung', 'copyright', 'isbn',
+        # NB: "introduction/einleitung" bewusst NICHT hier (finding 2.3) —
+        # Einleitungen sind inhaltlich relevant und gehören zu main_content,
+        # konsistent mit den TOC-Keyword-Sets oben.
     ]
 
     _BACK_MATTER_KEYWORDS = [
@@ -1283,15 +1294,15 @@ class PDFExtractor(BaseExtractor):
         detection, positional heuristics, and roman numeral presence.
         """
         lines = page_text.strip().split('\n')
-        first_lines_lower = '\n'.join(lines[:5]).lower() if lines else ''
+        first_lines = '\n'.join(lines[:5]) if lines else ''
 
-        for keyword in self._BACK_MATTER_KEYWORDS:
-            if keyword in first_lines_lower:
-                return SectionType.BACK_MATTER
+        # Word-boundary matching (finding 2.2): substring checks turned
+        # 'banknotes' into back matter and excluded pages from search.
+        if contains_keyword(first_lines, self._BACK_MATTER_KEYWORDS):
+            return SectionType.BACK_MATTER
 
-        for keyword in self._FRONT_MATTER_KEYWORDS:
-            if keyword in first_lines_lower:
-                return SectionType.FRONT_MATTER
+        if contains_keyword(first_lines, self._FRONT_MATTER_KEYWORDS):
+            return SectionType.FRONT_MATTER
 
         if self._looks_like_index(page_text):
             return SectionType.BACK_MATTER
