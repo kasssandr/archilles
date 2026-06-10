@@ -10,6 +10,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+class TestCanonicalImportRoot:
+    """5.14: Entry-Point nutzt ausschließlich die kanonische src.*-Wurzel."""
+
+    def test_mcp_server_entry_has_no_bare_imports(self):
+        source = (REPO_ROOT / "mcp_server.py").read_text(encoding="utf-8")
+        assert "from calibre_mcp" not in source
+        assert "from citation.config" not in source
+        assert 'parent / "src"' not in source  # sys.path-Insert der src-Wurzel entfernt
+
+    def test_unified_server_has_no_bare_import_fallback(self):
+        source = (REPO_ROOT / "src" / "calibre_mcp" / "unified_server.py").read_text(encoding="utf-8")
+        assert "from citation.config" not in source
+
+
 class TestResultsModule:
     """Die Ergebnis-Utilities leben in einer neutralen Schicht (Zyklus-Bruch)."""
 

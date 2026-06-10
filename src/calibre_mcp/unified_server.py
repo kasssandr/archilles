@@ -142,10 +142,7 @@ class UnifiedMCPServer:
         """Build the unified server from a parsed :class:`MasterConfig`."""
         from src.adapters import create_adapter
 
-        try:
-            from citation.config import CitationConfig
-        except ImportError:
-            from src.citation.config import CitationConfig
+        from src.citation.config import CitationConfig
 
         servers: dict[str, CalibreMCPServer] = {}
         for src in master.sources:
