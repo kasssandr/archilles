@@ -1,7 +1,7 @@
 """
 Central service layer for ARCHILLES.
 
-Wraps archillesRAG and provides a clean interface used by:
+Wraps ArchillesRAG and provides a clean interface used by:
 - MCP server (src/calibre_mcp/server.py)
 - Web UI (scripts/web_ui.py)
 - CLI (scripts/rag_demo.py)
@@ -233,7 +233,7 @@ class ArchillesService:
         """
         Search for relevant passages.
 
-        Delegates to archillesRAG.query() and optionally applies
+        Delegates to ArchillesRAG.query() and optionally applies
         cross-encoder reranking before returning results.
 
         Returns:

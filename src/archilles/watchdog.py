@@ -279,7 +279,7 @@ class WatchdogScanner:
         ----------
         dry_run                Report changes only; do not modify LanceDB or queue.
         queue_new              Write new Calibre IDs to index_queue.json (default True).
-        index_new              Index new books immediately via archillesRAG (full content).
+        index_new              Index new books immediately via ArchillesRAG (full content).
         index_metadata_only    For new books: create a fast PHASE1_METADATA stub instead
                                of full content indexing.  Mutually exclusive with index_new.
         index_fulltext_pending Find books that have only PHASE1_METADATA stubs (no content
@@ -918,7 +918,7 @@ class ZoteroWatchdogScanner:
       annotations_changed attachment dateModified changed (covers PDF + DB annotations)
 
     Phase 1 is pure SQLite + in-memory hash comparison — no book files are opened.
-    Phase 2 re-indexes changed items via archillesRAG.index_book().
+    Phase 2 re-indexes changed items via ArchillesRAG.index_book().
     Phase 3 queues or immediately indexes new items.
     """
 

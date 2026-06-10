@@ -37,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
-from src.archilles.constants import ChunkType, SectionType  # noqa: F401
+from src.archilles.constants import ChunkType  # noqa: F401
 from src.archilles.engine import ArchillesRAG, LanceDBError  # noqa: F401 — LanceDBError: Re-Export fuer Alt-Abnehmer
 
 # Kompat-Shim (Spec 2026-06-11): Alt-Abnehmer importieren ``archillesRAG`` von hier.
