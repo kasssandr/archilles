@@ -38,3 +38,32 @@ class TestResultsModule:
         from src.service import archilles_service
         assert archilles_service.diversify_results is results.diversify_results
         assert archilles_service.matches_tag_filter is results.matches_tag_filter
+
+
+class TestEngineMove:
+    """4.9: Die Engine lebt in src/ und ist ohne scripts/ nutzbar."""
+
+    def test_engine_import_does_not_load_scripts(self):
+        """Subprocess für saubere sys.modules — Kern-Architekturziel."""
+        code = (
+            "import sys; "
+            "import src.archilles.engine; "
+            "bad = [m for m in sys.modules if m.startswith('scripts')]; "
+            "assert not bad, 'engine zieht scripts-Module: %s' % bad; "
+            "from src.archilles.engine import ArchillesRAG, LanceDBError; "
+            "print(ArchillesRAG.__name__)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True, text=True, cwd=str(REPO_ROOT), timeout=300,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "ArchillesRAG" in proc.stdout
+
+    def test_legacy_shim_same_class(self):
+        """Kompat-Shim: Alt-Import liefert dieselben Objekte."""
+        from scripts.rag_demo import LanceDBError as ShimError
+        from scripts.rag_demo import archillesRAG
+        from src.archilles.engine import ArchillesRAG, LanceDBError
+        assert archillesRAG is ArchillesRAG
+        assert ShimError is LanceDBError

@@ -167,15 +167,15 @@ class ArchillesService:
             self._init_attempted = True
 
             try:
-                from scripts.rag_demo import archillesRAG
+                from src.archilles.engine import ArchillesRAG
             except ImportError:
-                logger.warning("archillesRAG not available (import failed)")
+                logger.warning("ArchillesRAG not available (import failed)")
                 return False
 
             try:
                 logger.info("Initializing RAG system (lazy loading)...")
                 with _redirect_stdout_to_stderr():
-                    self._rag = archillesRAG(**self._config)
+                    self._rag = ArchillesRAG(**self._config)
                 logger.info(f"RAG system initialized: {self._config['db_path']}")
                 return True
             except Exception as e:

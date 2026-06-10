@@ -68,7 +68,7 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scripts.rag_demo import archillesRAG, LanceDBError
+from src.archilles.engine import ArchillesRAG, LanceDBError
 from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
@@ -664,7 +664,7 @@ def get_all_calibre_ids(library_path: Path) -> set:
 
 
 def cleanup_orphans(
-    rag: archillesRAG,
+    rag: ArchillesRAG,
     library_path: Path,
     dry_run: bool = False,
     adapter=None,
@@ -680,7 +680,7 @@ def cleanup_orphans(
     Falls back to direct SQLite access for legacy Calibre-only setups.
 
     Args:
-        rag: Initialized archillesRAG instance
+        rag: Initialized ArchillesRAG instance
         library_path: Path to the library directory
         dry_run: If True, report orphans without deleting anything
         adapter: SourceAdapter instance (preferred over direct DB access)
@@ -811,7 +811,7 @@ def create_book_id(book: Dict[str, Any]) -> str:
 
 
 def get_indexed_book_ids(
-    rag: archillesRAG,
+    rag: ArchillesRAG,
     reindex_before: datetime = None,
     reindex_missing_labels: bool = False,
     db_path: str = None
@@ -820,7 +820,7 @@ def get_indexed_book_ids(
     Get set of already indexed book IDs from RAG database.
 
     Args:
-        rag: Initialized archillesRAG instance
+        rag: Initialized ArchillesRAG instance
         reindex_before: If provided, exclude books indexed before this date
                        (so they will be re-indexed)
         reindex_missing_labels: If True, exclude books with missing page labels
@@ -890,7 +890,7 @@ def get_indexed_book_ids(
 
 def batch_reindex_comments(
     books: List[Dict[str, Any]],
-    rag: archillesRAG,
+    rag: ArchillesRAG,
     dry_run: bool = False,
     log_file: Optional[Path] = None,
     checkpoint_path: Optional[Path] = None,
@@ -1030,7 +1030,7 @@ def batch_reindex_comments(
 
 def batch_prepare(
     books: List[Dict[str, Any]],
-    rag: archillesRAG,
+    rag: ArchillesRAG,
     output_dir: str = './prepared_chunks',
     dry_run: bool = False,
     prefer_format: str = 'PDF',
@@ -1126,7 +1126,7 @@ def batch_prepare(
 
 def batch_index(
     books: List[Dict[str, Any]],
-    rag: archillesRAG,
+    rag: ArchillesRAG,
     dry_run: bool = False,
     skip_existing: bool = False,
     reindex_before: datetime = None,
@@ -1144,7 +1144,7 @@ def batch_index(
 
     Args:
         books: List of book dictionaries from get_books_by_tag/author
-        rag: Initialized archillesRAG instance
+        rag: Initialized ArchillesRAG instance
         dry_run: If True, only show what would be indexed
         skip_existing: If True, skip books that are already indexed
         reindex_before: If provided, re-index books indexed before this date
@@ -1656,7 +1656,7 @@ Profiles:
         rag = DummyRAG()
     else:
         try:
-            rag = archillesRAG(
+            rag = ArchillesRAG(
                 db_path=args.db_path,
                 reset_db=args.reset_db,
                 enable_ocr=args.enable_ocr,

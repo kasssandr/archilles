@@ -76,8 +76,8 @@ def main() -> None:
         to_process = to_process[:args.limit]
 
     # Load LanceDB table directly — skip embedding model
-    from scripts.rag_demo import archillesRAG
-    rag = archillesRAG(db_path=db_path, skip_model=True)
+    from src.archilles.engine import ArchillesRAG
+    rag = ArchillesRAG(db_path=db_path, skip_model=True)
     table = rag.store.table
     if table is None:
         print("ERROR: LanceDB table not available.")

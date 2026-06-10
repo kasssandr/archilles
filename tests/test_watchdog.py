@@ -1,7 +1,7 @@
 """Tests for the WatchdogScanner core logic.
 
 Exercises the three pieces that were previously untested:
-  1. Hash equivalence with ``archillesRAG._compute_metadata_hash`` — the
+  1. Hash equivalence with ``ArchillesRAG._compute_metadata_hash`` — the
      watchdog must produce the exact same hash as the indexer, otherwise
      every scan would show false-positive metadata changes.
   2. ``_calibre_metadata_for_hash`` SQL: author ordering, tag aggregation,
@@ -183,7 +183,7 @@ class TestCleanHtml:
 
 
 # ---------------------------------------------------------------------------
-# _compute_metadata_hash equivalence with archillesRAG
+# _compute_metadata_hash equivalence with ArchillesRAG
 # ---------------------------------------------------------------------------
 
 class TestMetadataHashEquivalence:
@@ -193,8 +193,8 @@ class TestMetadataHashEquivalence:
     @staticmethod
     def _rag_hash(meta: dict) -> str:
         # Imported lazily so test collection doesn't require heavy RAG deps
-        from scripts.rag_demo import archillesRAG
-        return archillesRAG._compute_metadata_hash(meta)
+        from src.archilles.engine import ArchillesRAG
+        return ArchillesRAG._compute_metadata_hash(meta)
 
     def test_identical_input_yields_identical_hash(self):
         meta = {
@@ -542,7 +542,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": [{"text": "x"}]}
             mock_hash.return_value = "abc123"
 
@@ -560,7 +560,7 @@ class TestAnnotationCache:
 
         # Cold call seeds cache
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": []}
             mock_hash.return_value = "deadbeef"
             scanner._annotation_changed(book, stored_hash="deadbeef")
@@ -568,7 +568,7 @@ class TestAnnotationCache:
 
         # Second call with unchanged mtime/size must NOT open the book
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             changed = scanner._annotation_changed(book, stored_hash="deadbeef")
             assert mock_get.call_count == 0
             assert changed is False  # cached hash matches stored
@@ -581,7 +581,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": [{"text": "x"}]}
             mock_hash.return_value = "current-hash"
             scanner._annotation_changed(book, stored_hash="current-hash")
@@ -597,7 +597,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": []}
             mock_hash.return_value = "v1"
             scanner._annotation_changed(book, stored_hash="v1")
@@ -606,7 +606,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake plus more bytes here to change size")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": [{"text": "new"}]}
             mock_hash.return_value = "v2"
             changed = scanner._annotation_changed(book, stored_hash="v1")
@@ -620,7 +620,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": []}
             mock_hash.return_value = "h"
             scanner._annotation_changed(book, stored_hash="h")
@@ -646,7 +646,7 @@ class TestAnnotationCache:
         book.write_bytes(b"%PDF-1.4 fake")
 
         with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get, \
-             patch("scripts.rag_demo.archillesRAG._compute_annotation_hash") as mock_hash:
+             patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
             mock_get.return_value = {"annotations": []}
             mock_hash.return_value = "x"
             scanner._annotation_changed(book, stored_hash="x")
