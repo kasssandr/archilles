@@ -63,6 +63,9 @@ archilles_rag_db/
 # Claude Code worktrees
 .claude/
 
+# Codex CLI local config (machine-specific paths)
+.codex/
+
 # Logs
 logs/
 *.log
