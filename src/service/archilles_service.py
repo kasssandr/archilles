@@ -351,11 +351,10 @@ class ArchillesService:
                 "query": query,
             }
 
-        claude_prompt = self._rag.create_claude_prompt(
+        claude_prompt = self.build_claude_prompt(
             results=results,
-            query_text=query,
+            query=query,
             expand_context=expand_context,
-            citation_config=self._citation_config,
         )
 
         return {
@@ -367,6 +366,28 @@ class ArchillesService:
             "user_prompt": claude_prompt["user"],
             "results": results,
         }
+
+    def build_claude_prompt(
+        self,
+        results: list[dict[str, Any]],
+        query: str,
+        expand_context: bool = False,
+        citation_config: Any | None = None,
+    ) -> dict[str, Any] | None:
+        """Build a Claude prompt from already-retrieved results.
+
+        Public path for consumers that previously reached through
+        ``service._rag.create_claude_prompt`` (review finding 5.15).
+        Returns None if the RAG engine cannot be initialised.
+        """
+        if not self._ensure_initialized():
+            return None
+        return self._rag.create_claude_prompt(
+            results=results,
+            query_text=query,
+            expand_context=expand_context,
+            citation_config=citation_config or self._citation_config,
+        )
 
     # ── Index operations ────────────────────────────────────────
 

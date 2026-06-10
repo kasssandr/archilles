@@ -67,3 +67,15 @@ class TestEngineMove:
         from src.archilles.engine import ArchillesRAG, LanceDBError
         assert archillesRAG is ArchillesRAG
         assert ShimError is LanceDBError
+
+
+class TestPublicPromptPath:
+    """5.15: Kein Durchgriff auf service._rag mehr aus dem Unified-Server."""
+
+    def test_service_has_public_build_claude_prompt(self):
+        from src.service.archilles_service import ArchillesService
+        assert callable(getattr(ArchillesService, "build_claude_prompt", None))
+
+    def test_unified_server_does_not_touch_rag_internals(self):
+        source = (REPO_ROOT / "src" / "calibre_mcp" / "unified_server.py").read_text(encoding="utf-8")
+        assert "service._rag" not in source

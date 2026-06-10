@@ -367,9 +367,9 @@ class UnifiedMCPServer:
                 "warning": "Citation generation skipped — RAG not initialised in default source",
             }
 
-        claude_prompt = citation_srv.service._rag.create_claude_prompt(
+        claude_prompt = citation_srv.service.build_claude_prompt(
             results=merged,
-            query_text=query,
+            query=query,
             expand_context=expand_context,
             citation_config=citation_srv.citation_config,
         )
