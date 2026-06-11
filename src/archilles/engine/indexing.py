@@ -1165,8 +1165,6 @@ class Indexer:
         Returns:
             (chunks, embeddings) — parallel lists ready for store.add_chunks()
         """
-        from src.calibre_db import CalibreDB
-
         comments_html = book_metadata.get('comments_html', '')
         if comments_html:
             sections = CalibreDB.parse_html_comment(comments_html)
