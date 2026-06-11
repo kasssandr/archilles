@@ -200,9 +200,9 @@ class _FakeModel:
 
 class TestSmartUpdateUnconditionalDelete:
     def _rag(self, tmp_path):
-        from scripts.rag_demo import archillesRAG
+        from src.archilles.engine import ArchillesRAG
 
-        rag = archillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
         rag.embedding_model = _FakeModel()
         return rag
 
@@ -319,17 +319,17 @@ class TestMinSimilarityScales:
     def test_hybrid_rrf_results_not_filtered(self):
         """Pre-fix: hybrid mode filtered RRF scores (~0.016) against a
         cosine-style threshold — anything >0.1 silently emptied results."""
-        from scripts.rag_demo import archillesRAG
+        from src.archilles.engine import ArchillesRAG
 
         results = [{"score": 0.016}, {"score": 0.032}]
-        out = archillesRAG._apply_min_similarity(results, 0.3, "hybrid")
+        out = ArchillesRAG._apply_min_similarity(results, 0.3, "hybrid")
         assert out == results
 
     def test_semantic_results_filtered(self):
-        from scripts.rag_demo import archillesRAG
+        from src.archilles.engine import ArchillesRAG
 
         results = [{"score": 0.8}, {"score": 0.2}]
-        out = archillesRAG._apply_min_similarity(results, 0.5, "semantic")
+        out = ArchillesRAG._apply_min_similarity(results, 0.5, "semantic")
         assert out == [{"score": 0.8}]
 
     def test_rerank_filter_passes_results_without_rerank_score(self):
@@ -430,9 +430,9 @@ class TestCitationPathReranking:
 def test_exact_phrase_results_have_score_type(tmp_path):
     """exact_phrase scores are raw occurrence counts — downstream consumers
     can only treat them correctly if the scale is labelled."""
-    from scripts.rag_demo import archillesRAG
+    from src.archilles.engine import ArchillesRAG
 
-    rag = archillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+    rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
     rag.store.add_chunks(
         [{"id": "B_chunk_0", "text": "Sein und Zeit ist ein Hauptwerk.",
           "book_id": "B", "chunk_type": "content"}],

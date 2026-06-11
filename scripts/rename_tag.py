@@ -48,8 +48,8 @@ def main() -> None:
     print(f"Database: {db_path}")
     print(f"Tag:      '{old_tag}' → '{new_tag}'\n")
 
-    from scripts.rag_demo import archillesRAG
-    rag = archillesRAG(db_path=db_path, skip_model=True)
+    from src.archilles.engine import ArchillesRAG
+    rag = ArchillesRAG(db_path=db_path, skip_model=True)
     table = rag.store.table
     if table is None:
         print("FEHLER: LanceDB-Tabelle nicht verfügbar.")

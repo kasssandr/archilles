@@ -1,0 +1,466 @@
+"""ARCHILLES RAG engine core.
+
+Until 2026-06 this class lived as ``archillesRAG`` inside
+``scripts/rag_demo.py`` (code review 2026-06-10, findings 4.9/8.16).
+``scripts/rag_demo.py`` is now a thin CLI wrapper around this module.
+"""
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+
+import numpy as np
+from sentence_transformers import SentenceTransformer
+
+from src.archilles.constants import ChunkType, SectionType
+from src.extractors import UniversalExtractor
+from src.storage import LanceDBStore
+
+from src.archilles.engine.search import Searcher
+from src.archilles.engine.prompting import PromptBuilder
+from src.archilles.engine.indexing import Indexer
+
+
+class LanceDBError(Exception):
+    """Raised when LanceDB operations fail."""
+    pass
+
+
+class ArchillesRAG:
+    """
+    Simple RAG system for academic books.
+
+    Features:
+    - BGE-M3 embeddings (1024 dimensions, multilingual)
+    - LanceDB with native hybrid search
+    - Exact page citations
+    - Semantic + keyword search
+    """
+
+    # Fields to copy from Calibre book_data into chunk metadata
+    _CALIBRE_FIELDS = ('author', 'title', 'year', 'publisher', 'language', 'isbn',
+                       'calibre_id', 'tags', 'comments', 'custom_fields')
+
+    # Common stop words for multilingual queries
+    STOP_WORDS = {
+        # English
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'will', 'with', 'or', 'but', 'not', 'this', 'these',
+        # German
+        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer',
+        'eines', 'einem', 'einen', 'und', 'oder', 'aber', 'von', 'zu',
+        'im', 'am', 'um', 'bei', 'mit', 'für', 'aus', 'auf', 'durch',
+        # French
+        'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'et', 'ou',
+        'mais', 'dans', 'pour', 'par', 'sur', 'avec', 'au', 'aux', 'ce',
+        'cette', 'ces', 'est', 'sont', 'être', 'avoir', 'à', 'son', 'sa',
+        # Spanish
+        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o',
+        'pero', 'en', 'por', 'para', 'con', 'sin', 'sobre', 'del', 'al',
+        'es', 'son', 'ser', 'estar', 'haber', 'ha', 'han', 'su', 'sus',
+        # Italian
+        'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', 'e', 'o',
+        'ma', 'in', 'di', 'd', 'da', 'per', 'con', 'su', 'del', 'della', 'dei',
+        'degli', 'delle', 'al', 'alla', 'ai', 'agli', 'alle', 'è', 'sono',
+        # Portuguese
+        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'e', 'ou',
+        'mas', 'em', 'de', 'por', 'para', 'com', 'sem', 'sobre', 'do',
+        'da', 'dos', 'das', 'ao', 'à', 'aos', 'às', 'é', 'são', 'seu', 'sua',
+        # Dutch
+        'de', 'het', 'een', 'en', 'of', 'maar', 'in', 'op', 'voor', 'van',
+        'met', 'door', 'bij', 'aan', 'naar', 'om', 'over', 'is', 'zijn',
+        'was', 'waren', 'heeft', 'hebben', 'had', 'hadden', 'zijn', 'der',
+        # Latin
+        'et', 'in', 'ad', 'cum', 'ex', 'ab', 'a', 'e', 'de', 'per', 'pro', 'sub',
+        'atque', 'sed', 'aut', 'vel', 'ac', 'neque', 'nec', 'est', 'sunt',
+        # Russian (Cyrillic)
+        'и', 'в', 'на', 'с', 'по', 'для', 'к', 'от', 'за', 'о',
+        'из', 'у', 'это', 'как', 'но', 'или', 'а', 'не', 'что', 'он',
+        # Greek (ancient & modern)
+        'ο', 'η', 'το', 'οι', 'τα', 'και', 'ή', 'αλλά', 'σε', 'από',
+        'για', 'με', 'στο', 'στη', 'στον', 'στην', 'του', 'της', 'των', 'εν',
+        # Hebrew (with common particles)
+        'ה', 'ו', 'ב', 'ל', 'מ', 'ש', 'של', 'את', 'על', 'אל', 'עם',
+        'כי', 'אם', 'או', 'זה', 'זאת', 'אלה', 'הוא', 'היא',
+        # Arabic
+        'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
+        'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
+    }
+
+    @staticmethod
+    def _format_tags(tags) -> str:
+        """Format tags as a comma-separated string, whether input is a list or string."""
+        return ', '.join(tags) if isinstance(tags, list) else tags
+
+    @staticmethod
+    def _resolve_book_id(book_id: str):
+        """
+        Resolve book_id to (resolved_book_id, calibre_id, source_id) tuple.
+
+        If book_id is numeric, treat it as a calibre_id *and* source_id
+        (backward compat).  Otherwise it's a plain book_id string.
+        """
+        if book_id and str(book_id).isdigit():
+            return None, int(book_id), str(book_id)
+        return book_id, None, None
+
+    @staticmethod
+    def _format_section_citation(metadata: Dict[str, Any]) -> str:
+        """
+        Build a section/chapter citation string from metadata.
+        Returns empty string if no section info is available.
+        """
+        section = metadata.get('section')
+        section_title = metadata.get('section_title')
+
+        if section and section_title:
+            return f"Section {section} - {section_title}"
+        if section:
+            return f"Section {section}"
+        if section_title:
+            return section_title
+        if metadata.get('chapter'):
+            return metadata['chapter']
+        return ''
+
+    @staticmethod
+    def _format_section_meta(metadata: Dict[str, Any], label: str = "Kapitel") -> str:
+        """
+        Build a section/chapter metadata string for XML/inline output.
+        Returns empty string if no section info is available.
+        """
+        section = metadata.get('section')
+        section_title = metadata.get('section_title')
+
+        if section and section_title:
+            return f"{label}: {section} - {section_title}"
+        if section_title:
+            return f"{label}: {section_title}"
+        if section:
+            return f"Abschnitt: {section}"
+        if metadata.get('chapter'):
+            return f"{label}: {metadata['chapter']}"
+        return ''
+
+    @staticmethod
+    def _resolve_page_info(metadata: Dict[str, Any]):
+        """
+        Resolve the best page value and optional warning from metadata.
+        Returns (page_value_or_None, is_pdf_page: bool, warning_or_None).
+
+        page_value is the raw page number/label (e.g. "213", "xiv").
+        is_pdf_page indicates whether this is a PDF page (vs. printed/label).
+        """
+        page_label = metadata.get('page_label')
+        printed_page = metadata.get('printed_page')
+        printed_conf = metadata.get('printed_page_confidence', 0.0)
+
+        if page_label:
+            return page_label, False, None
+
+        if printed_page and printed_conf >= 0.8:
+            warning = None
+            if printed_conf < 0.9:
+                warning = f"Seitenzahl-Konfidenz: {printed_conf:.2f} - bitte verifizieren"
+            return printed_page, False, warning
+
+        page = metadata.get('page') or metadata.get('page_number')
+        if page:
+            warning = None
+            if printed_page:
+                warning = f"Gedruckte Seitenzahl unsicher (Konfidenz: {printed_conf:.2f})"
+            return page, True, warning
+
+        return None, False, None
+
+    _CHUNK_META_KEYS = [
+        ('page', 'page_number'), ('page_label', 'page_label'),
+        ('chapter', 'chapter'), ('section', 'section'),
+        ('section_title', 'section_title'), ('section_type', 'section_type'),
+        ('language', 'language'),
+    ]
+
+    def __init__(
+        self,
+        db_path: str = "./archilles_rag_db",
+        model_name: str = None,  # Will be set by profile or default to BGE-M3
+        reset_db: bool = False,
+        enable_ocr: bool = False,
+        force_ocr: bool = False,
+        ocr_backend: str = "auto",
+        ocr_language: str = "deu+eng",
+        profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
+        use_modular_pipeline: bool = False,  # Future: use modular architecture
+        hierarchical: bool = False,  # Enable parent-child chunking
+        adapter=None,  # Optional SourceAdapter for metadata lookup
+        skip_model: bool = False,  # Skip loading embedding model (for prepare-only mode)
+        prepare_chunk_size: int = 1024,  # Phase-1 chunk size (tokens), only used in prepare_book()
+        prepare_overlap: int = 128,      # Phase-1 chunk overlap (tokens)
+    ):
+        """
+        Initialize RAG system.
+
+        Args:
+            db_path: Path to LanceDB storage
+            model_name: Sentence transformer model (overrides profile if set)
+            reset_db: If True, delete and recreate the database
+            enable_ocr: Enable OCR for scanned PDFs (auto-detect)
+            force_ocr: Force OCR even for digital PDFs
+            ocr_backend: OCR backend (auto, tesseract, lighton, olmocr)
+            ocr_language: Language codes for Tesseract
+            profile: Hardware profile (minimal/balanced/maximal) - auto-detects if None
+            use_modular_pipeline: Use ModularPipeline architecture (future)
+            hierarchical: Enable parent-child chunking (parents ~2048, children ~512 tokens)
+        """
+        self.hierarchical = hierarchical
+        self.use_modular_pipeline = use_modular_pipeline
+        self.profile_name = profile
+        self._adapter = adapter  # SourceAdapter (or None for legacy CalibreDB path)
+        # Phase-1 chunk settings (used in prepare_book(), not in index_book()).
+        # Larger than the live default to keep prepared JSONL volume manageable
+        # for cloud-GPU embedding later — bestehender Live-Index bleibt unberuehrt.
+        self._prepare_chunk_size = prepare_chunk_size
+        self._prepare_overlap = prepare_overlap
+        # Determine model and settings from profile
+        import torch
+        cuda_available = torch.cuda.is_available()
+
+        if profile:
+            from src.archilles.profiles import get_profile
+            profile_config = get_profile(profile)
+            if model_name is None:
+                model_name = profile_config.embedding_model
+            self.batch_size = profile_config.batch_size
+            # Auto-detect: use CUDA if profile wants it AND it's available
+            if profile_config.embedding_device == "cuda" and cuda_available:
+                self.device = "cuda"
+            else:
+                self.device = "cpu"
+                if profile_config.embedding_device == "cuda" and not cuda_available:
+                    print(f"  ⚠️  CUDA not available, falling back to CPU")
+            print(f"Initializing ARCHILLES RAG (profile: {profile})...")
+        else:
+            # Default to BGE-M3 and auto-detect device
+            if model_name is None:
+                model_name = "BAAI/bge-m3"
+            self.batch_size = 8  # Conservative default for 4GB GPUs
+            self.device = 'cuda' if cuda_available else 'cpu'
+            print(f"Initializing ARCHILLES RAG...")
+
+        print(f"  Database: {db_path}")
+        print(f"  Model: {model_name}")
+
+        # Map string backend to enum
+        from src.extractors import OCRBackend
+        backend_map = {
+            "auto": OCRBackend.AUTO,
+            "tesseract": OCRBackend.TESSERACT,
+            "lighton": OCRBackend.LIGHTON,
+            "olmocr": OCRBackend.OLMOCR,
+        }
+        ocr_backend_enum = backend_map.get(ocr_backend.lower(), OCRBackend.AUTO)
+
+        # Initialize extractor with OCR options
+        self.extractor = UniversalExtractor(
+            chunk_size=512,
+            overlap=128,
+            enable_ocr=enable_ocr,
+            force_ocr=force_ocr,
+            ocr_backend=ocr_backend_enum,
+            ocr_language=ocr_language
+        )
+
+        if enable_ocr or force_ocr:
+            print(f"  OCR: {'force' if force_ocr else 'auto-detect'} ({ocr_backend})")
+
+        # Initialize embedding model (skip for prepare-only mode)
+        if skip_model:
+            self.embedding_model = None
+            print(f"  Embedding model: skipped (prepare-only mode)")
+        else:
+            print(f"  Loading embedding model... (first time: ~500 MB download)")
+            self.embedding_model = SentenceTransformer(model_name, device=self.device)
+            if self.device == "cuda":
+                # FP16: halbiert VRAM-Druck, ~1.3-1.8x schneller auf GPUs ohne
+                # Tensor Cores (T1000). encode() liefert dann FP16-Numpy zurueck —
+                # LanceDB erwartet FP32, daher Patch der encode-Methode.
+                self.embedding_model = self.embedding_model.half()
+                _orig_encode = self.embedding_model.encode
+
+                def _encode_fp32(*args, **kwargs):
+                    out = _orig_encode(*args, **kwargs)
+                    if isinstance(out, np.ndarray) and out.dtype != np.float32:
+                        out = out.astype(np.float32)
+                    return out
+
+                self.embedding_model.encode = _encode_fp32
+                print(f"  FP16 active (CUDA) — halbierter VRAM, schnellere Inferenz")
+            print(f"  Model loaded: {model_name} (device: {self.device})")
+
+        # Handle database reset if requested
+        self.db_path = Path(db_path)
+        if reset_db:
+            print(f"  Resetting database (deleting existing data)...")
+            import shutil
+            if self.db_path.exists():
+                shutil.rmtree(self.db_path)
+                print(f"    Deleted {db_path}")
+
+        # Initialize LanceDB
+        try:
+            self.store = LanceDBStore(db_path=str(self.db_path))
+            print(f"  LanceDB ready")
+
+            # Count chunks (cached — refreshed via _refresh_chunk_count())
+            self._chunk_count = self.store.count()
+            print(f"  Current index: {self._chunk_count} chunks")
+
+        except Exception as e:
+            raise LanceDBError(
+                f"LanceDB initialization failed.\n"
+                f"Error: {e}\n\n"
+                f"To recover, run with --reset-db flag:\n"
+                f"  python scripts/batch_index.py --tag \"YourTag\" --reset-db\n\n"
+                f"WARNING: This will delete the entire index. You'll need to re-index all books."
+            )
+
+        print(f"  Native hybrid search ready (vector + full-text)\n")
+
+        self.searcher = Searcher(self)
+        self.prompt_builder = PromptBuilder(self)
+        self.indexer = Indexer(self)
+
+    # ------------------------------------------------------------------
+    # Indexing delegators (Indexer component)
+    # ------------------------------------------------------------------
+
+    def index_book(self, book_path: str, book_id: str = None, force: bool = False, phase: str = 'phase2') -> Dict[str, Any]:
+        return self.indexer.index_book(book_path, book_id=book_id, force=force, phase=phase)
+
+    def prepare_book(self, book_path: str, book_id: str = None,
+                     output_dir: str = "./prepared_chunks") -> Dict[str, Any]:
+        return self.indexer.prepare_book(book_path, book_id=book_id, output_dir=output_dir)
+
+    def embed_prepared(self, input_dir: str, mode: str = 'local',
+                       host: str = None, port: int = 8000, token: str = None,
+                       batch_size: int = 100, use_gzip: bool = True,
+                       profile: str = None, force: bool = False) -> Dict[str, Any]:
+        return self.indexer.embed_prepared(
+            input_dir, mode=mode, host=host, port=port, token=token,
+            batch_size=batch_size, use_gzip=use_gzip, profile=profile, force=force,
+        )
+
+    def _update_metadata_only(self, book_id: str, book_metadata: Dict[str, Any],
+                               new_hash: str, state: Dict[str, Any],
+                               annotations: Optional[List[Dict[str, Any]]] = None,
+                               annotation_hash: Optional[str] = None,
+                               book_path: Optional[Path] = None) -> Dict[str, Any]:
+        return self.indexer._update_metadata_only(
+            book_id, book_metadata, new_hash, state,
+            annotations=annotations, annotation_hash=annotation_hash, book_path=book_path,
+        )
+
+    def _extract_calibre_metadata(self, file_path: Path) -> Dict[str, Any]:
+        return self.indexer._extract_calibre_metadata(file_path)
+
+    def _build_comment_chunks(
+        self,
+        book_metadata: Dict[str, Any],
+        book_id: str,
+        book_format: str,
+        metadata_hash: str,
+        embed: bool = True,
+    ) -> tuple:
+        return self.indexer._build_comment_chunks(
+            book_metadata, book_id, book_format, metadata_hash, embed=embed,
+        )
+
+    @staticmethod
+    def _compute_metadata_hash(book_metadata: Dict[str, Any]) -> str:
+        # Signatur 1:1 übernehmen; test_watchdog + batch_index rufen klassenseitig auf
+        return Indexer._compute_metadata_hash(book_metadata)
+
+    @staticmethod
+    def _compute_annotation_hash(annotations: List[Dict[str, Any]]) -> str:
+        # WICHTIG: test_watchdog patcht ArchillesRAG._compute_annotation_hash (8×) und
+        # watchdog.py ruft es klassenseitig auf — der Delegator ist das Patch-Target.
+        return Indexer._compute_annotation_hash(annotations)
+
+
+
+    def query(
+        self,
+        query_text: str,
+        top_k: int = 10,
+        mode: Literal['semantic', 'keyword', 'hybrid'] = 'hybrid',
+        language: str = None,
+        book_id: str = None,
+        exact_phrase: bool = False,
+        tag_filter: List[str] = None,
+        section_filter: str = SectionType.MAIN,
+        chunk_type_filter: str = ChunkType.CONTENT,
+        max_per_book: int = 2,
+        min_similarity: float = 0.0
+    ) -> List[Dict[str, Any]]:
+        return self.searcher.query(
+            query_text,
+            top_k=top_k,
+            mode=mode,
+            language=language,
+            book_id=book_id,
+            exact_phrase=exact_phrase,
+            tag_filter=tag_filter,
+            section_filter=section_filter,
+            chunk_type_filter=chunk_type_filter,
+            max_per_book=max_per_book,
+            min_similarity=min_similarity,
+        )
+
+    def _exact_phrase_search(
+        self,
+        query_text: str,
+        top_k: int,
+        language: str = None,
+        book_id: str = None,
+        chunk_type_filter: str = None
+    ) -> List[Dict[str, Any]]:
+        return self.searcher._exact_phrase_search(
+            query_text,
+            top_k,
+            language=language,
+            book_id=book_id,
+            chunk_type_filter=chunk_type_filter,
+        )
+
+    def print_results(self, results: List[Dict[str, Any]], query_text: str = ""):
+        return self.searcher.print_results(results, query_text=query_text)
+
+    @staticmethod
+    def _apply_min_similarity(results: List[Dict[str, Any]], min_similarity: float,
+                              mode: str) -> List[Dict[str, Any]]:
+        return Searcher._apply_min_similarity(results, min_similarity, mode)
+
+    def export_to_markdown(
+        self,
+        results: List[Dict[str, Any]],
+        query_text: str,
+        output_file: str = None
+    ) -> str:
+        return self.prompt_builder.export_to_markdown(results, query_text, output_file)
+
+    def create_claude_prompt(
+        self,
+        results: List[Dict[str, Any]],
+        query_text: str,
+        expand_context: bool = False,
+        expansion_chars: int = 400,
+        citation_config=None,
+    ) -> Dict[str, str]:
+        return self.prompt_builder.create_claude_prompt(
+            results,
+            query_text,
+            expand_context=expand_context,
+            expansion_chars=expansion_chars,
+            citation_config=citation_config,
+        )
+
+

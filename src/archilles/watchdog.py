@@ -15,7 +15,7 @@ Scan performance:
     cache; subsequent scans only reopen books whose signature changed, so
     repeat scans on a stable library finish in seconds.
 
-Delta updates delegate to archillesRAG.index_book(), which already handles
+Delta updates delegate to ArchillesRAG.index_book(), which already handles
 smart partial re-indexing (metadata-only, annotations-only, or both).
 
 Called from:
@@ -141,7 +141,7 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
 
 
 def _compute_metadata_hash(meta: dict[str, Any]) -> str:
-    """Replicate ``archillesRAG._compute_metadata_hash`` without importing rag_demo.
+    """Replicate ``ArchillesRAG._compute_metadata_hash`` without importing rag_demo.
 
     Tags are sorted regardless of input type (list or comma-string) so the
     hash is independent of Calibre's internal tag ordering — otherwise every
@@ -279,7 +279,7 @@ class WatchdogScanner:
         ----------
         dry_run                Report changes only; do not modify LanceDB or queue.
         queue_new              Write new Calibre IDs to index_queue.json (default True).
-        index_new              Index new books immediately via archillesRAG (full content).
+        index_new              Index new books immediately via ArchillesRAG (full content).
         index_metadata_only    For new books: create a fast PHASE1_METADATA stub instead
                                of full content indexing.  Mutually exclusive with index_new.
         index_fulltext_pending Find books that have only PHASE1_METADATA stubs (no content
@@ -558,17 +558,17 @@ class WatchdogScanner:
         """Load stored hashes from LanceDB without loading the embedding model."""
         try:
             # Import lazily so the watchdog can be imported without heavy deps
-            from scripts.rag_demo import archillesRAG
-            rag = archillesRAG(db_path=self.db_path, skip_model=True)
+            from src.archilles.engine import ArchillesRAG
+            rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
             return rag.store.get_hashes_for_indexed_books()
         except Exception as exc:
             logger.warning(f"Could not load indexed hashes: {exc}")
             return {}
 
     def _load_rag(self):
-        """Load a full archillesRAG instance (with embedding model)."""
-        from scripts.rag_demo import archillesRAG
-        return archillesRAG(db_path=self.db_path)
+        """Load a full ArchillesRAG instance (with embedding model)."""
+        from src.archilles.engine import ArchillesRAG
+        return ArchillesRAG(db_path=self.db_path)
 
     def _annotation_files_signature(self, file_path: Path) -> list[int]:
         """Return a (book_mtime_ns, book_size, viewer_mtime_ns, viewer_size) tuple.
@@ -656,14 +656,14 @@ class WatchdogScanner:
 
         try:
             from src.calibre_mcp.annotations import get_combined_annotations
-            from scripts.rag_demo import archillesRAG
+            from src.archilles.engine import ArchillesRAG
             result = get_combined_annotations(
                 book_path=str(file_path),
                 include_pdf=True,
                 exclude_toc_markers=True,
                 min_length=20,
             )
-            current_hash = archillesRAG._compute_annotation_hash(
+            current_hash = ArchillesRAG._compute_annotation_hash(
                 result.get('annotations', [])
             )
         except Exception as exc:
@@ -918,7 +918,7 @@ class ZoteroWatchdogScanner:
       annotations_changed attachment dateModified changed (covers PDF + DB annotations)
 
     Phase 1 is pure SQLite + in-memory hash comparison — no book files are opened.
-    Phase 2 re-indexes changed items via archillesRAG.index_book().
+    Phase 2 re-indexes changed items via ArchillesRAG.index_book().
     Phase 3 queues or immediately indexes new items.
     """
 
@@ -1093,16 +1093,16 @@ class ZoteroWatchdogScanner:
     def _load_indexed_hashes(self) -> dict[str, dict[str, str]]:
         """Load stored hashes from LanceDB using string book_id as key."""
         try:
-            from scripts.rag_demo import archillesRAG
-            rag = archillesRAG(db_path=self.db_path, skip_model=True)
+            from src.archilles.engine import ArchillesRAG
+            rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
             return rag.store.get_hashes_by_book_id()
         except Exception as exc:
             logger.warning("Could not load indexed hashes: %s", exc)
             return {}
 
     def _load_rag(self):
-        from scripts.rag_demo import archillesRAG
-        return archillesRAG(db_path=self.db_path)
+        from src.archilles.engine import ArchillesRAG
+        return ArchillesRAG(db_path=self.db_path)
 
     def _load_annotation_cache(self) -> dict[str, str]:
         """Lazy-load the Zotero annotation cache ({item_key: att_modified_at})."""

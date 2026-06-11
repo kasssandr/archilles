@@ -73,7 +73,8 @@ Consumers: MCP Server | Web UI (Streamlit) | CLI
 - **`src/service/archilles_service.py`** — Single facade used by MCP server, web UI, and CLI. Start here when adding new features.
 - **`src/calibre_mcp/server.py`** — MCP server exposing 10 tools (search, metadata, citations, annotations, stats). Carefully manages stdout/stderr to avoid JSON-RPC protocol corruption.
 - **`mcp_server.py`** — Entry point for Claude Desktop MCP integration.
-- **`scripts/rag_demo.py`** — Primary CLI (2,479 lines). Index, query, stats, list-indexed.
+- **`src/archilles/engine/`** — Core RAG engine: `ArchillesRAG` facade (`core.py`) composing `Indexer` (`indexing.py`), `Searcher` (`search.py`) and `PromptBuilder` (`prompting.py`). Start here for engine changes.
+- **`scripts/rag_demo.py`** — Primary CLI, thin wrapper around the engine. Index, query, stats, list-indexed.
 
 ### Search Architecture (Two-Stage)
 

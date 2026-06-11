@@ -236,7 +236,7 @@ The `search_annotations` MCP tool queries both types via the `'annotations_and_c
 The hybrid search logic is implemented across two layers:
 
 - **`LanceDBStore.hybrid_search()`** handles the database-level search: vector similarity + BM25 full-text search with RRF fusion, section/chunk/language filtering
-- **`archillesRAG.query()`** in `scripts/rag_demo.py` orchestrates the high-level search: mode selection (semantic/keyword/hybrid), exact phrase matching, tag filtering, result diversification (max_per_book), minimum similarity thresholds, and context expansion
+- **`ArchillesRAG.query()`** in `src/archilles/engine/` (delegating to `Searcher` in `search.py`) orchestrates the high-level search: mode selection (semantic/keyword/hybrid), exact phrase matching, tag filtering, result diversification (max_per_book), minimum similarity thresholds, and context expansion
 
 There is no separate `hybrid.py` file—the retrieval logic is distributed between the storage layer and the RAG class, unified through the service layer.
 
@@ -305,7 +305,7 @@ Streamlit-based interface for users without Claude Desktop. Provides search with
 
 #### CLI (`scripts/rag_demo.py`, `scripts/batch_index.py`)
 
-`rag_demo.py` provides the `archillesRAG` class (the core RAG implementation) and a CLI for single-book indexing, search queries, and result export.
+The RAG engine lives in `src/archilles/engine/` (`ArchillesRAG` facade composing `Indexer`, `Searcher` and `PromptBuilder`); `rag_demo.py` is a thin CLI wrapper around it for single-book indexing, search queries, and result export.
 
 `batch_index.py` handles batch indexing operations with tag-based filtering (`--tag`), author filtering (`--author`), dry-run previews, skip-existing for interrupted sessions, forced re-indexing (`--force`), hardware profile selection (`--profile`), checkpoint-based resume for long-running operations, format preference (`--prefer-format pdf|epub|mobi|azw3`), and orphan cleanup (`--cleanup-orphans` removes index entries for books deleted from Calibre).
 
@@ -477,6 +477,11 @@ archilles/
 │   │   └── folder_adapter.py      # Plain directory fallback
 │   │
 │   ├── archilles/                 # Modular pipeline infrastructure
+│   │   ├── engine/                # Core RAG engine
+│   │   │   ├── core.py            # ArchillesRAG facade (composition + delegators)
+│   │   │   ├── indexing.py        # Indexer (index/prepare/embed, metadata, hashing)
+│   │   │   ├── search.py          # Searcher (4 search modes, result formatting)
+│   │   │   └── prompting.py       # PromptBuilder (Claude prompts, XML, markdown export)
 │   │   ├── pipeline.py            # ModularPipeline orchestration
 │   │   ├── profiles.py            # Hardware profiles (minimal/balanced/maximal)
 │   │   ├── hardware.py            # Hardware detection (GPU, VRAM)
@@ -529,7 +534,7 @@ archilles/
 │   └── calibre_db.py              # Read-only Calibre metadata.db access
 │
 ├── scripts/
-│   ├── rag_demo.py                # archillesRAG class + CLI (search, index, export)
+│   ├── rag_demo.py                # Thin CLI wrapper around the engine (search, index, export)
 │   ├── web_ui.py                  # Streamlit Web UI
 │   ├── batch_index.py             # Batch indexing with tag/author filters
 │   └── chunk_inspector.py         # Diagnostic: chunk quality, boundaries, TOC alignment

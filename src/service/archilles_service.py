@@ -1,7 +1,7 @@
 """
 Central service layer for ARCHILLES.
 
-Wraps archillesRAG and provides a clean interface used by:
+Wraps ArchillesRAG and provides a clean interface used by:
 - MCP server (src/calibre_mcp/server.py)
 - Web UI (scripts/web_ui.py)
 - CLI (scripts/rag_demo.py)
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from src.archilles.constants import ChunkType, SectionType
+from src.retriever.results import diversify_results, matches_tag_filter  # noqa: F401  (Re-Export — Alt-Abnehmer importieren von hier)
 
 logger = logging.getLogger(__name__)
 
@@ -61,44 +62,6 @@ def _redirect_stdout_to_stderr():
             if _redirect_depth == 0:
                 sys.stdout = _redirect_original_stdout
                 _redirect_original_stdout = None
-
-
-def matches_tag_filter(result_tags: str, tag_filter: list[str]) -> bool:
-    """True if a result's tag string contains ALL requested tags (AND logic).
-
-    The MCP tool schema documents AND semantics ("Results must match ALL
-    tags"); the previous implementation used OR (code review finding 8.1).
-    Comparison is case-insensitive on whole tag names, not substrings.
-    """
-    if not result_tags:
-        return False
-    result_tag_set = {t.strip().lower() for t in result_tags.split(',')}
-    return all(ft.strip().lower() in result_tag_set for ft in tag_filter)
-
-
-def diversify_results(
-    results: list[dict[str, Any]],
-    max_per_book: int,
-    top_k: int,
-) -> list[dict[str, Any]]:
-    """Limit results to *max_per_book* per book, keeping top-ranked first."""
-    diversified: list[dict[str, Any]] = []
-    book_counts: dict[str, int] = {}
-
-    for r in results:
-        metadata = r.get("metadata", {})
-        bid = metadata.get("book_id", r.get("book_id", "unknown"))
-        count = book_counts.get(bid, 0)
-        if count < max_per_book:
-            diversified.append(r)
-            book_counts[bid] = count + 1
-        if len(diversified) >= top_k:
-            break
-
-    for i, r in enumerate(diversified):
-        r["rank"] = i + 1
-
-    return diversified
 
 
 def _filter_by_rerank_score(results: list[dict], min_similarity: float) -> list[dict]:
@@ -204,15 +167,15 @@ class ArchillesService:
             self._init_attempted = True
 
             try:
-                from scripts.rag_demo import archillesRAG
+                from src.archilles.engine import ArchillesRAG
             except ImportError:
-                logger.warning("archillesRAG not available (import failed)")
+                logger.warning("ArchillesRAG not available (import failed)")
                 return False
 
             try:
                 logger.info("Initializing RAG system (lazy loading)...")
                 with _redirect_stdout_to_stderr():
-                    self._rag = archillesRAG(**self._config)
+                    self._rag = ArchillesRAG(**self._config)
                 logger.info(f"RAG system initialized: {self._config['db_path']}")
                 return True
             except Exception as e:
@@ -270,7 +233,7 @@ class ArchillesService:
         """
         Search for relevant passages.
 
-        Delegates to archillesRAG.query() and optionally applies
+        Delegates to ArchillesRAG.query() and optionally applies
         cross-encoder reranking before returning results.
 
         Returns:
@@ -388,11 +351,10 @@ class ArchillesService:
                 "query": query,
             }
 
-        claude_prompt = self._rag.create_claude_prompt(
+        claude_prompt = self.build_claude_prompt(
             results=results,
-            query_text=query,
+            query=query,
             expand_context=expand_context,
-            citation_config=self._citation_config,
         )
 
         return {
@@ -404,6 +366,28 @@ class ArchillesService:
             "user_prompt": claude_prompt["user"],
             "results": results,
         }
+
+    def build_claude_prompt(
+        self,
+        results: list[dict[str, Any]],
+        query: str,
+        expand_context: bool = False,
+        citation_config: Any | None = None,
+    ) -> dict[str, Any]:
+        """Build a Claude prompt from already-retrieved results.
+
+        Public path for consumers that previously reached through
+        ``service._rag.create_claude_prompt`` (review finding 5.15).
+        On engine-init failure returns an error dict with empty prompts.
+        """
+        if not self._ensure_initialized():
+            return {"error": "RAG system not available", "system": "", "user": ""}
+        return self._rag.create_claude_prompt(
+            results=results,
+            query_text=query,
+            expand_context=expand_context,
+            citation_config=citation_config or self._citation_config,
+        )
 
     # ── Index operations ────────────────────────────────────────
 

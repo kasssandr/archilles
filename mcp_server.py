@@ -37,11 +37,11 @@ sys.stdout = sys.stderr
 import asyncio
 import json
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Repo-Wurzel auf den Pfad — kanonische Import-Wurzel ist `src.*` (Review 5.14)
+sys.path.insert(0, str(Path(__file__).parent))
 
-from calibre_mcp.server import CalibreMCPServer, create_mcp_tools
-from calibre_mcp.unified_server import UnifiedMCPServer, create_unified_tools
+from src.calibre_mcp.server import CalibreMCPServer, create_mcp_tools
+from src.calibre_mcp.unified_server import UnifiedMCPServer, create_unified_tools
 
 # Restore stdout for JSON-RPC communication
 sys.stdout = _original_stdout
@@ -520,10 +520,7 @@ def _init_legacy_single_source():
     if enable_reranking:
         logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
 
-    try:
-        from citation.config import CitationConfig
-    except ImportError:
-        from src.citation.config import CitationConfig
+    from src.citation.config import CitationConfig
     citation_config = CitationConfig.from_dict(config.get('citation', {}))
     logger.info(f"Citation style: {citation_config.label} (locale: {citation_config.locale})")
 
