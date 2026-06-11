@@ -77,5 +77,7 @@ class TestPublicPromptPath:
         assert callable(getattr(ArchillesService, "build_claude_prompt", None))
 
     def test_unified_server_does_not_touch_rag_internals(self):
+        # Quelltext-Ratsche: verhindert Rückfall auf den privaten Durchgriff
+        # service._rag, nachdem 5.15 den öffentlichen Pfad eingeführt hat.
         source = (REPO_ROOT / "src" / "calibre_mcp" / "unified_server.py").read_text(encoding="utf-8")
         assert "service._rag" not in source

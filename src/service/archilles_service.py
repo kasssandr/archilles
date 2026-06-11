@@ -373,15 +373,15 @@ class ArchillesService:
         query: str,
         expand_context: bool = False,
         citation_config: Any | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """Build a Claude prompt from already-retrieved results.
 
         Public path for consumers that previously reached through
         ``service._rag.create_claude_prompt`` (review finding 5.15).
-        Returns None if the RAG engine cannot be initialised.
+        On engine-init failure returns an error dict with empty prompts.
         """
         if not self._ensure_initialized():
-            return None
+            return {"error": "RAG system not available", "system": "", "user": ""}
         return self._rag.create_claude_prompt(
             results=results,
             query_text=query,
