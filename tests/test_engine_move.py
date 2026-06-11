@@ -147,3 +147,18 @@ class TestFacadeComposition:
         assert prompt['num_sources'] == 1
         assert '<system_instructions>' in prompt['system']
         assert 'Testbuch' in prompt['user']
+
+    def test_indexer_composed(self, tmp_path):
+        from src.archilles.engine import ArchillesRAG
+        from src.archilles.engine.indexing import Indexer
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        assert isinstance(rag.indexer, Indexer)
+        # Extern genutzte Index-API (watchdog, batch_index, Tests):
+        assert callable(rag.index_book)
+        assert callable(rag.prepare_book)
+        assert callable(rag.embed_prepared)
+        assert callable(rag._update_metadata_only)
+        assert callable(rag._extract_calibre_metadata)
+        assert callable(rag._build_comment_chunks)
+        assert callable(rag._compute_metadata_hash)
+        assert callable(rag._compute_annotation_hash)
