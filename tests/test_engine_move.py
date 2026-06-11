@@ -116,3 +116,11 @@ class TestFacadeComposition:
         output_file = str(tmp_path / "export_test.md")
         returned = rag.export_to_markdown(results, query_text="Theologie", output_file=output_file)
         assert Path(returned).exists()
+
+    def test_prompt_builder_composed(self, tmp_path):
+        from src.archilles.engine import ArchillesRAG
+        from src.archilles.engine.prompting import PromptBuilder
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        assert isinstance(rag.prompt_builder, PromptBuilder)
+        assert callable(rag.create_claude_prompt)
+        assert callable(rag.export_to_markdown)
