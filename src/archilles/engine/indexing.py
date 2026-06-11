@@ -14,6 +14,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.archilles.constants import ChunkType
+from src.calibre_db import CalibreDB
 from src.calibre_mcp.annotations import get_combined_annotations
 
 
@@ -402,8 +403,6 @@ class Indexer:
             return {}
 
         # ── Legacy path: direct CalibreDB access ───────────────
-        from src.calibre_db import CalibreDB
-
         metadata = {}
         try:
             library_path = CalibreDB.find_library_path(file_path)
@@ -1046,7 +1045,7 @@ class Indexer:
             embedder.load_model()  # checks health
             print(f"  Remote embedder: {host}:{port}")
         else:
-            # Use local SentenceTransformer (already loaded in self.embedding_model)
+            # Use local SentenceTransformer (already loaded in self._rag.embedding_model)
             if self._rag.embedding_model is None:
                 raise RuntimeError("No embedding model loaded. Don't use --skip-model with local embed mode.")
             print(f"  Local embedder: {self._rag.device}, batch_size={self._rag.batch_size}")
