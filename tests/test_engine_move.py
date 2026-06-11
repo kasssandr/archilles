@@ -81,3 +81,18 @@ class TestPublicPromptPath:
         # service._rag, nachdem 5.15 den öffentlichen Pfad eingeführt hat.
         source = (REPO_ROOT / "src" / "calibre_mcp" / "unified_server.py").read_text(encoding="utf-8")
         assert "service._rag" not in source
+
+
+class TestFacadeComposition:
+    """Schritt 2: Fassade komponiert die Engine-Teile; öffentliche API unverändert."""
+
+    def test_searcher_composed(self, tmp_path):
+        from src.archilles.engine import ArchillesRAG
+        from src.archilles.engine.search import Searcher
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        assert isinstance(rag.searcher, Searcher)
+        # Extern genutzte Such-API bleibt auf der Fassade erreichbar:
+        assert callable(rag.query)
+        assert callable(rag._exact_phrase_search)
+        assert callable(rag._apply_min_similarity)
+        assert callable(rag.print_results)
