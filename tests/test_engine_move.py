@@ -124,3 +124,26 @@ class TestFacadeComposition:
         assert isinstance(rag.prompt_builder, PromptBuilder)
         assert callable(rag.create_claude_prompt)
         assert callable(rag.export_to_markdown)
+
+    def test_create_claude_prompt_exercises_backrefs(self, tmp_path):
+        """Regression: create_claude_prompt läuft durch die Rückreferenzen
+        _rag._format_section_meta/_rag._resolve_page_info (Bug-Klasse Task 5)."""
+        from src.archilles.engine import ArchillesRAG
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        results = [
+            {
+                'rank': 1,
+                'similarity': 0.75,
+                'text': 'Dies ist ein Testtext über Theologie und Geschichte.',
+                'metadata': {
+                    'author': 'Testautor',
+                    'book_title': 'Testbuch',
+                    'section_title': 'Kapitel Eins',
+                    'page_number': 42,
+                },
+            }
+        ]
+        prompt = rag.create_claude_prompt(results, "Theologie")
+        assert prompt['num_sources'] == 1
+        assert '<system_instructions>' in prompt['system']
+        assert 'Testbuch' in prompt['user']
