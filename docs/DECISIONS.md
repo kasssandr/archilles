@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 4. Mai 2026 (ADR-025: Scheduled Routines — pragmatischer Schritt A vor Watchdog-Generalisierung)
+**Letzte Überarbeitung:** 11. Juni 2026 (ADR-026: Engine-Umzug nach src/archilles/engine mit Fassaden-Zerlegung)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -487,6 +487,27 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 - Bei Port-Konflikt: klare Fehlermeldung mit Lösungshinweis, kein stummes Scheitern
 - Windows-Firewall-Dialog erscheint beim ersten Start — für localhost kein Sicherheitsrisiko
 - Event-Loop-Blocking bei langen RAG-Queries wird durch `run_in_executor()` verhindert
+
+---
+
+### ADR-026: Engine-Umzug nach src/archilles/engine mit Fassaden-Zerlegung (Juni 2026)
+
+**Kontext:** Das vollständige Code-Review vom 10. Juni 2026 (~160 Befunde, `docs/internal/CODE_REVIEW_2026-06-10.md`) bestätigte eine Architektur-Inversion als strukturellen Hauptbefund (4.9/8.16): Die gesamte RAG-Engine — die Klasse `archillesRAG` mit ~2.600 Zeilen für Suche, drei Indexierungspfade, Smart-Update, Prepare/Embed, Prompt-Bau und Markdown-Export — lebte im CLI-Skript `scripts/rag_demo.py`. Produktionscode in `src/` (Watchdog, batch_index, Service) importierte aus `scripts/` (7.18); der MCP-Entry-Point legte zudem zwei Import-Wurzeln an, sodass dieselben Module unter zwei Identitäten geladen werden konnten (5.14), und der Unified-Server griff über `service._rag` auf private Interna durch (5.15).
+
+**Entscheidung:** Die Engine zieht nach `src/archilles/engine/` um und wird entlang der natürlichen Nähte zerlegt: eine schlanke Fassade `ArchillesRAG` (`core.py`, 466 Zeilen) komponiert `Indexer` (`indexing.py`), `Searcher` (`search.py`) und `PromptBuilder` (`prompting.py`). `scripts/rag_demo.py` bleibt als dünner CLI-Wrapper (~480 Zeilen) mit Kompat-Alias `archillesRAG` erhalten. Begleitend: kanonische `src.*`-Import-Wurzel im Entry-Point, öffentliche Service-Methode `build_claude_prompt` statt `_rag`-Durchgriff, Bruch des Import-Zyklus service↔rag_demo über die neutrale Schicht `src/retriever/results.py`.
+
+**Begründung und Vorgehensentscheidungen:**
+- **Erst 1:1-Umzug, dann Zerlegung (getrennte Commits):** Der mechanische Move (2.591 Zeilen byte-identisch, verifiziert per Diff) trennt das Umzugsrisiko vom Zerlegungsrisiko; jeder Schritt ist einzeln bisect- und revertierbar.
+- **Rückreferenz-Muster statt Dependency Injection:** Die Komponenten halten `self._rag` und lesen geteilten Zustand (`store`, `embedding_model`, …) über die Fassade. Damit bleiben Attribut-Mutationen durch Aufrufer wirksam (Tests ersetzen z. B. `rag.embedding_model` durch ein Fake) — eine saubere DI hätte den byte-treuen Move unmöglich gemacht und das Verhaltensrisiko vervielfacht.
+- **Fassaden-Delegatoren mit 1:1-Signaturen:** Nur extern aufgerufene Methoden erhalten Delegatoren (keine `*args/**kwargs`-Abkürzungen). Die statischen Delegatoren `_compute_metadata_hash`/`_compute_annotation_hash` sind bewusst erhalten — sie sind die mock.patch-Targets der Watchdog-Tests und werden von `watchdog.py` klassenseitig aufgerufen.
+- **Öffentliche API unverändert:** Konsumenten (MCP-Server, Web-UI, CLI, Watchdog, batch_index) rufen weiter dieselben Methoden mit denselben Signaturen.
+
+**Konsequenzen:**
+- `rg "from scripts" src/` ist leer — die Inversion ist beseitigt; ein Subprocess-Regressionstest (`tests/test_engine_move.py`) sichert das dauerhaft ab, ergänzt um Quelltext-Ratschen gegen Rückfälle (z. B. `service._rag` im Unified-Server)
+- Suite nach Abschluss: 483 Tests grün; Umsetzung als PR #33 (16 Commits, Merge-Commit ohne Squash für Nachvollziehbarkeit), Subagent-Driven Development mit zweistufigem Review pro Task
+- Bewusst zurückgestellt (P2-Folge-Etappen): Packaging via pyproject.toml, der vorbestehende Eager-Import von SentenceTransformer beim Engine-Import, der Schichtungs-Smell `engine → calibre_mcp.annotations` (aus dem Monolithen übernommen, kein Zyklus)
+
+**Verworfen:** Die Engine als ein flaches Modul statt Subpackage zu verschieben (hätte den 2.600-Zeilen-Monolithen nur umgetopft, 8.16 verlangt die Zerlegung); die Zerlegung im CLI-Skript zu belassen; Delegatoren mit `*args/**kwargs` (hätte Signatur-Drift und Patch-Target-Brüche kaschiert).
 
 ---
 
