@@ -1892,7 +1892,7 @@ class ArchillesRAG:
             lines.append(f"")
 
             # Quote
-            snippet = self._get_context_snippet(text, query_text) if query_text else text[:300]
+            snippet = self.searcher._get_context_snippet(text, query_text) if query_text else text[:300]
             lines.append(f"> {snippet}")
             lines.append(f"")
 

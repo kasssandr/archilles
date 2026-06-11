@@ -96,3 +96,23 @@ class TestFacadeComposition:
         assert callable(rag._exact_phrase_search)
         assert callable(rag._apply_min_similarity)
         assert callable(rag.print_results)
+
+    def test_export_to_markdown_with_query_text(self, tmp_path):
+        """Regression: export_to_markdown nutzt Searcher._get_context_snippet,
+        nicht self._get_context_snippet (der nach dem Umzug nicht mehr existiert)."""
+        from src.archilles.engine import ArchillesRAG
+        rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+        results = [
+            {
+                'rank': 1,
+                'similarity': 0.75,
+                'text': 'Dies ist ein Testtext über Theologie und Geschichte.',
+                'metadata': {
+                    'book_title': 'Testbuch',
+                    'book_id': 'testbuch_1',
+                },
+            }
+        ]
+        output_file = str(tmp_path / "export_test.md")
+        returned = rag.export_to_markdown(results, query_text="Theologie", output_file=output_file)
+        assert Path(returned).exists()
