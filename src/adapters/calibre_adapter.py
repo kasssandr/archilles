@@ -5,8 +5,6 @@ This is a **wrapper**, not a replacement.  ``calibre_db.py`` stays untouched
 and continues to do the actual SQLite work.
 """
 
-import hashlib
-import json
 import logging
 import os
 from pathlib import Path
@@ -366,16 +364,14 @@ class CalibreAdapter(SourceAdapter):
             ).fetchone()
             publisher = pub_row["name"] if pub_row else ""
 
-            relevant = {
+            from src.archilles.hashing import compute_metadata_hash
+            return compute_metadata_hash({
                 "comments": comments,
                 "tags": tags,
                 "title": row["title"] or "",
                 "author": author,
                 "publisher": publisher,
-            }
-            return hashlib.md5(
-                json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            ).hexdigest()
+            })
         finally:
             conn.close()
 
