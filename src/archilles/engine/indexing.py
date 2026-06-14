@@ -1,7 +1,6 @@
 """Indexing component: book indexing (3 paths), phase-1 metadata stubs,
 prepare/embed two-phase pipeline, smart updates, metadata extraction and
 hashing. Extracted from the ArchillesRAG monolith (8.16)."""
-import hashlib
 import json
 import re
 import time
@@ -189,40 +188,19 @@ class Indexer:
 
     @staticmethod
     def _compute_metadata_hash(book_metadata: Dict[str, Any]) -> str:
-        """
-        Compute a hash of Calibre metadata fields that matter for indexing.
-        Used to detect metadata changes without re-indexing the full book text.
+        """Delegiert an src.archilles.hashing (Befund 7.15).
 
-        Fields included: comments, tags, title, author, publisher.
+        Bleibt als @staticmethod auf ArchillesRAG erhalten, weil Tests sie als
+        callable/patch-Target nutzen (test_engine_move, test_watchdog).
         """
-        if not book_metadata:
-            return ''
-        tags = book_metadata.get('tags', [])
-        if isinstance(tags, list):
-            tags = sorted(tags)
-        relevant = {
-            'comments': book_metadata.get('comments', ''),
-            'tags': tags,
-            'title': book_metadata.get('title', ''),
-            'author': book_metadata.get('author', ''),
-            'publisher': book_metadata.get('publisher', ''),
-        }
-        return hashlib.md5(json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+        from src.archilles.hashing import compute_metadata_hash
+        return compute_metadata_hash(book_metadata)
 
     @staticmethod
     def _compute_annotation_hash(annotations: List[Dict[str, Any]]) -> str:
-        """
-        Compute a hash over all annotations for a book.
-        Used to detect annotation changes without re-indexing the full book text.
-        """
-        if not annotations:
-            return ''
-        # Sort by text content for deterministic hash
-        texts = sorted(
-            f"{a.get('highlighted_text', '')}|{a.get('notes', '')}|{a.get('type', '')}"
-            for a in annotations
-        )
-        return hashlib.md5('\n'.join(texts).encode('utf-8')).hexdigest()
+        """Delegiert an src.archilles.hashing (Befund 7.15)."""
+        from src.archilles.hashing import compute_annotation_hash
+        return compute_annotation_hash(annotations)
 
     def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
         """Extract metadata from PDF files."""
