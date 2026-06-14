@@ -41,6 +41,7 @@ _PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 # tool, CLI) agrees; re-exported here for backward compatibility with
 # existing imports.
 from src.archilles.config import DEFAULT_EXCLUDED_TAGS  # noqa: E402, F401
+from src.archilles.sqlite_ro import connect_readonly  # noqa: E402
 
 
 def _discover_formats(book_path: Path) -> list[dict[str, str]]:
@@ -71,8 +72,7 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre metadata.db not found: {db_path}")
 
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
     try:
         rows = conn.execute("""
             SELECT
@@ -753,8 +753,7 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
         raise FileNotFoundError(f"zotero.sqlite not found in {library_path}")
 
     excluded = ",".join(str(t) for t in _ZOTERO_EXCLUDED_TYPE_IDS)
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro&immutable=1", uri=True)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, immutable=True, row_factory=sqlite3.Row)
     try:
         items = conn.execute(f"""
             SELECT itemID, key, dateModified

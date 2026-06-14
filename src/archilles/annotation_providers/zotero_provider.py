@@ -18,6 +18,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
+from src.archilles.sqlite_ro import connect_readonly
 from .base import Annotation, AnnotationProvider
 
 logger = logging.getLogger(__name__)
@@ -104,10 +105,7 @@ class ZoteroAnnotationProvider(AnnotationProvider):
             logger.error("zotero.sqlite not found: %s", db_path)
             return []
 
-        conn = sqlite3.connect(
-            f"file:{db_path}?mode=ro&immutable=1", uri=True
-        )
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(db_path, immutable=True, row_factory=sqlite3.Row)
         try:
             return self._extract_all(conn)
         finally:

@@ -15,6 +15,7 @@ from src.adapters.base import (
     DocumentTimestamps,
     SourceAdapter,
 )
+from src.archilles.sqlite_ro import connect_readonly
 from src.calibre_db import CalibreDB
 
 logger = logging.getLogger(__name__)
@@ -55,8 +56,7 @@ class CalibreAdapter(SourceAdapter):
         import sqlite3
 
         db_path = self._library_path / "metadata.db"
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
         query = "SELECT id, title, path FROM books ORDER BY id"
         rows = conn.execute(query).fetchall()
@@ -96,8 +96,9 @@ class CalibreAdapter(SourceAdapter):
     def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
         import sqlite3
 
-        conn = sqlite3.connect(self._library_path / "metadata.db")
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(
+            self._library_path / "metadata.db", row_factory=sqlite3.Row
+        )
         try:
             row = conn.execute(
                 "SELECT id, title, path FROM books WHERE id = ?",
@@ -127,8 +128,9 @@ class CalibreAdapter(SourceAdapter):
     def get_file_path(self, doc_id: str) -> Path | None:
         import sqlite3
 
-        conn = sqlite3.connect(self._library_path / "metadata.db")
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(
+            self._library_path / "metadata.db", row_factory=sqlite3.Row
+        )
         row = conn.execute(
             "SELECT path FROM books WHERE id = ?", (int(doc_id),)
         ).fetchone()
@@ -164,8 +166,9 @@ class CalibreAdapter(SourceAdapter):
     def get_comments(self, doc_id: str) -> str:
         import sqlite3
 
-        conn = sqlite3.connect(self._library_path / "metadata.db")
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(
+            self._library_path / "metadata.db", row_factory=sqlite3.Row
+        )
         try:
             row = conn.execute(
                 "SELECT text FROM comments WHERE book = ?", (int(doc_id),)
@@ -316,8 +319,7 @@ class CalibreAdapter(SourceAdapter):
         import sqlite3
 
         db_path = self._library_path / "metadata.db"
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
+        conn = connect_readonly(db_path, row_factory=sqlite3.Row)
         try:
             row = conn.execute(
                 "SELECT title FROM books WHERE id = ?", (int(doc_id),)
@@ -383,9 +385,7 @@ class CalibreAdapter(SourceAdapter):
         IDs from LanceDB are normalised to ``str`` because legacy entries can
         be stored as ints.
         """
-        import sqlite3
-
-        conn = sqlite3.connect(self._library_path / "metadata.db")
+        conn = connect_readonly(self._library_path / "metadata.db")
         try:
             rows = conn.execute("SELECT id FROM books").fetchall()
             current = {str(r[0]) for r in rows}

@@ -18,6 +18,7 @@ from src.adapters.base import (
     DocumentTimestamps,
     SourceAdapter,
 )
+from src.archilles.sqlite_ro import connect_readonly
 
 logger = logging.getLogger(__name__)
 
@@ -126,11 +127,9 @@ class ZoteroAdapter(SourceAdapter):
 
     def _connect(self) -> sqlite3.Connection:
         """Open a read-only connection. NEVER write to Zotero's database."""
-        conn = sqlite3.connect(
-            f"file:{self._db_path}?mode=ro&immutable=1",
-            uri=True,
+        conn = connect_readonly(
+            self._db_path, immutable=True, row_factory=sqlite3.Row
         )
-        conn.row_factory = sqlite3.Row
         return conn
 
     # ── EAV helpers ──────────────────────────────────────────────

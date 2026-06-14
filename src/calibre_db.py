@@ -10,6 +10,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.archilles.sqlite_ro import connect_readonly
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,8 +31,7 @@ class CalibreDB:
         if not self.db_path.exists():
             raise FileNotFoundError(f"Calibre database not found: {self.db_path}")
 
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = connect_readonly(self.db_path, row_factory=sqlite3.Row)
 
     def close(self):
         """Close database connection."""

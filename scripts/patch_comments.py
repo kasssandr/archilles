@@ -24,6 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from src.archilles.config import get_library_path
 from src.archilles.constants import ChunkType
+from src.archilles.sqlite_ro import connect_readonly
 from src.calibre_db import CalibreDB          # parse_html_comment, clean_html
 
 
@@ -146,8 +147,7 @@ def _build_comment_chunks_standalone(
 
 def fetch_calibre_comments(calibre_db_path: Path, calibre_id: int) -> dict:
     """Fetch comments_html and comments_text for a book from Calibre."""
-    conn = sqlite3.connect(str(calibre_db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(calibre_db_path, row_factory=sqlite3.Row)
     try:
         row = conn.execute(
             "SELECT text FROM comments WHERE book = ?", (calibre_id,)
@@ -165,8 +165,7 @@ def fetch_calibre_comments(calibre_db_path: Path, calibre_id: int) -> dict:
 
 def fetch_calibre_book_metadata(calibre_db_path: Path, calibre_id: int) -> dict:
     """Fetch full book metadata needed for comment chunk building."""
-    conn = sqlite3.connect(str(calibre_db_path))
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(calibre_db_path, row_factory=sqlite3.Row)
     try:
         # Basic book info
         book = conn.execute(

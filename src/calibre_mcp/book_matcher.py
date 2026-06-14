@@ -12,13 +12,14 @@ Unmatched items can be written to a review-queue JSON for manual resolution.
 import json
 import logging
 import re
-import sqlite3
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from rapidfuzz import fuzz
+
+from src.archilles.sqlite_ro import connect_readonly
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ def load_asin_index(library_path: Path) -> dict[str, int]:
          WHERE LOWER(i.type) IN ({placeholders})
     """
     index: dict[str, tuple[int, str]] = {}
-    with sqlite3.connect(db_path) as con:
+    with connect_readonly(db_path) as con:
         for val, itype, cid in con.execute(query, ASIN_IDENTIFIER_TYPES):
             asin = (val or "").strip().upper()
             if not asin:

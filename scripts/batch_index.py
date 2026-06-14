@@ -81,6 +81,7 @@ from src.archilles.config import (
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
+from src.archilles.sqlite_ro import connect_readonly
 
 # Preferred book formats in order of priority
 PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
@@ -322,8 +323,7 @@ def get_books_by_tag(library_path: Path, tag_name: str, min_rating: int = 0, exc
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre database not found: {db_path}")
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
     # Build query with optional rating filter
     # Calibre stores rating in separate table (0-10 scale), we use 1-5 stars
@@ -437,8 +437,7 @@ def get_all_books(library_path: Path, author_filter: Optional[List[str]] = None,
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre database not found: {db_path}")
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
     query = """
     SELECT
@@ -521,8 +520,7 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre database not found: {db_path}")
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
     # First find all books that have the author we're looking for
     # Then get all authors for those books (to show co-authors)
@@ -609,8 +607,7 @@ def get_books_by_ids(library_path: Path, calibre_ids: List[int]) -> List[Dict[st
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre database not found: {db_path}")
 
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
     placeholders = ', '.join(['?' for _ in calibre_ids])
     query = f"""
@@ -655,7 +652,7 @@ def get_all_calibre_ids(library_path: Path) -> set:
     db_path = library_path / "metadata.db"
     if not db_path.exists():
         raise FileNotFoundError(f"Calibre database not found: {db_path}")
-    conn = sqlite3.connect(db_path)
+    conn = connect_readonly(db_path)
     try:
         cursor = conn.execute("SELECT id FROM books")
         return {str(row[0]) for row in cursor.fetchall()}

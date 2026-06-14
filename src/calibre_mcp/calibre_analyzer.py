@@ -12,6 +12,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from src.archilles.sqlite_ro import connect_readonly
+
 _RE_NON_WORD = re.compile(r'[^\w\s]')
 _RE_WHITESPACE = re.compile(r'\s+')
 
@@ -30,8 +32,7 @@ class CalibreAnalyzer:
         if not self.db_path.exists():
             raise FileNotFoundError(f"Database file not found: {db_path}")
 
-        self.conn = sqlite3.connect(self.db_path)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = connect_readonly(self.db_path, row_factory=sqlite3.Row)
 
     def __enter__(self):
         return self

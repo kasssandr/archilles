@@ -13,18 +13,18 @@ Usage:
 """
 
 import argparse
-import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
+from src.archilles.sqlite_ro import connect_readonly
 from src.storage.lancedb_store import LanceDBStore
 
 
 def _find_books_with_tag(metadata_db: Path, tag: str) -> list[tuple[int, str]]:
-    conn = sqlite3.connect(str(metadata_db))
+    conn = connect_readonly(metadata_db)
     try:
         rows = conn.execute(
             """

@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
 from src.archilles.annotation_providers.base import Annotation
+from src.archilles.sqlite_ro import connect_readonly
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,7 @@ def _load_calibre_extras(library: Path, calibre_ids: list[int]) -> dict[int, dic
          WHERE b.id IN ({placeholders})
     """
     out: dict[int, dict] = {}
-    with sqlite3.connect(library / "metadata.db") as con:
+    with connect_readonly(library / "metadata.db") as con:
         for cid, tags, lang in con.execute(query, calibre_ids):
             out[cid] = {"tags": tags or "", "language": lang or ""}
     return out
