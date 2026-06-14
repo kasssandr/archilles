@@ -29,6 +29,31 @@ class TestMetadataHash:
             hashing.compute_metadata_hash(as_str)
 
 
+class TestZoteroMetadataHash:
+    def test_golden_value_stable(self):
+        data = {'title': 'Test', 'authors': ['B', 'A'], 'tags': ['z', 'a'],
+                'abstract': 'abs', 'date': '2020'}
+        assert hashing.compute_zotero_metadata_hash(data) == \
+            "7ae38fa1ffcd0320dbe8eab5aa9d9166"
+
+    def test_author_and_tag_order_irrelevant(self):
+        a = {'authors': ['B', 'A'], 'tags': ['y', 'x']}
+        b = {'authors': ['A', 'B'], 'tags': ['x', 'y']}
+        assert hashing.compute_zotero_metadata_hash(a) == \
+            hashing.compute_zotero_metadata_hash(b)
+
+    def test_none_authors_tags_safe(self):
+        assert hashing.compute_zotero_metadata_hash({}) == \
+            hashing.compute_zotero_metadata_hash({'authors': None, 'tags': None})
+
+    def test_matches_watchdog_zotero(self):  # Invariante I1 (Zotero)
+        from src.archilles.watchdog import _compute_zotero_metadata_hash
+        data = {'title': 'T', 'authors': ['A', 'B'], 'tags': ['a', 'b'],
+                'abstract': 'x', 'date': '2021'}
+        assert hashing.compute_zotero_metadata_hash(data) == \
+            _compute_zotero_metadata_hash(data)
+
+
 class TestAnnotationHash:
     def test_golden_value_stable(self):
         annots = [

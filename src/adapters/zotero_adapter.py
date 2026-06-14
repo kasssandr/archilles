@@ -6,8 +6,6 @@ layer that bypasses normal SQLite locking — writing while Zotero is running
 would corrupt the database.
 """
 
-import hashlib
-import json
 import logging
 import re
 import sqlite3
@@ -541,16 +539,14 @@ class ZoteroAdapter(SourceAdapter):
             authors = self._get_creators(conn, item_id)
             tags = self._get_tags(conn, item_id)
 
-            relevant = {
+            from src.archilles.hashing import compute_zotero_metadata_hash
+            return compute_zotero_metadata_hash({
                 "title": fields.get("title", ""),
-                "authors": sorted(authors),
-                "tags": sorted(tags),
+                "authors": authors,
+                "tags": tags,
                 "abstract": fields.get("abstractNote", ""),
                 "date": fields.get("date", ""),
-            }
-            return hashlib.md5(
-                json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
-            ).hexdigest()
+            })
         finally:
             conn.close()
 

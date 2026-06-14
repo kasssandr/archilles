@@ -23,10 +23,8 @@ Called from:
   calibre_mcp/server.py — MCP tool `watchdog_scan` (Claude Routines)
 """
 
-import hashlib
 import json
 import logging
-import re
 import sqlite3
 import time
 from datetime import datetime
@@ -54,17 +52,9 @@ def _discover_formats(book_path: Path) -> list[dict[str, str]]:
 
 
 def _clean_html(html_text: str) -> str:
-    """Strip HTML tags from Calibre comments, mirroring CalibreDB.clean_html()."""
-    if not html_text:
-        return ""
-    text = re.sub(r'<[^>]+>', '', html_text)
-    text = text.replace('&nbsp;', ' ')
-    text = text.replace('&amp;', '&')
-    text = text.replace('&lt;', '<')
-    text = text.replace('&gt;', '>')
-    text = text.replace('&quot;', '"')
-    text = text.replace('&#39;', "'")
-    return re.sub(r'\s+', ' ', text).strip()
+    """Strip HTML from Calibre comments -- delegiert an CalibreDB.clean_html (7.15)."""
+    from src.calibre_db import CalibreDB
+    return CalibreDB.clean_html(html_text)
 
 
 def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
@@ -141,27 +131,13 @@ def _calibre_metadata_for_hash(library_path: Path) -> dict[int, dict[str, Any]]:
 
 
 def _compute_metadata_hash(meta: dict[str, Any]) -> str:
-    """Replicate ``ArchillesRAG._compute_metadata_hash`` without importing rag_demo.
+    """Delegiert an src.archilles.hashing (Befund 7.15).
 
-    Tags are sorted regardless of input type (list or comma-string) so the
-    hash is independent of Calibre's internal tag ordering — otherwise every
-    tag-reorder in Calibre would mis-classify the book as metadata_changed.
+    Bleibt als Modulfunktion erhalten: backfill_metadata_hash und die Tests
+    importieren ``from src.archilles.watchdog import _compute_metadata_hash``.
     """
-    tags = meta.get('tags', [])
-    if isinstance(tags, str):
-        tags = sorted(t.strip() for t in tags.split(',') if t.strip())
-    elif isinstance(tags, list):
-        tags = sorted(tags)
-    relevant = {
-        'comments':  meta.get('comments', ''),
-        'tags':      tags,
-        'title':     meta.get('title', ''),
-        'author':    meta.get('author', ''),
-        'publisher': meta.get('publisher', ''),
-    }
-    return hashlib.md5(
-        json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')
-    ).hexdigest()
+    from src.archilles.hashing import compute_metadata_hash
+    return compute_metadata_hash(meta)
 
 
 def _index_priority_key(
@@ -896,17 +872,12 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
 
 
 def _compute_zotero_metadata_hash(data: dict[str, Any]) -> str:
-    """Stable hash over title/authors/tags/abstract/date — mirrors ZoteroAdapter.compute_metadata_hash."""
-    relevant = {
-        "title":    data.get("title", ""),
-        "authors":  data.get("authors", []),   # pre-sorted
-        "tags":     data.get("tags", []),       # pre-sorted
-        "abstract": data.get("abstract", ""),
-        "date":     data.get("date", ""),
-    }
-    return hashlib.md5(
-        json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
+    """Delegiert an src.archilles.hashing (Befund 7.15).
+
+    Bleibt als Modulfunktion erhalten (Tests/Aufrufer importieren sie direkt).
+    """
+    from src.archilles.hashing import compute_zotero_metadata_hash
+    return compute_zotero_metadata_hash(data)
 
 
 class ZoteroWatchdogScanner:

@@ -36,6 +36,26 @@ def compute_metadata_hash(book_metadata: Dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def compute_zotero_metadata_hash(data: Dict[str, Any]) -> str:
+    """MD5 ueber title/authors/tags/abstract/date (Zotero-Change-Detection).
+
+    Authors und Tags werden sortiert, damit ihre Reihenfolge in Zoteros UI den
+    Hash nicht aendert. Byte-identisch zu den bisherigen Kopien in
+    watchdog._compute_zotero_metadata_hash und ZoteroAdapter.compute_metadata_hash
+    (Sortieren ist idempotent, daher auch fuer pre-sorted Eingaben unveraendert).
+    """
+    relevant = {
+        'title':    data.get('title', ''),
+        'authors':  sorted(data.get('authors') or []),
+        'tags':     sorted(data.get('tags') or []),
+        'abstract': data.get('abstract', ''),
+        'date':     data.get('date', ''),
+    }
+    return hashlib.md5(
+        json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')
+    ).hexdigest()
+
+
 def compute_annotation_hash(annotations: List[Dict[str, Any]]) -> str:
     """MD5 ueber alle Annotationen eines Buchs (Change-Detection).
 
