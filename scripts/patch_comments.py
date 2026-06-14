@@ -12,7 +12,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -31,21 +30,9 @@ from src.calibre_db import CalibreDB          # parse_html_comment, clean_html
 # ── helpers (mirrored from rag_demo.py to stay standalone) ───────────
 
 def _compute_metadata_hash(book_metadata: dict) -> str:
-    if not book_metadata:
-        return ''
-    tags = book_metadata.get('tags', [])
-    if isinstance(tags, list):
-        tags = sorted(tags)
-    relevant = {
-        'comments': book_metadata.get('comments', ''),
-        'tags': tags,
-        'title': book_metadata.get('title', ''),
-        'author': book_metadata.get('author', ''),
-        'publisher': book_metadata.get('publisher', ''),
-    }
-    return hashlib.md5(
-        json.dumps(relevant, sort_keys=True, ensure_ascii=False).encode('utf-8')
-    ).hexdigest()
+    """Delegiert an src.archilles.hashing (Befund 7.15)."""
+    from src.archilles.hashing import compute_metadata_hash
+    return compute_metadata_hash(book_metadata)
 
 
 def _format_tags(tags) -> str:
