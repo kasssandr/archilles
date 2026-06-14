@@ -58,40 +58,86 @@ class CalibreAdapter(SourceAdapter):
         db_path = self._library_path / "metadata.db"
         conn = connect_readonly(db_path, row_factory=sqlite3.Row)
 
-        query = "SELECT id, title, path FROM books ORDER BY id"
-        rows = conn.execute(query).fetchall()
+        # One batch query per relation instead of ~8 queries per book (1.23).
+        # Each is a single table scan; the whole listing is O(1) in queries.
+        try:
+            books = conn.execute(
+                "SELECT id, title, path, pubdate, last_modified "
+                "FROM books ORDER BY id"
+            ).fetchall()
+            tags_by_book = self._group_multi(conn.execute(
+                "SELECT btl.book AS book, t.name AS name "
+                "FROM books_tags_link btl JOIN tags t ON t.id = btl.tag"
+            ))
+            authors_by_book = self._group_multi(conn.execute(
+                "SELECT bal.book AS book, a.name AS name "
+                "FROM books_authors_link bal JOIN authors a ON a.id = bal.author "
+                "ORDER BY bal.book, bal.id"
+            ))
+            publisher_by_book = self._first_value(conn.execute(
+                "SELECT bpl.book AS book, p.name AS val "
+                "FROM books_publishers_link bpl "
+                "JOIN publishers p ON p.id = bpl.publisher"
+            ))
+            language_by_book = self._first_value(conn.execute(
+                "SELECT bll.book AS book, l.lang_code AS val "
+                "FROM books_languages_link bll "
+                "JOIN languages l ON l.id = bll.lang_code "
+                "ORDER BY bll.book, bll.id"
+            ))
+            isbn_by_book = self._first_value(conn.execute(
+                "SELECT book, val FROM identifiers WHERE type = 'isbn'"
+            ))
+            comments_by_book = self._first_value(conn.execute(
+                "SELECT book, text AS val FROM comments"
+            ))
+        finally:
+            conn.close()
 
         results: list[DocumentMetadata] = []
-        for row in rows:
+        for row in books:
             book_id = row["id"]
-            book_path = row["path"]
-
-            # Resolve tags for filtering
-            tag_rows = conn.execute(
-                """
-                SELECT tags.name FROM tags
-                INNER JOIN books_tags_link ON tags.id = books_tags_link.tag
-                WHERE books_tags_link.book = ?
-                """,
-                (book_id,),
-            ).fetchall()
-            tags = [t["name"] for t in tag_rows]
+            tags = tags_by_book.get(book_id, [])
 
             if tag_filter and tag_filter not in tags:
                 continue
             if exclude_tag and exclude_tag in tags:
                 continue
 
-            # Find the primary file
-            file_path = self._find_primary_file(book_path)
+            file_path = self._find_primary_file(row["path"])
             if file_path is None:
                 continue
 
-            meta = self._row_to_metadata(conn, book_id, row["title"], book_path, tags, file_path)
-            results.append(meta)
+            results.append(self._assemble_metadata(
+                book_id, row["title"], file_path,
+                authors=authors_by_book.get(book_id, []),
+                tags=tags,
+                publisher=publisher_by_book.get(book_id, "") or "",
+                language=language_by_book.get(book_id, "") or "",
+                isbn=isbn_by_book.get(book_id),
+                comments_html=comments_by_book.get(book_id),
+                pubdate=row["pubdate"],
+                last_modified=row["last_modified"],
+            ))
 
-        conn.close()
         return results
+
+    @staticmethod
+    def _group_multi(cursor) -> dict:
+        """book_id -> [name, ...], preserving the cursor's row order."""
+        out: dict = {}
+        for r in cursor:
+            out.setdefault(r["book"], []).append(r["name"])
+        return out
+
+    @staticmethod
+    def _first_value(cursor) -> dict:
+        """book_id -> first value seen (mirrors the old per-book LIMIT 1)."""
+        out: dict = {}
+        for r in cursor:
+            if r["book"] not in out:
+                out[r["book"]] = r["val"]
+        return out
 
     def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
         import sqlite3
@@ -223,8 +269,7 @@ class CalibreAdapter(SourceAdapter):
         tags: list[str],
         file_path: Path,
     ) -> DocumentMetadata:
-        """Build DocumentMetadata from a SQLite row + resolved file."""
-        # Authors
+        """Build DocumentMetadata for a single book (used by get_metadata)."""
         author_rows = conn.execute(
             """
             SELECT authors.name FROM authors
@@ -236,7 +281,6 @@ class CalibreAdapter(SourceAdapter):
         ).fetchall()
         authors = [r["name"] for r in author_rows] if author_rows else []
 
-        # Publisher
         pub_row = conn.execute(
             """
             SELECT publishers.name FROM publishers
@@ -247,7 +291,6 @@ class CalibreAdapter(SourceAdapter):
         ).fetchone()
         publisher = pub_row["name"] if pub_row else ""
 
-        # Language
         lang_row = conn.execute(
             """
             SELECT languages.lang_code FROM languages
@@ -258,41 +301,68 @@ class CalibreAdapter(SourceAdapter):
         ).fetchone()
         language = lang_row["lang_code"] if lang_row else ""
 
-        # ISBN
         isbn_row = conn.execute(
             "SELECT val FROM identifiers WHERE book = ? AND type = 'isbn' LIMIT 1",
             (book_id,),
         ).fetchone()
-        identifiers = {}
-        if isbn_row:
-            identifiers["isbn"] = isbn_row["val"]
+        isbn = isbn_row["val"] if isbn_row else None
 
-        # Comments
         comment_row = conn.execute(
             "SELECT text FROM comments WHERE book = ?", (book_id,)
         ).fetchone()
-        comments = ""
-        comments_html = ""
-        if comment_row and comment_row["text"]:
-            comments_html = comment_row["text"]
-            comments = CalibreDB.clean_html(comments_html)
+        comments_html = comment_row["text"] if comment_row else None
 
-        # Timestamps from Calibre
         ts_row = conn.execute(
-            "SELECT timestamp, pubdate, last_modified FROM books WHERE id = ?",
+            "SELECT pubdate, last_modified FROM books WHERE id = ?",
             (book_id,),
         ).fetchone()
+        pubdate = ts_row["pubdate"] if ts_row else None
+        last_modified = ts_row["last_modified"] if ts_row else None
+
+        return self._assemble_metadata(
+            book_id, title, file_path,
+            authors=authors, tags=tags, publisher=publisher,
+            language=language, isbn=isbn, comments_html=comments_html,
+            pubdate=pubdate, last_modified=last_modified,
+        )
+
+    @staticmethod
+    def _assemble_metadata(
+        book_id: int,
+        title: str,
+        file_path: Path,
+        *,
+        authors: list[str],
+        tags: list[str],
+        publisher: str,
+        language: str,
+        isbn: str | None,
+        comments_html: str | None,
+        pubdate,
+        last_modified,
+    ) -> DocumentMetadata:
+        """Turn already-loaded values into DocumentMetadata.
+
+        Shared by the per-book path (``_row_to_metadata``) and the batch path
+        (``list_documents``) so the field logic lives in exactly one place.
+        """
+        comments = CalibreDB.clean_html(comments_html) if comments_html else ""
+        comments_html = comments_html or ""
+
         timestamps = DocumentTimestamps()
         pub_year = None
-        if ts_row:
-            if ts_row["pubdate"]:
-                timestamps.created_at = str(ts_row["pubdate"])
-                try:
-                    pub_year = int(str(ts_row["pubdate"])[:4])
-                except (ValueError, TypeError):
-                    pass
-            if ts_row["last_modified"]:
-                timestamps.modified_at = str(ts_row["last_modified"])
+        if pubdate:
+            timestamps.created_at = str(pubdate)
+            try:
+                pub_year = int(str(pubdate)[:4])
+            except (ValueError, TypeError):
+                pass
+        if last_modified:
+            timestamps.modified_at = str(last_modified)
+
+        identifiers = {}
+        if isbn:
+            identifiers["isbn"] = isbn
 
         return DocumentMetadata(
             doc_id=str(book_id),

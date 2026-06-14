@@ -120,9 +120,14 @@ def _create_calibre_db(library_path: Path, books=None):
             (book["id"], book["title"], book["path"],
              book.get("pubdate"), book.get("last_modified")),
         )
-        # Author
-        conn.execute("INSERT OR IGNORE INTO authors (id, name) VALUES (?, ?)", (book["id"], book["author"]))
-        conn.execute("INSERT INTO books_authors_link (book, author) VALUES (?, ?)", (book["id"], book["id"]))
+        # Authors — support both single 'author' and ordered list 'authors'
+        authors = book.get("authors")
+        if authors is None:
+            authors = [book["author"]] if book.get("author") else []
+        for i, author_name in enumerate(authors):
+            author_id = book["id"] * 1000 + i
+            conn.execute("INSERT OR IGNORE INTO authors (id, name) VALUES (?, ?)", (author_id, author_name))
+            conn.execute("INSERT INTO books_authors_link (book, author) VALUES (?, ?)", (book["id"], author_id))
 
         # Publisher
         if book.get("publisher"):
@@ -210,6 +215,28 @@ def calibre_library_multi(tmp_path):
             "comments": None,
             "pubdate": None,
             "last_modified": None,
+        },
+    ]
+    _create_calibre_db(tmp_path, books)
+    return tmp_path
+
+
+@pytest.fixture
+def calibre_library_rich(tmp_path):
+    """One book with every metadata field and several ordered authors (1.23)."""
+    books = [
+        {
+            "id": 1,
+            "title": "Collaborative Work",
+            "path": "Multi/Collaborative Work (1)",
+            "authors": ["Erst Autor", "Zweit Autor", "Dritt Autor"],
+            "publisher": "Joint Press",
+            "language": "deu",
+            "tags": ["History", "Politics"],
+            "isbn": "978-0-00-000000-0",
+            "comments": "<p>Ein <i>kollaboratives</i> Werk.</p>",
+            "pubdate": "2021-07-09T00:00:00",
+            "last_modified": "2025-03-03T00:00:00",
         },
     ]
     _create_calibre_db(tmp_path, books)
@@ -351,6 +378,50 @@ class TestCalibreAdapter:
         # imported_at and indexed_at are set by ARCHILLES, not the adapter
         assert meta.timestamps.imported_at is None
         assert meta.timestamps.indexed_at is None
+
+    def test_list_documents_full_metadata(self, calibre_library_rich):
+        """list_documents fills every field, not just title/tags (1.23)."""
+        adapter = create_adapter(calibre_library_rich)
+        docs = adapter.list_documents()
+        assert len(docs) == 1
+        doc = docs[0]
+        assert doc.publisher == "Joint Press"
+        assert doc.language == "deu"
+        assert doc.year == 2021
+        assert doc.identifiers.get("isbn") == "978-0-00-000000-0"
+        assert "kollaboratives" in doc.comments
+        assert "<i>" not in doc.comments  # HTML stripped
+        assert doc.timestamps.modified_at and "2025" in doc.timestamps.modified_at
+        assert "History" in doc.tags and "Politics" in doc.tags
+
+    def test_list_documents_author_order_preserved(self, calibre_library_rich):
+        """Author order (Calibre's books_authors_link.id) must survive batching."""
+        adapter = create_adapter(calibre_library_rich)
+        doc = adapter.list_documents()[0]
+        assert doc.authors == ["Erst Autor", "Zweit Autor", "Dritt Autor"]
+
+    def test_list_documents_query_count_is_constant(
+        self, calibre_library_multi, monkeypatch
+    ):
+        """1.23: no N+1 — query count is independent of the number of books."""
+        import src.adapters.calibre_adapter as mod
+
+        count = {"n": 0}
+        real_connect = mod.connect_readonly
+
+        def counting_connect(*args, **kwargs):
+            conn = real_connect(*args, **kwargs)
+            conn.set_trace_callback(
+                lambda _stmt: count.__setitem__("n", count["n"] + 1)
+            )
+            return conn
+
+        monkeypatch.setattr(mod, "connect_readonly", counting_connect)
+        adapter = create_adapter(calibre_library_multi)
+        adapter.list_documents()
+        # 3 books: the N+1 path runs 1 + 3×7 = 22 queries. The batch path is
+        # constant (one query per relation), independent of the book count.
+        assert count["n"] <= 10, f"N+1 detected: {count['n']} queries for 3 books"
 
 
 # ── DocumentMetadata Dataclass ──────────────────────────────────
