@@ -71,6 +71,7 @@ class IndexingCheckpoint:
     checkpoint_path: Path
     session_id: str = ""
     profile: str = ""
+    phase: str = "both"  # 'phase1' | 'phase2' | 'both'
     started_at: str = ""
     last_updated: str = ""
     total_books: int = 0
@@ -89,7 +90,8 @@ class IndexingCheckpoint:
         cls,
         checkpoint_path: Path,
         profile: str,
-        book_ids: List[str]
+        book_ids: List[str],
+        phase: str = "both",
     ) -> "IndexingCheckpoint":
         """
         Create a new checkpoint for a fresh indexing session.
@@ -98,6 +100,7 @@ class IndexingCheckpoint:
             checkpoint_path: Where to save the checkpoint file
             profile: Name of the hardware profile being used
             book_ids: List of all book IDs to be indexed
+            phase: Indexing phase ('phase1', 'phase2', or 'both')
 
         Returns:
             New IndexingCheckpoint instance
@@ -107,6 +110,7 @@ class IndexingCheckpoint:
             checkpoint_path=checkpoint_path,
             session_id=f"idx_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}",
             profile=profile,
+            phase=phase,
             started_at=now,
             last_updated=now,
             total_books=len(book_ids),
@@ -147,6 +151,7 @@ class IndexingCheckpoint:
                 checkpoint_path=checkpoint_path,
                 session_id=data['session_id'],
                 profile=data['profile'],
+                phase=data.get('phase', 'both'),
                 started_at=data['started_at'],
                 last_updated=data['last_updated'],
                 total_books=data['total_books'],
@@ -162,6 +167,26 @@ class IndexingCheckpoint:
             logger.error(f"Failed to load checkpoint: {e}")
             return None
 
+    @classmethod
+    def load_or_create(
+        cls,
+        checkpoint_path: Path,
+        profile: str,
+        book_ids: List[str],
+        phase: str = "both",
+    ) -> "IndexingCheckpoint":
+        """Non-interaktiver Resume-Pfad: vorhandenen Checkpoint laden, sonst neu.
+
+        Eine unlesbare oder fremdformatige Datei (z. B. die alte
+        ``{total, done}``-Schwundform) liefert via :meth:`load` ``None`` und
+        führt damit zu einem frischen Lauf — skip-existing/Resume der Abnehmer
+        fängt Doppelarbeit ab.
+        """
+        existing = cls.load(checkpoint_path)
+        if existing is not None:
+            return existing
+        return cls.create_new(checkpoint_path, profile, book_ids, phase)
+
     def save(self) -> None:
         """Save checkpoint to file (atomic via temp-file rename)."""
         self.last_updated = datetime.now().isoformat()
@@ -170,6 +195,7 @@ class IndexingCheckpoint:
         data = {
             'session_id': self.session_id,
             'profile': self.profile,
+            'phase': self.phase,
             'started_at': self.started_at,
             'last_updated': self.last_updated,
             'total_books': self.total_books,
@@ -193,6 +219,7 @@ class IndexingCheckpoint:
             book_id: ID of the book being started
             total_chunks: Expected total chunks (0 if unknown)
         """
+        book_id = str(book_id)
         self.current_book = ChunkProgress(
             book_id=book_id,
             total_chunks=total_chunks,
@@ -238,6 +265,7 @@ class IndexingCheckpoint:
             book_id: ID of the completed book
             chunk_count: Number of chunks indexed
         """
+        book_id = str(book_id)
         if book_id not in self.completed_books:
             self.completed_books.append(book_id)
 
@@ -257,6 +285,7 @@ class IndexingCheckpoint:
             book_id: ID of the failed book
             error: Error message
         """
+        book_id = str(book_id)
         self.failed_books[book_id] = error[:500]  # Limit error message length
         self.current_book = None
         self.save()
@@ -269,6 +298,7 @@ class IndexingCheckpoint:
         Args:
             book_id: ID of the skipped book
         """
+        book_id = str(book_id)
         if book_id not in self.skipped_books:
             self.skipped_books.append(book_id)
         self.current_book = None
@@ -285,8 +315,8 @@ class IndexingCheckpoint:
         Returns:
             List of book IDs not yet completed or skipped
         """
-        processed = set(self.completed_books) | set(self.skipped_books)
-        return [bid for bid in all_book_ids if bid not in processed]
+        processed = {str(b) for b in self.completed_books} | {str(b) for b in self.skipped_books}
+        return [bid for bid in all_book_ids if str(bid) not in processed]
 
     def get_failed_books(self) -> Dict[str, str]:
         """
