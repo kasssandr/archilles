@@ -17,41 +17,41 @@ Usage:
     python scripts/batch_index.py --all --profile minimal
     python scripts/batch_index.py --all --profile balanced
 
-    # Index all books with tag "Leit-Literatur"
-    python scripts/batch_index.py --tag "Leit-Literatur"
+    # Index all books with tag "must-read"
+    python scripts/batch_index.py --tag "must-read"
 
     # Index specific author's books
     python scripts/batch_index.py --author "Hannah Arendt"
 
     # Dry run (show what would be indexed)
-    python scripts/batch_index.py --tag "Leit-Literatur" --dry-run
+    python scripts/batch_index.py --tag "must-read" --dry-run
 
     # Limit number of books (for testing)
-    python scripts/batch_index.py --tag "Leit-Literatur" --limit 5
+    python scripts/batch_index.py --tag "must-read" --limit 5
 
     # Continue from where you left off (skip already indexed)
-    python scripts/batch_index.py --tag "Leit-Literatur" --skip-existing
+    python scripts/batch_index.py --tag "must-read" --skip-existing
 
     # Recover from corrupted database (e.g., after CTRL+C during indexing)
-    python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
+    python scripts/batch_index.py --tag "must-read" --reset-db
 
     # Re-index books that were indexed before a certain date (with improved code)
-    python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
+    python scripts/batch_index.py --tag "must-read" --reindex-before 2024-12-01
 
     # Re-index books with missing page labels (indexed before page label feature)
-    python scripts/batch_index.py --tag "Leit-Literatur" --reindex-missing-labels
+    python scripts/batch_index.py --tag "must-read" --reindex-missing-labels
 
     # Run in non-interactive mode (auto-resume sessions, no prompts)
-    python scripts/batch_index.py --tag "Leit-Literatur" --non-interactive
+    python scripts/batch_index.py --tag "must-read" --non-interactive
 
     # Filter by author(s) — works alongside --tag, --all, or --author (OR logic)
-    python scripts/batch_index.py --tag "Leit-Literatur" --filter-author "Arendt"
-    python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
+    python scripts/batch_index.py --tag "must-read" --filter-author "Arendt"
+    python scripts/batch_index.py --tag "must-read" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
     python scripts/batch_index.py --all --filter-author "Tucholsky"
 
     # Include books normally excluded via the 'exclude' tag (or custom
     # tags configured in .archilles/config.json → excluded_tags)
-    python scripts/batch_index.py --tag "Leit-Literatur" --include-excluded
+    python scripts/batch_index.py --tag "must-read" --include-excluded
 """
 
 import argparse
@@ -1370,40 +1370,40 @@ Examples:
   python scripts/batch_index.py --all --profile minimal
   python scripts/batch_index.py --all --profile balanced
 
-  # Index all books tagged "Leit-Literatur"
-  python scripts/batch_index.py --tag "Leit-Literatur"
+  # Index all books tagged "must-read"
+  python scripts/batch_index.py --tag "must-read"
 
   # Dry run (preview without indexing)
-  python scripts/batch_index.py --tag "Leit-Literatur" --dry-run
+  python scripts/batch_index.py --tag "must-read" --dry-run
 
   # Index only first 5 books (for testing)
-  python scripts/batch_index.py --tag "Leit-Literatur" --limit 5
+  python scripts/batch_index.py --tag "must-read" --limit 5
 
   # Skip already indexed books
-  python scripts/batch_index.py --tag "Leit-Literatur" --skip-existing
+  python scripts/batch_index.py --tag "must-read" --skip-existing
 
   # Index all books by an author
   python scripts/batch_index.py --author "Arendt"
 
   # Recover from corrupted database (after CTRL+C)
-  python scripts/batch_index.py --tag "Leit-Literatur" --reset-db
+  python scripts/batch_index.py --tag "must-read" --reset-db
 
   # Re-index old books (e.g., indexed before Dec 1st with old code)
-  python scripts/batch_index.py --tag "Leit-Literatur" --reindex-before 2024-12-01
+  python scripts/batch_index.py --tag "must-read" --reindex-before 2024-12-01
 
   # Exclude drafts and custom-tagged books
-  python scripts/batch_index.py --tag "Leit-Literatur" --exclude-tag "draft" --exclude-tag "DeepL"
+  python scripts/batch_index.py --tag "must-read" --exclude-tag "draft" --exclude-tag "DeepL"
 
   # Filter by minimum rating (1-5 stars, inclusive)
-  python scripts/batch_index.py --tag "Leit-Literatur" --min-rating 4
+  python scripts/batch_index.py --tag "must-read" --min-rating 4
 
   # Filter by exact rating (0 = no rating / NULL in Calibre)
-  python scripts/batch_index.py --tag "Leit-Literatur" --rating 0   # only unrated
-  python scripts/batch_index.py --tag "Leit-Literatur" --rating 5   # only 5-star books
+  python scripts/batch_index.py --tag "must-read" --rating 0   # only unrated
+  python scripts/batch_index.py --tag "must-read" --rating 5   # only 5-star books
 
   # Filter by author(s) — combinable with --tag, --all, or --author (OR logic)
-  python scripts/batch_index.py --tag "Leit-Literatur" --filter-author "Arendt"
-  python scripts/batch_index.py --tag "Leit-Literatur" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
+  python scripts/batch_index.py --tag "must-read" --filter-author "Arendt"
+  python scripts/batch_index.py --tag "must-read" --rating 0 --filter-author "Arendt" --filter-author "Benjamin"
   python scripts/batch_index.py --all --filter-author "Tucholsky"
 
 Profiles:

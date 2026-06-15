@@ -77,16 +77,16 @@ def _install_shutdown_handler(scanner) -> None:
     def handler(signum, frame):
         if not scanner.shutdown_requested:
             print("\n\n" + "=" * 60)
-            print("⏸️  ABBRUCH ANGEFORDERT (CTRL+C)")
+            print("⏸️  SHUTDOWN REQUESTED (CTRL+C)")
             print("=" * 60)
-            print("  Aktuelles Buch wird zu Ende indexiert, dann gestoppt.")
-            print("  Für sofortigen Abbruch nochmals CTRL+C drücken")
-            print("  (kann das gerade laufende Buch unvollständig hinterlassen).")
+            print("  The current book will finish indexing, then stop.")
+            print("  Press CTRL+C again to abort immediately")
+            print("  (may leave the current book incomplete).")
             print("=" * 60 + "\n")
             scanner.request_shutdown()
         else:
-            print("\n⚠️  HARTER ABBRUCH — gerade laufendes Buch ggf. unvollständig.")
-            print("   Beim nächsten Lauf wird es über den Checkpoint erneut versucht.\n")
+            print("\n⚠️  HARD ABORT — current book may be incomplete.")
+            print("   It will be retried via the checkpoint on the next run.\n")
             sys.exit(1)
 
     signal.signal(signal.SIGINT, handler)
@@ -264,7 +264,7 @@ def main() -> None:
             print()
 
     if getattr(args, 'index_metadata_only', False) and args.index_new:
-        print("FEHLER: --index-metadata-only und --index-new schließen sich gegenseitig aus.",
+        print("ERROR: --index-metadata-only and --index-new are mutually exclusive.",
               file=sys.stderr)
         sys.exit(2)
 

@@ -190,20 +190,20 @@ def main() -> int:
 
     master = load_master_config()
     if master is None:
-        print("Keine Master-Config gefunden. Erwartet unter ~/.archilles/config.json.",
+        print("No master config found. Expected at ~/.archilles/config.json.",
               file=sys.stderr)
         return 2
 
     src = next((s for s in master.sources if s.name == args.source), None)
     if src is None:
         names = [s.name for s in master.sources]
-        print(f"Unbekannte Source '{args.source}'. Verfügbar: {names}", file=sys.stderr)
+        print(f"Unknown source '{args.source}'. Available: {names}", file=sys.stderr)
         return 2
 
     if phase_explicit and (src.adapter or "calibre") != "calibre":
         print(
-            f"WARNUNG: --phase {phase} wird für Adapter '{src.adapter}' ignoriert "
-            f"(nur Calibre kennt Phase A/B).",
+            f"WARNING: --phase {phase} is ignored for adapter '{src.adapter}' "
+            f"(only Calibre has phases A/B).",
             file=sys.stderr,
         )
 
@@ -236,7 +236,7 @@ def main() -> int:
     env["PYTHONUNBUFFERED"] = "1"
 
     if args.dry_run:
-        print(f"DRY-RUN — würde ausführen: {' '.join(cmd)}\n"
+        print(f"DRY-RUN — would run: {' '.join(cmd)}\n"
               f"  ARCHILLES_LIBRARY_PATH={library_path}")
         return 0
 
@@ -364,23 +364,23 @@ def main() -> int:
         stdout_text = "".join(stdout_buf)
         stats = _parse_stats(stdout_text, adapter)
 
-        # Fuer Calibre/Zotero: JSON-Blob wurde am Terminal unterdrueckt,
-        # daher hier eine lesbare Zusammenfassung ausgeben.
+        # For Calibre/Zotero the JSON blob is suppressed at the terminal,
+        # so print a readable summary here.
         if adapter in ("calibre", "zotero") and stats:
             parts = [
-                f"Gescannt: {stats.get('scanned', '?')}",
-                f"Neu: {stats.get('new_books', 0)}",
-                f"Volltext ausstehend: {stats.get('fulltext_pending', 0)}",
-                f"Metadaten: {stats.get('metadata_changed', 0)}",
-                f"Annotationen: {stats.get('annotations_changed', 0)}",
-                f"Aktualisiert: {stats.get('delta_updates', 0)}",
+                f"Scanned: {stats.get('scanned', '?')}",
+                f"New: {stats.get('new_books', 0)}",
+                f"Fulltext pending: {stats.get('fulltext_pending', 0)}",
+                f"Metadata: {stats.get('metadata_changed', 0)}",
+                f"Annotations: {stats.get('annotations_changed', 0)}",
+                f"Updated: {stats.get('delta_updates', 0)}",
             ]
             if stats.get('new_indexed'):
-                parts.append(f"Neu indexiert: {stats['new_indexed']}")
+                parts.append(f"Newly indexed: {stats['new_indexed']}")
             if stats.get('fulltext_indexed'):
-                parts.append(f"Volltext indexiert: {stats['fulltext_indexed']}")
-            parts.append(f"Fehler: {stats.get('errors', 0)}")
-            print(f"\n  Watchdog abgeschlossen in {duration:.0f}s — " + " | ".join(parts))
+                parts.append(f"Fulltext indexed: {stats['fulltext_indexed']}")
+            parts.append(f"Errors: {stats.get('errors', 0)}")
+            print(f"\n  Watchdog finished in {duration:.0f}s — " + " | ".join(parts))
 
         record = {
             "timestamp": start.isoformat(), "source": args.source,

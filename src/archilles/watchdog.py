@@ -377,7 +377,7 @@ class WatchdogScanner:
             total_p2 = len(books_to_update_list)
             for i, cid in enumerate(books_to_update_list, 1):
                 if self._shutdown_requested:
-                    print(f"\n⏸️  Abbruch angefordert — Phase 2 nach {i-1}/{total_p2} Büchern gestoppt.")
+                    print(f"\n⏸️  Shutdown requested — phase 2 stopped after {i-1}/{total_p2} books.")
                     break
                 meta = calibre_books.get(cid)
                 if not meta:
@@ -428,14 +428,14 @@ class WatchdogScanner:
                 if max_new is not None:
                     pending = pending[:max_new]
                 if already_done:
-                    print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
-                phase_label = "Metadaten-Stub" if index_metadata_only else "Volltext"
+                    print(f"  (Resuming: {already_done} already done, {len(pending)} pending)")
+                phase_label = "metadata stub" if index_metadata_only else "fulltext"
                 for j, entry in enumerate(pending, 1):
                     if self._shutdown_requested:
                         print(
-                            f"\n⏸️  Abbruch angefordert — Phase 3 ({phase_label}) nach "
-                            f"{already_done + j - 1}/{total_p3} Büchern gestoppt. "
-                            f"Checkpoint bleibt erhalten."
+                            f"\n⏸️  Shutdown requested — phase 3 ({phase_label}) stopped after "
+                            f"{already_done + j - 1}/{total_p3} books. "
+                            f"Checkpoint preserved."
                         )
                         break
                     cid = entry['calibre_id']
@@ -502,13 +502,13 @@ class WatchdogScanner:
             if max_new is not None:
                 pending = pending[:max_new]
             if already_done:
-                print(f"  (Volltext-Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
+                print(f"  (Resuming fulltext: {already_done} already done, {len(pending)} pending)")
             for j, entry in enumerate(pending, 1):
                 if self._shutdown_requested:
                     print(
-                        f"\n⏸️  Abbruch angefordert — Phase 4 (Volltext) nach "
-                        f"{already_done + j - 1}/{total_p4} Büchern gestoppt. "
-                        f"Checkpoint bleibt erhalten."
+                        f"\n⏸️  Shutdown requested — phase 4 (fulltext) stopped after "
+                        f"{already_done + j - 1}/{total_p4} books. "
+                        f"Checkpoint preserved."
                     )
                     break
                 cid = entry['calibre_id']
@@ -983,7 +983,7 @@ class ZoteroWatchdogScanner:
             total_p2 = len(update_list)
             for i, key in enumerate(update_list, 1):
                 if self._shutdown_requested:
-                    print(f"\n⏸️  Abbruch angefordert — Phase 2 nach {i-1}/{total_p2} Items gestoppt.")
+                    print(f"\n⏸️  Shutdown requested — phase 2 stopped after {i-1}/{total_p2} items.")
                     break
                 data = zotero_items.get(key, {})
                 file_path = adapter.get_file_path(key)
@@ -1012,7 +1012,7 @@ class ZoteroWatchdogScanner:
                 total_p3 = len(new_keys)
                 for j, entry in enumerate(results['new_books'], 1):
                     if self._shutdown_requested:
-                        print(f"\n⏸️  Abbruch angefordert — Phase 3 nach {j-1}/{total_p3} Items gestoppt.")
+                        print(f"\n⏸️  Shutdown requested — phase 3 stopped after {j-1}/{total_p3} items.")
                         break
                     key = entry['doc_id']
                     file_path = adapter.get_file_path(key)

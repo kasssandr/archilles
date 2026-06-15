@@ -9,7 +9,7 @@ future tenants like the news agent.
 Design
 ------
 * **Lockfile content:** a short human-readable line ``"{script_name}  PID=…
-  seit=ISO"``.  Reading it shows you which automation currently holds the
+  since=ISO"``.  Reading it shows you which automation currently holds the
   lock and since when.
 * **Heartbeat:** a daemon thread refreshes the lockfile's mtime every
   :data:`HEARTBEAT_INTERVAL_S` seconds via ``os.utime`` (atomic — never
@@ -132,25 +132,25 @@ def acquire(script_name: str, wait_s: int = 0) -> bool:
         if not busy:
             LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
             LOCK_FILE.write_text(
-                f"{script_name}  PID={os.getpid()}  seit={datetime.now().isoformat()}",
+                f"{script_name}  PID={os.getpid()}  since={datetime.now().isoformat()}",
                 encoding="utf-8",
             )
             return True
 
         if time.time() >= deadline:
             logger.warning(
-                "Routine-Lock nach %ss Wartezeit noch belegt: %s", wait_s, info
+                "Routine lock still held after %ss wait: %s", wait_s, info
             )
             print(
-                f"SKIP — Routine-Lock nach {wait_s}s Wartezeit noch belegt: {info}",
+                f"SKIP — routine lock still held after {wait_s}s wait: {info}",
                 file=sys.stderr,
             )
             return False
 
         remaining = int(deadline - time.time())
-        logger.info("Warte auf Routine-Lock (%ss verbleibend): %s", remaining, info)
+        logger.info("Waiting for routine lock (%ss left): %s", remaining, info)
         print(
-            f"  Warte auf Lock ({remaining}s verbleibend): {info}", file=sys.stderr
+            f"  Waiting for lock ({remaining}s left): {info}", file=sys.stderr
         )
         time.sleep(_POLL_INTERVAL_S)
 
