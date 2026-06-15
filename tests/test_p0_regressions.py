@@ -12,7 +12,7 @@ Findings covered:
     7.6  KeyError printing Zotero scan errors (doc_id vs calibre_id)
     2.6  chardet {'encoding': None} breaks the txt/html encoding fallback
     7.3  tags containing commas corrupt the watchdog metadata hash
-    7.5  --reset-db leaves a stale progress.db behind
+    7.5  obsolete since 7.14 — ProgressTracker removed, test deleted
 """
 
 import sqlite3

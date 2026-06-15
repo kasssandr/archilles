@@ -77,7 +77,7 @@ class SafeIndexer:
             signal.signal(signal.SIGTERM, signal_handler)
 
     def note_indexed(self) -> None:
-        """Zähle ein erfolgreich indexiertes Buch und sichere periodisch."""
+        """Count one successfully indexed book and back up periodically."""
         self.books_since_backup += 1
         if self.books_since_backup >= self.backup_interval:
             self.create_backup()

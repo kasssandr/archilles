@@ -812,6 +812,9 @@ def get_indexed_book_ids(
         reindex_missing_labels: If True, exclude books with missing page labels
                                (so they will be re-indexed)
         db_path: Path to LanceDB database (for missing labels check)
+        phase: 'phase1' counts ANY chunk as indexed (skip existing stubs);
+               'phase2' (default) counts only CONTENT chunks, so phase1 stubs
+               are re-processed into full text.
 
     Returns:
         Set of book_id strings that are already in the index
@@ -1167,7 +1170,7 @@ def batch_index(
 
     # Get already indexed books if skip_existing is enabled
     # If reindex_before is set, exclude old books from the existing set
-    # Also check progress tracker if available
+    # Check LanceDB for already-indexed books
     should_check = skip_existing or reindex_before or reindex_missing_labels
     existing_ids = get_indexed_book_ids(
         rag, reindex_before, reindex_missing_labels, db_path, phase=phase
