@@ -81,6 +81,7 @@ from src.archilles.config import (
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
 from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
+from src.archilles.indexer import IndexingCheckpoint
 from src.archilles.sqlite_ro import connect_readonly
 
 # Preferred book formats in order of priority
@@ -902,14 +903,13 @@ def batch_reindex_comments(
     import numpy as np
 
     # ── Checkpoint setup ──────────────────────────────────────────
-    from src.archilles.indexer import IndexingCheckpoint
     if checkpoint_path is None:
         checkpoint_path = Path('.archilles_reindex_checkpoint.json')
 
-    all_ids = [create_book_id(b) for b in books]
     if not dry_run:
+        all_ids = [create_book_id(b) for b in books]
         cp = IndexingCheckpoint.load_or_create(checkpoint_path, profile="", book_ids=all_ids)
-        done_ids: set = set(cp.completed_books)
+        done_ids: set = set(cp.completed_books) | set(cp.skipped_books)
         if done_ids:
             print(f"  ↩  Resuming — {len(done_ids)} books already done (checkpoint: {checkpoint_path})")
     else:
@@ -943,8 +943,7 @@ def batch_reindex_comments(
         if not book_path.exists():
             print(f"         ⚠️  File not found: {book_path}")
             stats['skipped'] += 1
-            if not dry_run:
-                cp.complete_book(book_id)
+            cp.skip_book(book_id)
             continue
 
         try:
@@ -956,8 +955,7 @@ def batch_reindex_comments(
             if not has_comments:
                 print(f"         — No comments, skipping")
                 stats['skipped'] += 1
-                if not dry_run:
-                    cp.complete_book(book_id)
+                cp.skip_book(book_id)
                 continue
 
             deleted = rag.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
@@ -979,8 +977,7 @@ def batch_reindex_comments(
                 print(f"         — No comment content after parsing")
                 stats['skipped'] += 1
 
-            if not dry_run:
-                cp.complete_book(book_id)
+            cp.complete_book(book_id)
 
         except Exception as e:
             print(f"         ❌ {e}")
