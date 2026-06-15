@@ -882,6 +882,51 @@ class TestTwoPhaseIndexing:
         # Exactly one book was indexed before shutdown tripped
         assert len(indexed_calls) == 1
 
+    def test_scanner_keeps_phase3_checkpoint_on_shutdown(self, calibre_library: Path):
+        """Drives scan() through the Phase-3 (index_new) loop with _shutdown_requested
+        tripped by FakeRAG after the first book.
+
+        Exercises the real ``if not self._shutdown_requested: cp_new.delete()`` gate
+        inside scan(), not just IndexingCheckpoint in isolation.  The checkpoint
+        file must survive (kept for resume on next run), results['interrupted']
+        must be True, and exactly one book was indexed before the break.
+        """
+        for cid in (1, 2, 3):
+            _add_book(calibre_library, cid, f"New Book {cid}",
+                      authors=["A"], with_file="x.epub")
+
+        scanner = WatchdogScanner(
+            library_path=calibre_library,
+            db_path=str(calibre_library / ".archilles" / "rag_db"),
+            archilles_dir=calibre_library / ".archilles",
+        )
+        # All books are new (not in indexed_hashes)
+        scanner._load_indexed_hashes = lambda: {}
+        scanner._annotation_changed = lambda file_path, stored_hash: False
+
+        indexed_calls: list[str] = []
+
+        class FakeRAG:
+            def index_book(self_inner, path, book_id, force=False, phase=None):
+                indexed_calls.append(book_id)
+                # Trip shutdown after the first book so the loop breaks at the
+                # start of the second iteration — the gate is checked BEFORE
+                # each book, so book 1 is fully recorded in the checkpoint.
+                scanner._shutdown_requested = True
+
+        scanner._load_rag = lambda: FakeRAG()
+
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_new=True,
+        )
+
+        assert results['interrupted'] is True
+        assert scanner.checkpoint_file.exists(), (
+            "Phase-3 checkpoint must be KEPT on interrupted run (needed for resume)"
+        )
+        # Exactly one book was indexed before shutdown tripped
+        assert len(indexed_calls) == 1
+
     def test_phase2_skips_phase1_stubs_when_phase4_drains_all(
         self, calibre_library: Path,
     ):

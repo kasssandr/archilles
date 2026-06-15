@@ -216,6 +216,43 @@ class TestJSONLRoundtrip:
             ".progress.json (old format) must not be created"
         )
 
+    def test_embed_prepared_empty_dir_writes_no_checkpoint(self, tmp_path):
+        """embed_prepared() on an empty dir must return total_books==0 and
+        must NOT create .embed_checkpoint.json (regression for the bug where
+        IndexingCheckpoint.load_or_create was called before the empty-dir guard).
+        """
+        import types
+        from src.archilles.engine.indexing import Indexer
+
+        # tmp_path is empty — no *.jsonl files at all
+
+        def fake_encode(texts, show_progress_bar=False, convert_to_numpy=True):
+            import numpy as np
+            n = len(texts) if isinstance(texts, list) else 1
+            return np.zeros((n, 1024), dtype=np.float32)
+
+        mock_rag = types.SimpleNamespace(
+            embedding_model=types.SimpleNamespace(encode=fake_encode),
+            store=types.SimpleNamespace(
+                get_by_book_id=lambda book_id, limit=1: [],
+                add_chunks=lambda chunks, embeddings: len(chunks),
+                delete_by_book_id=lambda book_id: 0,
+            ),
+            device='cpu',
+            batch_size=16,
+        )
+
+        indexer = Indexer(mock_rag)
+        result = indexer.embed_prepared(str(tmp_path), mode='local')
+
+        assert result['total_books'] == 0, (
+            f"Expected total_books=0 for empty dir, got {result['total_books']}"
+        )
+        cp_path = tmp_path / '.embed_checkpoint.json'
+        assert not cp_path.exists(), (
+            ".embed_checkpoint.json must NOT be created when there are no JSONL files"
+        )
+
     def test_skip_already_prepared(self, tmp_path):
         """Test that existing JSONL files with headers are detected."""
         jsonl_file = tmp_path / '5555.jsonl'

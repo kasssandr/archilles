@@ -346,7 +346,7 @@ Das `[ANNOTATION]`-Präfix sorgt dafür, dass BGE-M3 den semantischen Kontext "N
 
 **Entscheidung:** Entkopplung in zwei explizite Phasen:
 - **Phase 1 – Prepare** (`--prepare-only --output-dir ./prepared_chunks`): Textextraktion, Chunking, Metadaten-Anreicherung → JSONL-Dateien pro Buch (benannt nach Calibre-ID). Läuft vollständig CPU-seitig.
-- **Phase 2 – Embed** (`python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode local|remote`): Liest JSONLs, erzeugt BGE-M3-Embeddings, schreibt in LanceDB. Progress-Tracking via `.progress.json` (Resume bei Abbruch). Remote-Modus für externen Embedding-Server.
+- **Phase 2 – Embed** (`python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode local|remote`): Liest JSONLs, erzeugt BGE-M3-Embeddings, schreibt in LanceDB. Progress-Tracking via `.embed_checkpoint.json` (Resume bei Abbruch). Remote-Modus für externen Embedding-Server.
 
 **JSONL-Format:** Header-Zeile mit Buch-Metadaten, anschließend eine Zeile pro Chunk (Chunk-Daten ohne Vektoren). Dateinamen entsprechen der Calibre-ID (`{calibre_id}.jsonl`).
 

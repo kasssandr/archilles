@@ -1029,16 +1029,16 @@ class Indexer:
                 raise RuntimeError("No embedding model loaded. Don't use --skip-model with local embed mode.")
             print(f"  Local embedder: {self._rag.device}, batch_size={self._rag.batch_size}")
 
-        # Load progress tracker
-        cp_path = input_dir / '.embed_checkpoint.json'
-        cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
-        embedded_set = set(cp.completed_books) | set(cp.skipped_books)
-
         # Find all JSONL files
         jsonl_files = sorted(input_dir.glob('*.jsonl'))
         if not jsonl_files:
             print("  No JSONL files found.")
             return {'total_books': 0, 'total_chunks': 0}
+
+        # Load resume checkpoint (completed + skipped books)
+        cp_path = input_dir / '.embed_checkpoint.json'
+        cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
+        embedded_set = set(cp.completed_books) | set(cp.skipped_books)
 
         total_books = 0
         total_chunks = 0
