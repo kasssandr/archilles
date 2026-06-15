@@ -1029,13 +1029,10 @@ class Indexer:
             print(f"  Local embedder: {self._rag.device}, batch_size={self._rag.batch_size}")
 
         # Load progress tracker
-        progress_file = input_dir / '.progress.json'
-        if progress_file.exists():
-            with open(progress_file, 'r') as f:
-                progress = json.load(f)
-        else:
-            progress = {'embedded': []}
-        embedded_set = set(progress['embedded'])
+        from src.archilles.indexer import IndexingCheckpoint
+        cp_path = input_dir / '.embed_checkpoint.json'
+        cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
+        embedded_set = set(cp.completed_books) | set(cp.skipped_books)
 
         # Find all JSONL files
         jsonl_files = sorted(input_dir.glob('*.jsonl'))
@@ -1069,6 +1066,7 @@ class Indexer:
                 content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
                 if content and not force:
                     print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
+                    cp.skip_book(file_key)
                     embedded_set.add(file_key)
                     skipped += 1
                     continue
@@ -1113,12 +1111,11 @@ class Indexer:
             total_chunks += num_added
 
             # Update progress
+            cp.complete_book(file_key)
             embedded_set.add(file_key)
-            progress['embedded'] = list(embedded_set)
-            with open(progress_file, 'w') as f:
-                json.dump(progress, f)
 
         print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. {skipped} skipped.")
+        cp.delete()
         return {
             'total_books': total_books,
             'total_chunks': total_chunks,

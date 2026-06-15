@@ -122,19 +122,30 @@ class TestJSONLRoundtrip:
             assert parsed[key] == chunk[key], f"Field {key} mismatch"
 
     def test_progress_tracking(self, tmp_path):
-        """Test that .progress.json is valid JSON and tracks embedded files."""
-        progress_file = tmp_path / '.progress.json'
-        progress = {'embedded': ['9013', '9014']}
+        """Test that embed progress uses IndexingCheckpoint (.embed_checkpoint.json)."""
+        from src.archilles.indexer import IndexingCheckpoint
 
-        with open(progress_file, 'w') as f:
-            json.dump(progress, f)
+        cp_path = tmp_path / '.embed_checkpoint.json'
 
-        with open(progress_file, 'r') as f:
-            loaded = json.load(f)
+        # Simulate partial run: load/create checkpoint, record some books
+        cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
+        cp.skip_book("9013")
+        cp.complete_book("9014")
 
-        assert '9013' in loaded['embedded']
-        assert '9014' in loaded['embedded']
-        assert len(loaded['embedded']) == 2
+        # Checkpoint file should exist with canonical format (session_id present)
+        assert cp_path.exists(), ".embed_checkpoint.json should exist for partial run"
+        with open(cp_path) as f:
+            data = json.load(f)
+        assert 'session_id' in data, "Canonical format must include session_id"
+        assert '9013' in data['skipped_books']
+        assert '9014' in data['completed_books']
+
+        # Old .progress.json must NOT be used
+        assert not (tmp_path / '.progress.json').exists(), ".progress.json must not be created"
+
+        # Simulate complete run: delete checkpoint
+        cp.delete()
+        assert not cp_path.exists(), ".embed_checkpoint.json should be deleted after complete run"
 
     def test_skip_already_prepared(self, tmp_path):
         """Test that existing JSONL files with headers are detected."""
