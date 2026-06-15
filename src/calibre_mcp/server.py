@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from src.archilles.constants import ChunkType
+from src.archilles.bibliography import BIB_FORMATTERS
 from .calibre_analyzer import CalibreAnalyzer
 
 try:
@@ -31,105 +32,6 @@ from .annotations import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Standalone bibliography formatters
-# These work on normalized book dicts (adapter-agnostic) and are reused by
-# both the Calibre-path and the adapter-fallback of export_bibliography_tool.
-# Normalized book dict keys: id, title, authors (list), year (int|None),
-# publisher (str), identifiers (dict), tags (list), formats (list).
-# ---------------------------------------------------------------------------
-
-def _bib_bibtex(books: list[dict]) -> str:
-    import csv as _csv; del _csv  # noqa: imported by _bib_csv only
-    entries = []
-    for b in books:
-        last = b['authors'][0].split()[-1] if b['authors'] else 'Unknown'
-        yr = str(b['year']) if b['year'] else 'NODATE'
-        key = f"{''.join(c for c in b['title'][:20] if c.isalnum())}"
-        cite = f"{last}{yr}{key}"
-        e = f"@book{{{cite},\n  title = {{{b['title']}}},\n"
-        if b['authors']:
-            e += f"  author = {{{' and '.join(b['authors'])}}},\n"
-        if b['year']:
-            e += f"  year = {{{b['year']}}},\n"
-        if b.get('publisher'):
-            e += f"  publisher = {{{b['publisher']}}},\n"
-        if b.get('identifiers', {}).get('isbn'):
-            e += f"  isbn = {{{b['identifiers']['isbn']}}},\n"
-        if b.get('tags'):
-            e += f"  keywords = {{{', '.join(b['tags'])}}},\n"
-        e += "}"
-        entries.append(e)
-    return '\n\n'.join(entries)
-
-
-def _bib_ris(books: list[dict]) -> str:
-    entries = []
-    for b in books:
-        e = "TY  - BOOK\n"
-        e += f"TI  - {b['title']}\n"
-        for a in b['authors']:
-            e += f"AU  - {a}\n"
-        if b['year']:
-            e += f"PY  - {b['year']}\n"
-        if b.get('publisher'):
-            e += f"PB  - {b['publisher']}\n"
-        if b.get('identifiers', {}).get('isbn'):
-            e += f"SN  - {b['identifiers']['isbn']}\n"
-        for t in b.get('tags', []):
-            e += f"KW  - {t}\n"
-        e += "ER  - "
-        entries.append(e)
-    return '\n\n'.join(entries)
-
-
-def _bib_endnote(books: list[dict]) -> str:
-    entries = []
-    for b in books:
-        e = "%0 Book\n"
-        e += f"%T {b['title']}\n"
-        for a in b['authors']:
-            e += f"%A {a}\n"
-        if b['year']:
-            e += f"%D {b['year']}\n"
-        if b.get('publisher'):
-            e += f"%I {b['publisher']}\n"
-        if b.get('identifiers', {}).get('isbn'):
-            e += f"%@ {b['identifiers']['isbn']}\n"
-        for t in b.get('tags', []):
-            e += f"%K {t}\n"
-        entries.append(e)
-    return '\n\n'.join(entries)
-
-
-def _bib_csv(books: list[dict]) -> str:
-    import csv
-    from io import StringIO
-    out = StringIO()
-    w = csv.writer(out)
-    w.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
-    for b in books:
-        w.writerow([
-            b['id'],
-            b['title'],
-            '; '.join(b['authors']),
-            b['year'] or '',
-            b.get('publisher', ''),
-            b.get('identifiers', {}).get('isbn', ''),
-            '; '.join(b.get('tags', [])),
-            '; '.join(b.get('formats', [])),
-        ])
-    return out.getvalue()
-
-
-_BIB_FORMATTERS = {
-    'bibtex':  _bib_bibtex,
-    'ris':     _bib_ris,
-    'endnote': _bib_endnote,
-    'csv':     _bib_csv,
-}
 
 
 class CalibreMCPServer:
@@ -544,8 +446,8 @@ class CalibreMCPServer:
 
             if fmt == 'json':
                 data = json.dumps(books, indent=2, ensure_ascii=False)
-            elif fmt in _BIB_FORMATTERS:
-                data = _BIB_FORMATTERS[fmt](books)
+            elif fmt in BIB_FORMATTERS:
+                data = BIB_FORMATTERS[fmt](books)
             else:
                 return {'error': f'Unsupported format: {fmt}'}
 

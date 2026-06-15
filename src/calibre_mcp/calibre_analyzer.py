@@ -12,10 +12,21 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from src.archilles.bibliography import BIB_FORMATTERS
 from src.archilles.sqlite_ro import connect_readonly
 
 _RE_NON_WORD = re.compile(r'[^\w\s]')
 _RE_WHITESPACE = re.compile(r'\s+')
+
+
+def _year_from_pubdate(pubdate) -> int | None:
+    """Extract a 4-digit year (int) from a Calibre ISO pubdate string, or None."""
+    if not pubdate:
+        return None
+    try:
+        return int(str(pubdate)[:4])
+    except (ValueError, TypeError):
+        return None
 
 
 class CalibreAnalyzer:
@@ -572,21 +583,31 @@ class CalibreAnalyzer:
         # Batch fetch details + publishers for all matched books
         details = self._get_books_batch(book_ids)
         publishers = self._get_publishers_batch(book_ids)
-        books = [details[bid] for bid in book_ids if bid in details]
+        raw_books = [details[bid] for bid in book_ids if bid in details]
 
-        exporters = {
-            'bibtex': self._export_bibtex,
-            'ris': self._export_ris,
-            'endnote': self._export_endnote,
-            'json': lambda b, _p: json.dumps(b, indent=2, ensure_ascii=False),
-            'csv': self._export_csv,
-        }
+        # Normalize raw Calibre rows to the shared bibliography dict shape so
+        # the same formatters serve both the metadata.db and the SourceAdapter
+        # path (finding 5.11; year is now int, not the pubdate string of 5.2).
+        books = [
+            {
+                'id': b['id'],
+                'title': b['title'],
+                'authors': b['authors'],
+                'year': _year_from_pubdate(b['pubdate']),
+                'publisher': publishers.get(b['id'], ''),
+                'identifiers': b['identifiers'],
+                'tags': b['tags'],
+                'formats': b['formats'],
+            }
+            for b in raw_books
+        ]
 
-        exporter = exporters.get(format)
-        if not exporter:
+        if format == 'json':
+            exported = json.dumps(books, indent=2, ensure_ascii=False)
+        elif format in BIB_FORMATTERS:
+            exported = BIB_FORMATTERS[format](books)
+        else:
             return {'error': f'Unsupported format: {format}'}
-
-        exported = exporter(books, publishers)
 
         return {
             'format': format,
@@ -599,122 +620,6 @@ class CalibreAnalyzer:
             },
             'data': exported
         }
-
-    def _export_bibtex(self, books, publishers: dict[int, str]):
-        """Export books in BibTeX format"""
-        entries = []
-
-        for book in books:
-            author_part = book['authors'][0].split()[-1] if book['authors'] else 'Unknown'
-            year_part = book['pubdate'][:4] if book['pubdate'] else 'NODATE'
-            title_part = ''.join(c for c in book['title'][:20] if c.isalnum())
-            cite_key = f"{author_part}{year_part}{title_part}"
-
-            entry = f"@book{{{cite_key},\n"
-            entry += f"  title = {{{book['title']}}},\n"
-
-            if book['authors']:
-                authors = ' and '.join(book['authors'])
-                entry += f"  author = {{{authors}}},\n"
-
-            if book['pubdate']:
-                entry += f"  year = {{{book['pubdate'][:4]}}},\n"
-
-            publisher = publishers.get(book['id'], '')
-            if publisher:
-                entry += f"  publisher = {{{publisher}}},\n"
-
-            if book['identifiers'].get('isbn'):
-                entry += f"  isbn = {{{book['identifiers']['isbn']}}},\n"
-
-            if book['tags']:
-                keywords = ', '.join(book['tags'])
-                entry += f"  keywords = {{{keywords}}},\n"
-
-            entry += "}\n"
-            entries.append(entry)
-
-        return '\n'.join(entries)
-
-    def _export_ris(self, books, publishers: dict[int, str]):
-        """Export books in RIS format"""
-        entries = []
-
-        for book in books:
-            entry = "TY  - BOOK\n"
-            entry += f"TI  - {book['title']}\n"
-
-            for author in book['authors']:
-                entry += f"AU  - {author}\n"
-
-            if book['pubdate']:
-                entry += f"PY  - {book['pubdate'][:4]}\n"
-
-            publisher = publishers.get(book['id'], '')
-            if publisher:
-                entry += f"PB  - {publisher}\n"
-
-            if book['identifiers'].get('isbn'):
-                entry += f"SN  - {book['identifiers']['isbn']}\n"
-
-            for tag in book['tags']:
-                entry += f"KW  - {tag}\n"
-
-            entry += "ER  - \n"
-            entries.append(entry)
-
-        return '\n'.join(entries)
-
-    def _export_endnote(self, books, publishers: dict[int, str]):
-        """Export books in EndNote format"""
-        entries = []
-
-        for book in books:
-            entry = "%0 Book\n"
-            entry += f"%T {book['title']}\n"
-
-            for author in book['authors']:
-                entry += f"%A {author}\n"
-
-            if book['pubdate']:
-                entry += f"%D {book['pubdate'][:4]}\n"
-
-            publisher = publishers.get(book['id'], '')
-            if publisher:
-                entry += f"%I {publisher}\n"
-
-            if book['identifiers'].get('isbn'):
-                entry += f"%@ {book['identifiers']['isbn']}\n"
-
-            for tag in book['tags']:
-                entry += f"%K {tag}\n"
-
-            entries.append(entry)
-
-        return '\n'.join(entries)
-
-    def _export_csv(self, books, publishers: dict[int, str]):
-        """Export books in CSV format"""
-        import csv
-        from io import StringIO
-
-        output = StringIO()
-        writer = csv.writer(output)
-        writer.writerow(['ID', 'Title', 'Authors', 'Year', 'Publisher', 'ISBN', 'Tags', 'Formats'])
-
-        for book in books:
-            writer.writerow([
-                book['id'],
-                book['title'],
-                '; '.join(book['authors']),
-                book['pubdate'][:4] if book['pubdate'] else '',
-                publishers.get(book['id'], ''),
-                book['identifiers'].get('isbn', ''),
-                '; '.join(book['tags']),
-                '; '.join(book['formats'])
-            ])
-
-        return output.getvalue()
 
     def list_books_by_author(self, author, tags=None, year_from=None, year_to=None,
                              sort_by='title'):
