@@ -785,8 +785,13 @@ class TestTwoPhaseIndexing:
         scanner = self._make_scanner(calibre_library, indexed_hashes)
 
         # Pre-seed the checkpoint as if book 1 was already drained in a prior run
+        from src.archilles.indexer import IndexingCheckpoint
         scanner.archilles_dir.mkdir(parents=True, exist_ok=True)
-        scanner._save_fulltext_checkpoint(3, {1})
+        seed = IndexingCheckpoint.create_new(
+            scanner.fulltext_checkpoint_file, profile="", book_ids=["1", "2", "3"],
+            phase="phase2",
+        )
+        seed.complete_book("1")
 
         indexed_calls: list[str] = []
 
@@ -803,6 +808,31 @@ class TestTwoPhaseIndexing:
         assert results['fulltext_indexed'] == 2
         # Clean run drains the checkpoint
         assert not scanner.fulltext_checkpoint_file.exists()
+
+    def test_checkpoint_kept_on_interrupted_run_and_resumes(
+        self, calibre_library: Path, tmp_path: Path,
+    ):
+        """After a graceful shutdown the checkpoint file must survive so that
+        a subsequent run can reload the done-set and resume from where it left
+        off.  Simulated at unit level via IndexingCheckpoint directly."""
+        from src.archilles.indexer import IndexingCheckpoint
+
+        cp_path = tmp_path / "test_cp.json"
+        cp = IndexingCheckpoint.create_new(
+            cp_path, profile="", book_ids=["10", "20", "30"], phase="phase2"
+        )
+        cp.complete_book("10")
+        cp.complete_book("20")
+        # Do NOT call cp.delete() — simulates a shutdown mid-run.
+
+        # Checkpoint file must still exist.
+        assert cp_path.exists()
+
+        # Reload must reconstruct the same done set.
+        loaded = IndexingCheckpoint.load(cp_path)
+        assert loaded is not None
+        assert set(loaded.completed_books) == {"10", "20"}
+        assert loaded.total_books == 3
 
     def test_phase2_skips_phase1_stubs_when_phase4_drains_all(
         self, calibre_library: Path,

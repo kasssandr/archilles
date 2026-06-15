@@ -41,6 +41,7 @@ _PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
 # tool, CLI) agrees; re-exported here for backward compatibility with
 # existing imports.
 from src.archilles.config import DEFAULT_EXCLUDED_TAGS  # noqa: E402, F401
+from src.archilles.indexer import IndexingCheckpoint  # noqa: E402
 from src.archilles.sqlite_ro import connect_readonly  # noqa: E402
 
 
@@ -407,19 +408,28 @@ class WatchdogScanner:
             if index_new or index_metadata_only:
                 rag = self._load_rag()
                 ni0 = time.time()
-                saved_total, done_ids = self._load_checkpoint()
+                cp3 = IndexingCheckpoint.load(self.checkpoint_file)
+                done_ids = {int(b) for b in cp3.completed_books} if cp3 else set()
                 pending = [e for e in results['new_books'] if e['calibre_id'] not in done_ids]
                 pending.sort(key=lambda e: _index_priority_key(
                     e, calibre_books,
                     first_authors or [], first_tags or [], first_titles or [],
                 ))
                 already_done = len(done_ids)
+                saved_total = cp3.total_books if cp3 else 0
                 total_p3 = max(saved_total, already_done + len(pending))
+                if cp3 is None:
+                    self.archilles_dir.mkdir(parents=True, exist_ok=True)
+                    cp3 = IndexingCheckpoint.create_new(
+                        self.checkpoint_file,
+                        profile="",
+                        book_ids=[str(e['calibre_id']) for e in pending],
+                        phase="phase1" if index_metadata_only else "phase2",
+                    )
                 if max_new is not None:
                     pending = pending[:max_new]
                 if already_done:
                     print(f"  (Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
-                self._save_checkpoint(total_p3, done_ids)
                 phase_label = "Metadaten-Stub" if index_metadata_only else "Volltext"
                 for j, entry in enumerate(pending, 1):
                     if self._shutdown_requested:
@@ -444,15 +454,16 @@ class WatchdogScanner:
                             rag.index_book(formats[0]['path'], str(cid), force=False)
                         results['new_indexed'] += 1
                         done_ids.add(cid)
-                        self._save_checkpoint(total_p3, done_ids)
+                        cp3.complete_book(cid)
                     except Exception as exc:
                         logger.error(f"New-book indexing failed for calibre_id={cid}: {exc}")
                         results['errors'].append({'calibre_id': cid, 'error': str(exc)})
+                        cp3.fail_book(str(cid), str(exc))
                 # Only clear the checkpoint when the run finished cleanly. On a
                 # graceful shutdown we keep it so the next watchdog run resumes
                 # exactly where this one stopped.
-                if not self._shutdown_requested and self.checkpoint_file.exists():
-                    self.checkpoint_file.unlink()
+                if not self._shutdown_requested:
+                    cp3.delete()
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
 
         # ── Phase 4: fulltext-pending backlog ─────────────────────────
@@ -463,7 +474,8 @@ class WatchdogScanner:
         if index_fulltext_pending and results['fulltext_pending'] and not dry_run:
             rag = self._load_rag()
             ft0 = time.time()
-            saved_total, done_ids = self._load_fulltext_checkpoint()
+            cp4 = IndexingCheckpoint.load(self.fulltext_checkpoint_file)
+            done_ids = {int(b) for b in cp4.completed_books} if cp4 else set()
             pending = [
                 e for e in results['fulltext_pending']
                 if e['calibre_id'] not in done_ids
@@ -480,12 +492,20 @@ class WatchdogScanner:
                 first_authors or [], first_tags or [], first_titles or [],
             ))
             already_done = len(done_ids)
+            saved_total = cp4.total_books if cp4 else 0
             total_p4 = max(saved_total, already_done + len(pending))
+            if cp4 is None:
+                self.archilles_dir.mkdir(parents=True, exist_ok=True)
+                cp4 = IndexingCheckpoint.create_new(
+                    self.fulltext_checkpoint_file,
+                    profile="",
+                    book_ids=[str(e['calibre_id']) for e in pending],
+                    phase="phase2",
+                )
             if max_new is not None:
                 pending = pending[:max_new]
             if already_done:
                 print(f"  (Volltext-Fortsetzung: {already_done} bereits fertig, {len(pending)} ausstehend)")
-            self._save_fulltext_checkpoint(total_p4, done_ids)
             for j, entry in enumerate(pending, 1):
                 if self._shutdown_requested:
                     print(
@@ -506,12 +526,13 @@ class WatchdogScanner:
                     rag.index_book(formats[0]['path'], str(cid), force=False)
                     results['fulltext_indexed'] += 1
                     done_ids.add(cid)
-                    self._save_fulltext_checkpoint(total_p4, done_ids)
+                    cp4.complete_book(cid)
                 except Exception as exc:
                     logger.error(f"Fulltext indexing failed for calibre_id={cid}: {exc}")
                     results['errors'].append({'calibre_id': cid, 'error': str(exc)})
-            if not self._shutdown_requested and self.fulltext_checkpoint_file.exists():
-                self.fulltext_checkpoint_file.unlink()
+                    cp4.fail_book(str(cid), str(exc))
+            if not self._shutdown_requested:
+                cp4.delete()
             results['fulltext_indexed_time'] = round(time.time() - ft0, 1)
 
         results['total_time'] = round(time.time() - t0, 1)
@@ -663,40 +684,6 @@ class WatchdogScanner:
         merged = sorted(set(existing) | set(calibre_ids))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
         self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
-
-    def _load_checkpoint(self) -> tuple[int, set[int]]:
-        """Return (total_at_start, done_ids) from a previous interrupted --index-new run."""
-        if not self.checkpoint_file.exists():
-            return 0, set()
-        try:
-            data = json.loads(self.checkpoint_file.read_text(encoding='utf-8'))
-            return data.get('total', 0), set(data.get('done', []))
-        except Exception:
-            return 0, set()
-
-    def _save_checkpoint(self, total: int, done: set[int]) -> None:
-        self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.checkpoint_file.write_text(
-            json.dumps({'total': total, 'done': sorted(done)}, indent=2),
-            encoding='utf-8',
-        )
-
-    def _load_fulltext_checkpoint(self) -> tuple[int, set[int]]:
-        """Return (total_at_start, done_ids) from a previous interrupted --index-fulltext-pending run."""
-        if not self.fulltext_checkpoint_file.exists():
-            return 0, set()
-        try:
-            data = json.loads(self.fulltext_checkpoint_file.read_text(encoding='utf-8'))
-            return data.get('total', 0), set(data.get('done', []))
-        except Exception:
-            return 0, set()
-
-    def _save_fulltext_checkpoint(self, total: int, done: set[int]) -> None:
-        self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.fulltext_checkpoint_file.write_text(
-            json.dumps({'total': total, 'done': sorted(done)}, indent=2),
-            encoding='utf-8',
-        )
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
