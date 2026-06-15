@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 
 from src.archilles import i18n
-from src.archilles.config import DEFAULT_LANGUAGES, get_languages
+from src.archilles.config import (
+    DEFAULT_LANGUAGES,
+    get_duplicate_tag,
+    get_languages,
+)
 
 
 def _write_config(library_path, cfg):
@@ -46,6 +50,25 @@ class TestGetLanguages:
         d.mkdir()
         (d / "config.json").write_text("{ not valid json", encoding="utf-8")
         assert get_languages(tmp_path) == ["en"]
+
+
+class TestDuplicateTag:
+    """Configurable duplicate tag (finding 5.18): default 'duplicate', was the
+    hard-coded German 'Doublette'."""
+
+    def test_default_is_duplicate(self):
+        assert get_duplicate_tag(None) == "duplicate"
+
+    def test_missing_config_returns_default(self, tmp_path):
+        assert get_duplicate_tag(tmp_path) == "duplicate"
+
+    def test_reads_config_value(self, tmp_path):
+        _write_config(tmp_path, {"duplicate_tag": "Doublette"})
+        assert get_duplicate_tag(tmp_path) == "Doublette"
+
+    def test_blank_falls_back(self, tmp_path):
+        _write_config(tmp_path, {"duplicate_tag": "  "})
+        assert get_duplicate_tag(tmp_path) == "duplicate"
 
 
 class TestTranslate:

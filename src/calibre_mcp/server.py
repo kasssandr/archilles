@@ -260,7 +260,8 @@ class CalibreMCPServer:
 
         Args:
             method: Detection method - 'title_author', 'isbn', or 'exact_title'
-            include_doublette_tag: Also show books tagged with "Doublette"
+            include_doublette_tag: Also show books carrying the configured
+                duplicate tag (default "duplicate")
 
         Returns:
             Dictionary with duplicate groups and statistics
@@ -269,10 +270,13 @@ class CalibreMCPServer:
             return err
 
         try:
+            from src.archilles.config import get_duplicate_tag, get_library_path
+            duplicate_tag = get_duplicate_tag(get_library_path(required=False))
             with CalibreAnalyzer(self.db_path) as analyzer:
                 return analyzer.detect_duplicates(
                     method=method,
-                    include_doublette_tag=include_doublette_tag
+                    include_doublette_tag=include_doublette_tag,
+                    duplicate_tag=duplicate_tag,
                 )
         except Exception as e:
             return {'error': f'Failed to detect duplicates: {e}'}
@@ -333,7 +337,7 @@ class CalibreMCPServer:
 
     def get_doublette_tag_instruction_tool(self, book_id: int) -> dict[str, Any]:
         """
-        MCP Tool: Get instructions for adding the "Doublette" tag to a book.
+        MCP Tool: Get instructions for adding the duplicate tag to a book.
 
         Note: This server cannot modify the database directly.
         Use Calibre's calibredb command to actually add tags.
@@ -348,8 +352,10 @@ class CalibreMCPServer:
             return err
 
         try:
+            from src.archilles.config import get_duplicate_tag, get_library_path
+            duplicate_tag = get_duplicate_tag(get_library_path(required=False))
             with CalibreAnalyzer(self.db_path) as analyzer:
-                return analyzer.add_doublette_tag(book_id)
+                return analyzer.add_doublette_tag(book_id, duplicate_tag=duplicate_tag)
         except Exception as e:
             return {'error': f'Failed to get tag instruction: {e}'}
 
@@ -959,7 +965,7 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
         },
         {
             'name': 'detect_duplicates',
-            'description': 'Detect duplicate books in the library using various methods (title+author, ISBN, or exact title). Also shows books tagged with "Doublette".',
+            'description': 'Detect duplicate books in the library using various methods (title+author, ISBN, or exact title). Also shows books carrying the configured duplicate tag (default "duplicate").',
             'inputSchema': {
                 'type': 'object',
                 'properties': {
@@ -971,7 +977,7 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     },
                     'include_doublette_tag': {
                         'type': 'boolean',
-                        'description': 'Also show books tagged with "Doublette"',
+                        'description': 'Also show books carrying the configured duplicate tag (default "duplicate")',
                         'default': True
                     }
                 }
@@ -993,7 +999,7 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
         },
         {
             'name': 'get_doublette_tag_instruction',
-            'description': 'Get instructions for adding the "Doublette" tag to a book (for manual tagging)',
+            'description': 'Get instructions for adding the duplicate tag to a book (for manual tagging)',
             'inputSchema': {
                 'type': 'object',
                 'properties': {

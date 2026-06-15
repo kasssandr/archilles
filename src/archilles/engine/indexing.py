@@ -1137,7 +1137,7 @@ class Indexer:
         Build calibre_comment chunk(s) with structure-aware text.
 
         If comments_html is available, parses H2–H4 headlines into separate
-        chunks and prepends bold/<strong>/!!!...!!! passages as "Kernaussagen:"
+        chunks and prepends bold/<strong>/!!!...!!! passages as "Key points:"
         so they carry extra weight in the embedding.
 
         Returns:
@@ -1207,7 +1207,7 @@ class Indexer:
                 parts.append(f"## {section['headline']} ##")
             if section['key_passages']:
                 kp = ' | '.join(section['key_passages'])
-                parts.append(f"Kernaussagen: {kp}")
+                parts.append(f"Key points: {kp}")
             if section['text']:
                 parts.append(section['text'])
 

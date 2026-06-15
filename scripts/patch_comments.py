@@ -109,7 +109,7 @@ def _build_comment_chunks_standalone(
             parts.append(f"## {section['headline']} ##")
         if section['key_passages']:
             kp = ' | '.join(section['key_passages'])
-            parts.append(f"Kernaussagen: {kp}")
+            parts.append(f"Key points: {kp}")
         if section['text']:
             parts.append(section['text'])
 

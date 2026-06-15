@@ -86,7 +86,7 @@ class CalibreDB:
         H5/H6 are treated as normal paragraph text.
 
         Key passages (bold, H3/H4, !!!text!!!) are prepended as
-        "Kernaussagen: A | B" before the section body, so they appear twice
+        "Key points: A | B" before the section body, so they appear twice
         in the chunk and influence the embedding more strongly.
 
         Returns list of dicts:

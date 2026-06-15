@@ -310,8 +310,8 @@ class CalibreAnalyzer:
         """Return a CSV string of all duplicate books with annotation counts.
 
         Columns: Group, ID, Authors, Title, Annotations
-        Each duplicate group is numbered; Doublette-tagged books appear last
-        under group label "Doublette".
+        Each duplicate group is numbered; duplicate-tagged books appear last
+        under group label "Duplicate".
         """
         import csv
         from io import StringIO
@@ -321,13 +321,13 @@ class CalibreAnalyzer:
         # Collect all book IDs to fetch annotation counts in one query
         all_books: list[tuple[str, dict]] = []  # (group_label, book_dict)
         for i, group in enumerate(result['duplicate_groups'], 1):
-            label = f"Gruppe {i}"
+            label = f"Group {i}"
             for book in group['books']:
                 all_books.append((label, book))
         for book in result.get('doublette_tagged_books', []):
             # Avoid duplicating books already in a group
             if not any(b['id'] == book['id'] for _, b in all_books):
-                all_books.append(("Doublette", book))
+                all_books.append(("Duplicate", book))
 
         all_ids = [b['id'] for _, b in all_books]
         annot_counts = self._get_annotation_counts_batch(all_ids)
@@ -377,14 +377,16 @@ class CalibreAnalyzer:
         return title
 
     def detect_duplicates(self, method='title_author', include_doublette_tag=True,
-                         similarity_threshold=0.9):
+                         similarity_threshold=0.9, duplicate_tag='duplicate'):
         """
         Detect duplicate books in the library.
 
         Args:
             method: Detection method - 'title_author', 'isbn', 'exact_title', or 'fuzzy'
-            include_doublette_tag: If True, also show books tagged with "Doublette"
+            include_doublette_tag: If True, also show books carrying the duplicate tag
             similarity_threshold: Threshold for fuzzy matching (0.0-1.0)
+            duplicate_tag: Calibre tag marking a known duplicate (finding 5.18;
+                default "duplicate", configurable via ``duplicate_tag`` in config.json)
 
         Returns:
             Dictionary with duplicate groups and statistics
@@ -445,7 +447,7 @@ class CalibreAnalyzer:
                 if len(ids) > 1:
                     groups.append(('title_author', f"{norm_title} by {', '.join(authors)}", ids))
 
-        # Doublette-tagged books
+        # Duplicate-tagged books
         doublette_ids: list[int] = []
         if include_doublette_tag:
             query = """
@@ -453,9 +455,9 @@ class CalibreAnalyzer:
             FROM books b
             JOIN books_tags_link btl ON b.id = btl.book
             JOIN tags t ON btl.tag = t.id
-            WHERE LOWER(t.name) = 'doublette'
+            WHERE LOWER(t.name) = ?
             """
-            cursor = self.conn.execute(query)
+            cursor = self.conn.execute(query, (duplicate_tag.lower(),))
             doublette_ids = [row['id'] for row in cursor.fetchall()]
 
         # Single batch fetch for ALL referenced book_ids
@@ -486,16 +488,18 @@ class CalibreAnalyzer:
             'doublette_count': len(doublette_books),
         }
 
-    def add_doublette_tag(self, book_id):
+    def add_doublette_tag(self, book_id, duplicate_tag='duplicate'):
         """
-        Add the 'Doublette' tag to a book.
+        Produce the calibredb instruction to mark a book with the duplicate tag.
 
         Note: This is a read-only operation in this implementation.
         To actually modify the database, use Calibre's calibredb command:
-        calibredb set_metadata <book_id> --field tags:+Doublette
+        calibredb set_metadata <book_id> --field tags:+<duplicate_tag>
 
         Args:
             book_id: ID of the book to tag
+            duplicate_tag: Calibre tag marking a known duplicate (finding 5.18;
+                default "duplicate", configurable via config.json)
 
         Returns:
             Dictionary with instructions for manual tagging
@@ -509,7 +513,7 @@ class CalibreAnalyzer:
             'title': book['title'],
             'authors': book['authors'],
             'current_tags': book['tags'],
-            'instruction': f'To add "Doublette" tag, run: calibredb set_metadata {book_id} --field tags:"+Doublette"'
+            'instruction': f'To add the "{duplicate_tag}" tag, run: calibredb set_metadata {book_id} --field tags:"+{duplicate_tag}"'
         }
 
     def export_bibliography(self, format='bibtex', author=None, tag=None,
@@ -851,11 +855,11 @@ class CalibreAnalyzer:
         else:
             print("No duplicates found!")
 
-        # Show Doublette-tagged books
+        # Show duplicate-tagged books
         if result['doublette_count'] > 0:
             print()
             print("=" * 60)
-            print(f"Books tagged with 'Doublette': {result['doublette_count']}")
+            print(f"Books with the duplicate tag: {result['doublette_count']}")
             print("-" * 60)
             for book in result['doublette_tagged_books']:
                 authors = ', '.join(book['authors']) if book['authors'] else 'Unknown'

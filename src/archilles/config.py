@@ -166,6 +166,36 @@ def get_languages(library_path: Path | None = None) -> list[str]:
     return list(DEFAULT_LANGUAGES)
 
 
+# Calibre tag marking a book as a known duplicate (finding 5.18 — replaces the
+# hard-coded German "Doublette"). Configurable so users can keep their own tag.
+DEFAULT_DUPLICATE_TAG = "duplicate"
+
+
+def get_duplicate_tag(library_path: Path | None = None) -> str:
+    """Return the Calibre tag that marks a book as a known duplicate.
+
+    Reads ``duplicate_tag`` from ``<library>/.archilles/config.json``; falls
+    back to :data:`DEFAULT_DUPLICATE_TAG` (``"duplicate"``) when there is no
+    library context, no config file/key, or the file cannot be parsed. Users
+    who tagged duplicates in another language set this key (e.g. ``"Doublette"``).
+    """
+    if library_path is None:
+        return DEFAULT_DUPLICATE_TAG
+
+    config_path = library_path / ".archilles" / "config.json"
+    if not config_path.exists():
+        return DEFAULT_DUPLICATE_TAG
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_DUPLICATE_TAG
+
+    val = config.get("duplicate_tag") if isinstance(config, dict) else None
+    return val if isinstance(val, str) and val.strip() else DEFAULT_DUPLICATE_TAG
+
+
 # Built-in defaults for the embed-prepared embedder; mirror the argparse
 # defaults of the ``embed`` CLI command.
 _EMBEDDER_DEFAULTS = {

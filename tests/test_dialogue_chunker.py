@@ -199,7 +199,7 @@ class TestDialogueChunker:
         assert "**User:**" in chunks[0].text
         # Continuation chunks do NOT have full user header
         for chunk in chunks[1:]:
-            assert "Forts." in chunk.text
+            assert "(cont.)" in chunk.text
 
     def test_no_turns_returns_empty(self):
         chunker = DialogueChunker()

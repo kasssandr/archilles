@@ -251,7 +251,7 @@ class DialogueChunker(TextChunker):
                     if self.repeat_prompt_on_split or part_idx == 0:
                         chunk_text = user_header + part
                     else:
-                        label = f"**{llm_speaker}:** (Forts.)" if llm_speaker else "(Forts.)"
+                        label = f"**{llm_speaker}:** (cont.)" if llm_speaker else "(cont.)"
                         chunk_text = f"{label}\n{part}"
 
                     chunks.append(TextChunk(
