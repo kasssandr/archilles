@@ -99,6 +99,88 @@ class TestWebUiKeys:
         assert i18n.t("webui.button_search", "fr") == "🔍 Search"
 
 
+class TestCorpusData:
+    """Corpus-language data (Etappe 5): OCR codes, stop words, TOC keywords,
+    dialogue markers, locales — derived from the languages list."""
+
+    def test_ocr_language_joins_active(self):
+        assert i18n.get_ocr_language(["de", "en"]) == "deu+eng"
+        assert i18n.get_ocr_language(["la", "de"]) == "lat+deu"
+        assert i18n.get_ocr_language(["en"]) == "eng"
+
+    def test_ocr_language_fallbacks(self):
+        assert i18n.get_ocr_language([]) == "eng"
+        assert i18n.get_ocr_language(None) == "eng"
+        assert i18n.get_ocr_language(["xx"]) == "eng"  # unknown ISO code
+
+    def test_ocr_language_dedups(self):
+        assert i18n.get_ocr_language(["en", "en"]) == "eng"
+
+    def test_stopwords_are_language_scoped(self):
+        # finding 8.3: a single mixed set let German 'die' drop English "die".
+        en = i18n.get_stopwords(["en"])
+        de = i18n.get_stopwords(["de"])
+        assert "the" in en and "die" not in en
+        assert "die" in de and "the" not in de
+
+    def test_stopwords_union(self):
+        both = i18n.get_stopwords(["de", "en"])
+        assert "the" in both and "die" in both
+
+    def test_stopwords_none_is_all(self):
+        all_sw = i18n.get_stopwords(None)
+        assert {"the", "die", "le", "et"} <= all_sw  # en, de, fr, la
+
+    def test_locale(self):
+        assert i18n.get_locale(["de"]) == "de-DE"
+        assert i18n.get_locale(["en", "de"]) == "en-US"
+        assert i18n.get_locale(None) == "en-US"
+        assert i18n.get_locale(["xx"]) == "en-US"
+
+    def test_toc_keywords_union_all_languages(self):
+        kw = i18n.get_toc_keywords()
+        assert "chapter" in kw and "kapitel" in kw
+        front = i18n.get_toc_front_matter_keywords()
+        assert "preface" in front and "vorwort" in front
+
+    def test_dialogue_markers_drop_private_name(self):
+        markers = i18n.get_dialogue_user_markers()
+        assert "tom" not in markers  # finding 3.19: private name removed
+        assert "nutzer" in markers and "user" in markers
+
+    def test_dialogue_markers_language_scoped(self):
+        en = i18n.get_dialogue_user_markers(["en"])
+        assert "user" in en and "nutzer" not in en
+
+
+class TestEngineCorpusIntegration:
+    """ArchillesRAG derives OCR language and the query stop-word set from the
+    `languages` constructor argument (findings 2.33, 8.3)."""
+
+    @staticmethod
+    def _rag(tmp_path, **kw):
+        from src.archilles.engine import ArchillesRAG
+        return ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True, **kw)
+
+    def test_stop_words_language_scoped(self, tmp_path):
+        rag = self._rag(tmp_path, languages=["en"])
+        assert "the" in rag.stop_words and "der" not in rag.stop_words
+
+    def test_stop_words_union(self, tmp_path):
+        rag = self._rag(tmp_path, languages=["de", "en"])
+        assert "the" in rag.stop_words and "der" in rag.stop_words
+
+    def test_default_languages_keep_all_stop_words(self, tmp_path):
+        # No languages → all known stop words (legacy behaviour, no break).
+        rag = self._rag(tmp_path)
+        assert {"the", "der", "le"} <= rag.stop_words
+
+    def test_dialogue_default_markers_have_no_private_name(self):
+        from src.archilles.chunkers.dialogue import DEFAULT_USER_MARKERS
+        assert "tom" not in DEFAULT_USER_MARKERS
+        assert "nutzer" in DEFAULT_USER_MARKERS
+
+
 class TestSystemPromptStandardisedEnglish:
     """8.19: the LLM prompt is fixed to English (quality + maintainability),
     independent of the operator language."""

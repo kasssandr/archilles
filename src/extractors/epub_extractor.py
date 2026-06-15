@@ -16,6 +16,10 @@ except ImportError:
 
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
+from src.archilles.i18n import (
+    get_toc_back_matter_keywords,
+    get_toc_front_matter_keywords,
+)
 from .base import BaseExtractor
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import EPUBExtractionError
@@ -26,20 +30,13 @@ logger = logging.getLogger(__name__)
 _SECTION_NUM_START = re.compile(r'^(\d+(?:\.\d+)*)\s+')
 _SECTION_NUM_LABEL = re.compile(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', re.IGNORECASE)
 
-# Section type classification patterns
-_FRONT_MATTER_PATTERNS = frozenset([
-    'preface', 'foreword', 'acknowledgments', 'acknowledgements',
-    'dedication', 'table of contents', 'contents', 'toc', 'about the author',
-    'about this book', 'prologue', 'copyright', 'title page',
-    'half title', 'frontispiece', 'list of illustrations', 'list of maps',
-    # NB: "introduction" bewusst NICHT hier —
-    # Einleitungen sind inhaltlich relevant und gehören zu main_content.
-])
-_BACK_MATTER_PATTERNS = frozenset([
-    'index', 'bibliography', 'references', 'glossary',
-    'appendix', 'notes', 'endnotes', 'epilogue',
-    'afterword', 'about the publisher', 'colophon',
-])
+# Section type classification patterns — sourced from the central corpus-
+# language data (i18n); not language-filtered. This also gives EPUBs German
+# section detection, which the previous English-only set lacked.
+# NB: "introduction"/"einleitung" are deliberately NOT classified here —
+# introductions are substantive content and belong to main_content.
+_FRONT_MATTER_PATTERNS = get_toc_front_matter_keywords()
+_BACK_MATTER_PATTERNS = get_toc_back_matter_keywords()
 
 
 class EPUBExtractor(BaseExtractor):

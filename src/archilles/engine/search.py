@@ -31,7 +31,7 @@ class Searcher:
 
         for word in original_words:
             clean_word = word.lower().strip('.,;:!?"\'()[]{}')
-            if clean_word in self._rag.STOP_WORDS:
+            if clean_word in self._rag.stop_words:
                 removed.append(word)
             else:
                 result_words.append(word)

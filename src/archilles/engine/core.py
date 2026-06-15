@@ -11,6 +11,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from src.archilles.constants import ChunkType, SectionType
+from src.archilles.i18n import get_ocr_language, get_stopwords
 from src.extractors import UniversalExtractor
 from src.storage import LanceDBStore
 
@@ -38,53 +39,6 @@ class ArchillesRAG:
     # Fields to copy from Calibre book_data into chunk metadata
     _CALIBRE_FIELDS = ('author', 'title', 'year', 'publisher', 'language', 'isbn',
                        'calibre_id', 'tags', 'comments', 'custom_fields')
-
-    # Common stop words for multilingual queries
-    STOP_WORDS = {
-        # English
-        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
-        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
-        'to', 'was', 'will', 'with', 'or', 'but', 'not', 'this', 'these',
-        # German
-        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer',
-        'eines', 'einem', 'einen', 'und', 'oder', 'aber', 'von', 'zu',
-        'im', 'am', 'um', 'bei', 'mit', 'für', 'aus', 'auf', 'durch',
-        # French
-        'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'et', 'ou',
-        'mais', 'dans', 'pour', 'par', 'sur', 'avec', 'au', 'aux', 'ce',
-        'cette', 'ces', 'est', 'sont', 'être', 'avoir', 'à', 'son', 'sa',
-        # Spanish
-        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o',
-        'pero', 'en', 'por', 'para', 'con', 'sin', 'sobre', 'del', 'al',
-        'es', 'son', 'ser', 'estar', 'haber', 'ha', 'han', 'su', 'sus',
-        # Italian
-        'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', 'e', 'o',
-        'ma', 'in', 'di', 'd', 'da', 'per', 'con', 'su', 'del', 'della', 'dei',
-        'degli', 'delle', 'al', 'alla', 'ai', 'agli', 'alle', 'è', 'sono',
-        # Portuguese
-        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'e', 'ou',
-        'mas', 'em', 'de', 'por', 'para', 'com', 'sem', 'sobre', 'do',
-        'da', 'dos', 'das', 'ao', 'à', 'aos', 'às', 'é', 'são', 'seu', 'sua',
-        # Dutch
-        'de', 'het', 'een', 'en', 'of', 'maar', 'in', 'op', 'voor', 'van',
-        'met', 'door', 'bij', 'aan', 'naar', 'om', 'over', 'is', 'zijn',
-        'was', 'waren', 'heeft', 'hebben', 'had', 'hadden', 'zijn', 'der',
-        # Latin
-        'et', 'in', 'ad', 'cum', 'ex', 'ab', 'a', 'e', 'de', 'per', 'pro', 'sub',
-        'atque', 'sed', 'aut', 'vel', 'ac', 'neque', 'nec', 'est', 'sunt',
-        # Russian (Cyrillic)
-        'и', 'в', 'на', 'с', 'по', 'для', 'к', 'от', 'за', 'о',
-        'из', 'у', 'это', 'как', 'но', 'или', 'а', 'не', 'что', 'он',
-        # Greek (ancient & modern)
-        'ο', 'η', 'το', 'οι', 'τα', 'και', 'ή', 'αλλά', 'σε', 'από',
-        'για', 'με', 'στο', 'στη', 'στον', 'στην', 'του', 'της', 'των', 'εν',
-        # Hebrew (with common particles)
-        'ה', 'ו', 'ב', 'ל', 'מ', 'ש', 'של', 'את', 'על', 'אל', 'עם',
-        'כי', 'אם', 'או', 'זה', 'זאת', 'אלה', 'הוא', 'היא',
-        # Arabic
-        'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
-        'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
-    }
 
     @staticmethod
     def _format_tags(tags) -> str:
@@ -187,7 +141,8 @@ class ArchillesRAG:
         enable_ocr: bool = False,
         force_ocr: bool = False,
         ocr_backend: str = "auto",
-        ocr_language: str = "deu+eng",
+        ocr_language: str | None = None,  # None → derived from `languages`
+        languages: list[str] | None = None,  # corpus languages (OCR, stop words)
         profile: str = None,  # 'minimal', 'balanced', 'maximal', or None (auto-detect)
         use_modular_pipeline: bool = False,  # Future: use modular architecture
         hierarchical: bool = False,  # Enable parent-child chunking
@@ -215,6 +170,13 @@ class ArchillesRAG:
         self.use_modular_pipeline = use_modular_pipeline
         self.profile_name = profile
         self._adapter = adapter  # SourceAdapter (or None for legacy CalibreDB path)
+        # Corpus-language settings (finding 2.33 / 8.3): OCR language and the
+        # query stop-word set are derived from the configured `languages` list.
+        # An explicit `ocr_language` (e.g. from --ocr-language) still wins.
+        self.languages = languages
+        if ocr_language is None:
+            ocr_language = get_ocr_language(languages)
+        self.stop_words = get_stopwords(languages)
         # Phase-1 chunk settings (used in prepare_book(), not in index_book()).
         # Larger than the live default to keep prepared JSONL volume manageable
         # for cloud-GPU embedding later — bestehender Live-Index bleibt unberuehrt.

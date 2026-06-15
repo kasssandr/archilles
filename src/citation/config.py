@@ -122,7 +122,10 @@ CITATION_STYLES: Dict[str, Dict[str, str]] = {
 
 # Default style when nothing is configured
 DEFAULT_STYLE = "chicago-author-date"
-DEFAULT_LOCALE = "de-DE"
+# Neutral default (finding 4.13): was "de-DE". Users who want a German
+# bibliography set ``citation.locale`` in config.json; the central
+# ``i18n.get_locale(languages)`` helper can derive it from the language list.
+DEFAULT_LOCALE = "en-US"
 
 
 # ---------------------------------------------------------------------------

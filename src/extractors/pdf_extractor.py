@@ -20,6 +20,10 @@ except ImportError:
 
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
+from src.archilles.i18n import (
+    get_toc_back_matter_keywords,
+    get_toc_front_matter_keywords,
+)
 from .base import BaseExtractor
 from .exceptions import PDFExtractionError
 from .models import ChunkMetadata, ExtractedText
@@ -496,26 +500,12 @@ class PDFExtractor(BaseExtractor):
 
         return page_map
 
-    _FRONT_MATTER_TOC_KEYWORDS = frozenset([
-        'preface', 'vorwort', 'foreword', 'geleitwort',
-        'acknowledgments', 'acknowledgements', 'danksagung',
-        'table of contents', 'contents', 'inhaltsverzeichnis', 'inhalt',
-        'dedication', 'widmung', 'about the author', 'über den autor',
-        'prologue', 'prolog', 'copyright', 'isbn',
-        # NB: "introduction/einleitung" bewusst NICHT hier —
-        # Einleitungen sind inhaltlich relevant und gehören zu main_content.
-    ])
-
-    _BACK_MATTER_TOC_KEYWORDS = frozenset([
-        'index', 'register', 'sachregister', 'personenregister', 'namenregister',
-        'bibliography', 'bibliographie', 'literaturverzeichnis', 'literatur',
-        'references', 'quellenverzeichnis',
-        'glossary', 'glossar',
-        'appendix', 'anhang',
-        'notes', 'endnotes', 'anmerkungen', 'endnoten',
-        'epilogue', 'epilog', 'nachwort', 'afterword',
-        'abbreviations', 'abkürzungen', 'abkürzungsverzeichnis',
-    ])
+    # Sourced from the central corpus-language data (i18n); not language-
+    # filtered (the word-boundary matching prevents cross-language hits).
+    # NB: "introduction"/"einleitung" are deliberately NOT classified here —
+    # introductions are substantive content and belong to main_content.
+    _FRONT_MATTER_TOC_KEYWORDS = get_toc_front_matter_keywords()
+    _BACK_MATTER_TOC_KEYWORDS = get_toc_back_matter_keywords()
 
     # Pre-compiled regex patterns (avoid re.compile inside hot loops)
     _JUNK_TOC_RE = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)

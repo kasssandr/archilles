@@ -16,16 +16,12 @@ from typing import Any, Optional
 from datetime import datetime
 
 from src.archilles.text_match import contains_keyword
+from src.archilles.i18n import get_toc_keywords
 
 logger = logging.getLogger(__name__)
 
-_TOC_KEYWORDS = frozenset([
-    'inhaltsverzeichnis', 'table of contents', 'contents',
-    'chapter', 'kapitel', 'part', 'teil', 'section',
-    'index', 'register', 'anhang', 'appendix',
-    'vorwort', 'preface', 'introduction', 'einleitung',
-    'bibliography', 'literaturverzeichnis',
-])
+# Sourced from the central corpus-language data (i18n); not language-filtered.
+_TOC_KEYWORDS = get_toc_keywords()
 
 
 def compute_book_hash(book_path: str) -> str:

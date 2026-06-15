@@ -20,21 +20,19 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from src.archilles.constants import ChunkType
+from src.archilles.i18n import DIALOGUE_LLM_MARKERS, get_dialogue_user_markers
 from .base import TextChunker, TextChunk, ChunkerConfig
 
 logger = logging.getLogger(__name__)
 
 # ── Default speaker sets ────────────────────────────────────────
 
-DEFAULT_USER_MARKERS: frozenset[str] = frozenset({
-    "user", "tom", "human", "nutzer", "ich",
-})
+# Sourced from the central corpus-language data (i18n); the private author
+# name "tom" was removed (finding 3.19). Users add markers via config rather
+# than editing code.
+DEFAULT_USER_MARKERS: frozenset[str] = get_dialogue_user_markers()
 
-DEFAULT_LLM_MARKERS: frozenset[str] = frozenset({
-    "chatgpt", "grok", "gemini", "claude", "assistant",
-    "copilot", "perplexity", "mistral", "llama", "deepseek",
-    "chatbot", "ai", "bot",
-})
+DEFAULT_LLM_MARKERS: frozenset[str] = DIALOGUE_LLM_MARKERS
 
 # ── Turn-marker regex patterns ──────────────────────────────────
 

@@ -76,6 +76,7 @@ from scripts.find_books_missing_labels import find_books_missing_labels
 from src.archilles.config import (
     DEFAULT_EXCLUDED_TAGS,
     get_excluded_tags,
+    get_languages,
     get_library_path,
 )
 from src.archilles.constants import ChunkType, SectionType
@@ -1617,6 +1618,7 @@ Profiles:
                 reset_db=args.reset_db,
                 enable_ocr=args.enable_ocr,
                 force_ocr=args.force_ocr,
+                languages=get_languages(get_library_path(required=False)),
                 profile=profile_name,
                 hierarchical=args.hierarchical,
                 use_modular_pipeline=args.use_modular_pipeline,

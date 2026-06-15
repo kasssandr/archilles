@@ -255,7 +255,7 @@ Examples:
     index_parser.add_argument('--force-ocr', action='store_true', help='Force OCR even for digital PDFs (skip text extraction)')
     index_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto',
                               help='OCR backend: auto (best available), tesseract, lighton, olmocr')
-    index_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes (default: deu+eng)')
+    index_parser.add_argument('--ocr-language', default=None, help='Tesseract language codes (default: derived from configured languages)')
     # Hardware profile options
     index_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
                               help='Hardware profile: minimal (CPU), balanced (GPU 6-12GB), maximal (GPU 12GB+)')
@@ -305,7 +305,7 @@ Examples:
     prepare_parser.add_argument('--enable-ocr', action='store_true', help='Enable OCR for scanned PDFs')
     prepare_parser.add_argument('--force-ocr', action='store_true', help='Force OCR even for digital PDFs')
     prepare_parser.add_argument('--ocr-backend', choices=['auto', 'tesseract', 'lighton', 'olmocr'], default='auto')
-    prepare_parser.add_argument('--ocr-language', default='deu+eng', help='Tesseract language codes')
+    prepare_parser.add_argument('--ocr-language', default=None, help='Tesseract language codes (default: derived from configured languages)')
     prepare_parser.add_argument('--hierarchical', action='store_true', help='Enable parent-child chunking')
 
     # Embed command (embed prepared chunks, store in LanceDB)
@@ -360,7 +360,7 @@ Examples:
         enable_ocr = getattr(args, 'enable_ocr', False)
         force_ocr = getattr(args, 'force_ocr', False)
         ocr_backend = getattr(args, 'ocr_backend', 'auto')
-        ocr_language = getattr(args, 'ocr_language', 'deu+eng')
+        ocr_language = getattr(args, 'ocr_language', None)
         profile = getattr(args, 'profile', None)
         use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
         hierarchical = getattr(args, 'hierarchical', False)
@@ -375,6 +375,7 @@ Examples:
             force_ocr=force_ocr,
             ocr_backend=ocr_backend,
             ocr_language=ocr_language,
+            languages=get_languages(get_library_path(required=False)),
             use_modular_pipeline=use_modular_pipeline,
             profile=profile,
             hierarchical=hierarchical,

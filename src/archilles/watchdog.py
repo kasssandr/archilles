@@ -561,7 +561,9 @@ class WatchdogScanner:
     def _load_rag(self):
         """Load a full ArchillesRAG instance (with embedding model)."""
         from src.archilles.engine import ArchillesRAG
-        return ArchillesRAG(db_path=self.db_path)
+        from src.archilles.config import get_languages
+        return ArchillesRAG(db_path=self.db_path,
+                            languages=get_languages(Path(self.library_path)))
 
     def _annotation_files_signature(self, file_path: Path) -> list[int]:
         """Return a (book_mtime_ns, book_size, viewer_mtime_ns, viewer_size) tuple.
@@ -1055,7 +1057,9 @@ class ZoteroWatchdogScanner:
 
     def _load_rag(self):
         from src.archilles.engine import ArchillesRAG
-        return ArchillesRAG(db_path=self.db_path)
+        from src.archilles.config import get_languages
+        return ArchillesRAG(db_path=self.db_path,
+                            languages=get_languages(Path(self.library_path)))
 
     def _load_annotation_cache(self) -> dict[str, str]:
         """Lazy-load the Zotero annotation cache ({item_key: att_modified_at})."""

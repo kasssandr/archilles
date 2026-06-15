@@ -273,3 +273,213 @@ def t(key: str, lang: str = FALLBACK_LANG) -> str:
 
     logger.warning("Missing i18n key %r (lang=%r)", key, lang)
     return key
+
+
+# ───────────────────────────────────────────────────────────────────
+# Corpus-language data (Strang 3)
+# ───────────────────────────────────────────────────────────────────
+# Unlike the UI message catalogue above, these are *corpus* data derived from
+# the whole ``languages`` list (not just languages[0]). Language-specific data
+# lives here per ISO-639-1 code so new languages can be added in one place.
+# Helpers return either the union of the *active* languages (OCR codes, stop
+# words — finding 8.3) or, where cross-language mixing is harmless thanks to
+# the P1 word-boundary matching, the union of *all* known languages (TOC
+# keywords — findings 2.2/6.15).
+
+# ISO-639-1 → Tesseract OCR language code (finding 2.33).
+OCR_CODES: dict[str, str] = {
+    "en": "eng", "de": "deu", "fr": "fra", "es": "spa", "it": "ita",
+    "pt": "por", "nl": "nld", "la": "lat", "ru": "rus", "el": "ell",
+    "he": "heb", "ar": "ara", "zh": "chi_sim", "ja": "jpn", "ko": "kor",
+}
+
+
+def get_ocr_language(languages: list[str] | None) -> str:
+    """Tesseract ``+``-joined OCR codes for the active languages.
+
+    Unknown ISO codes are skipped, duplicates removed (order preserved);
+    falls back to ``"eng"`` when nothing maps.
+    """
+    codes: list[str] = []
+    for lng in (languages or []):
+        code = OCR_CODES.get(lng)
+        if code and code not in codes:
+            codes.append(code)
+    return "+".join(codes) or "eng"
+
+
+# BCP-47 locale for the operator language (finding 4.13: was hard-coded "de-DE").
+LOCALES: dict[str, str] = {
+    "en": "en-US", "de": "de-DE", "fr": "fr-FR", "es": "es-ES", "it": "it-IT",
+    "pt": "pt-PT", "nl": "nl-NL", "la": "la", "ru": "ru-RU", "el": "el-GR",
+    "he": "he-IL", "ar": "ar", "zh": "zh-CN", "ja": "ja-JP", "ko": "ko-KR",
+}
+
+
+def get_locale(languages: list[str] | None) -> str:
+    """BCP-47 locale for the operator language (``languages[0]``); default en-US."""
+    first = (languages or ["en"])[0]
+    return LOCALES.get(first, "en-US")
+
+
+# Stop words per language (was the single mixed ``ArchillesRAG.STOP_WORDS`` —
+# finding 8.3: 'die' (de) dropped English "die", 'a' (en) dropped Latin "a").
+STOPWORDS: dict[str, frozenset[str]] = {
+    "en": frozenset({
+        'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from',
+        'has', 'he', 'in', 'is', 'it', 'its', 'of', 'on', 'that', 'the',
+        'to', 'was', 'will', 'with', 'or', 'but', 'not', 'this', 'these',
+    }),
+    "de": frozenset({
+        'der', 'die', 'das', 'den', 'dem', 'des', 'ein', 'eine', 'einer',
+        'eines', 'einem', 'einen', 'und', 'oder', 'aber', 'von', 'zu',
+        'im', 'am', 'um', 'bei', 'mit', 'für', 'aus', 'auf', 'durch',
+    }),
+    "fr": frozenset({
+        'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'et', 'ou',
+        'mais', 'dans', 'pour', 'par', 'sur', 'avec', 'au', 'aux', 'ce',
+        'cette', 'ces', 'est', 'sont', 'être', 'avoir', 'à', 'son', 'sa',
+    }),
+    "es": frozenset({
+        'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'y', 'o',
+        'pero', 'en', 'por', 'para', 'con', 'sin', 'sobre', 'del', 'al',
+        'es', 'son', 'ser', 'estar', 'haber', 'ha', 'han', 'su', 'sus',
+    }),
+    "it": frozenset({
+        'il', 'lo', 'la', 'i', 'gli', 'le', 'un', 'uno', 'una', 'e', 'o',
+        'ma', 'in', 'di', 'd', 'da', 'per', 'con', 'su', 'del', 'della', 'dei',
+        'degli', 'delle', 'al', 'alla', 'ai', 'agli', 'alle', 'è', 'sono',
+    }),
+    "pt": frozenset({
+        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'e', 'ou',
+        'mas', 'em', 'de', 'por', 'para', 'com', 'sem', 'sobre', 'do',
+        'da', 'dos', 'das', 'ao', 'à', 'aos', 'às', 'é', 'são', 'seu', 'sua',
+    }),
+    "nl": frozenset({
+        'de', 'het', 'een', 'en', 'of', 'maar', 'in', 'op', 'voor', 'van',
+        'met', 'door', 'bij', 'aan', 'naar', 'om', 'over', 'is', 'zijn',
+        'was', 'waren', 'heeft', 'hebben', 'had', 'hadden', 'der',
+    }),
+    "la": frozenset({
+        'et', 'in', 'ad', 'cum', 'ex', 'ab', 'a', 'e', 'de', 'per', 'pro', 'sub',
+        'atque', 'sed', 'aut', 'vel', 'ac', 'neque', 'nec', 'est', 'sunt',
+    }),
+    "ru": frozenset({
+        'и', 'в', 'на', 'с', 'по', 'для', 'к', 'от', 'за', 'о',
+        'из', 'у', 'это', 'как', 'но', 'или', 'а', 'не', 'что', 'он',
+    }),
+    "el": frozenset({
+        'ο', 'η', 'το', 'οι', 'τα', 'και', 'ή', 'αλλά', 'σε', 'από',
+        'για', 'με', 'στο', 'στη', 'στον', 'στην', 'του', 'της', 'των', 'εν',
+    }),
+    "he": frozenset({
+        'ה', 'ו', 'ב', 'ל', 'מ', 'ש', 'של', 'את', 'על', 'אל', 'עם',
+        'כי', 'אם', 'או', 'זה', 'זאת', 'אלה', 'הוא', 'היא',
+    }),
+    "ar": frozenset({
+        'في', 'من', 'إلى', 'على', 'هذا', 'هذه', 'و', 'أو', 'لا',
+        'ما', 'هو', 'هي', 'التي', 'الذي', 'مع', 'عن', 'إن', 'ال',
+    }),
+}
+
+
+def get_stopwords(languages: list[str] | None) -> set[str]:
+    """Union of stop-word sets for the active languages.
+
+    ``None``/empty falls back to *all* known languages (legacy behaviour), so
+    callers without a language context keep working unchanged.
+    """
+    active = [l for l in (languages or []) if l in STOPWORDS] or list(STOPWORDS)
+    out: set[str] = set()
+    for l in active:
+        out |= STOPWORDS[l]
+    return out
+
+
+# TOC / section-classification keywords (findings 2.2, 6.15). Per-language for
+# maintainability; getters return the union of *all* known languages (Option B,
+# not language-filtered — P1 word-boundary matching prevents cross-language
+# false hits like 'notes' in 'banknotes').
+TOC_FRONT_MATTER: dict[str, frozenset[str]] = {
+    "en": frozenset({
+        'preface', 'foreword', 'acknowledgments', 'acknowledgements',
+        'table of contents', 'contents', 'toc', 'dedication',
+        'about the author', 'about this book', 'prologue', 'copyright', 'isbn',
+        'title page', 'half title', 'frontispiece',
+        'list of illustrations', 'list of maps',
+    }),
+    "de": frozenset({
+        'vorwort', 'geleitwort', 'danksagung', 'inhaltsverzeichnis', 'inhalt',
+        'widmung', 'über den autor', 'prolog',
+    }),
+}
+TOC_BACK_MATTER: dict[str, frozenset[str]] = {
+    "en": frozenset({
+        'index', 'bibliography', 'references', 'glossary', 'appendix',
+        'notes', 'endnotes', 'epilogue', 'afterword', 'abbreviations',
+        'about the publisher', 'colophon',
+    }),
+    "de": frozenset({
+        'register', 'sachregister', 'personenregister', 'namenregister',
+        'bibliographie', 'literaturverzeichnis', 'literatur', 'quellenverzeichnis',
+        'glossar', 'anhang', 'anmerkungen', 'endnoten', 'epilog', 'nachwort',
+        'abkürzungen', 'abkürzungsverzeichnis',
+    }),
+}
+# Generic TOC markers used to filter short highlights (annotations).
+TOC_GENERIC: dict[str, frozenset[str]] = {
+    "en": frozenset({
+        'table of contents', 'contents', 'chapter', 'part', 'section',
+        'index', 'appendix', 'preface', 'introduction', 'bibliography',
+    }),
+    "de": frozenset({
+        'inhaltsverzeichnis', 'kapitel', 'teil', 'index', 'register',
+        'anhang', 'vorwort', 'einleitung', 'literaturverzeichnis',
+    }),
+}
+
+
+def _union(per_lang: dict[str, frozenset[str]]) -> frozenset[str]:
+    out: set[str] = set()
+    for words in per_lang.values():
+        out |= words
+    return frozenset(out)
+
+
+def get_toc_front_matter_keywords() -> frozenset[str]:
+    """All known front-matter TOC keywords (not language-filtered)."""
+    return _union(TOC_FRONT_MATTER)
+
+
+def get_toc_back_matter_keywords() -> frozenset[str]:
+    """All known back-matter TOC keywords (not language-filtered)."""
+    return _union(TOC_BACK_MATTER)
+
+
+def get_toc_keywords() -> frozenset[str]:
+    """All known generic TOC markers (not language-filtered)."""
+    return _union(TOC_GENERIC)
+
+
+# Dialogue speaker markers (finding 3.19). The private author name "tom" was
+# removed from the public repo. User markers are per-language; LLM/assistant
+# markers are language-neutral product names.
+DIALOGUE_USER_MARKERS: dict[str, frozenset[str]] = {
+    "en": frozenset({"user", "human"}),
+    "de": frozenset({"nutzer", "ich"}),
+}
+DIALOGUE_LLM_MARKERS: frozenset[str] = frozenset({
+    "chatgpt", "grok", "gemini", "claude", "assistant",
+    "copilot", "perplexity", "mistral", "llama", "deepseek",
+    "chatbot", "ai", "bot",
+})
+
+
+def get_dialogue_user_markers(languages: list[str] | None = None) -> frozenset[str]:
+    """User/speaker markers for dialogue chunking; union of active languages
+    (all known when ``None``/empty)."""
+    active = [l for l in (languages or []) if l in DIALOGUE_USER_MARKERS] or list(DIALOGUE_USER_MARKERS)
+    out: set[str] = set()
+    for l in active:
+        out |= DIALOGUE_USER_MARKERS[l]
+    return frozenset(out)

@@ -92,7 +92,8 @@ class ArchillesService:
         enable_ocr: bool = False,
         force_ocr: bool = False,
         ocr_backend: str = "auto",
-        ocr_language: str = "deu+eng",
+        ocr_language: str | None = None,
+        languages: list[str] | None = None,
         hierarchical: bool = False,
         enable_reranking: bool = False,
         reranker_model: str | None = None,
@@ -127,6 +128,7 @@ class ArchillesService:
             "force_ocr": force_ocr,
             "ocr_backend": ocr_backend,
             "ocr_language": ocr_language,
+            "languages": languages,
             "hierarchical": hierarchical,
             "adapter": adapter,
         }
