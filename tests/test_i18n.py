@@ -64,11 +64,39 @@ class TestTranslate:
     def test_missing_key_returns_the_key(self):
         assert i18n.t("does.not.exist", "en") == "does.not.exist"
 
-    def test_german_bundle_keys_are_subset_of_english(self):
-        # English is authoritative: every other-language key must exist in en,
-        # otherwise t() could not fall back for it.
-        missing = set(i18n.MESSAGES["de"]) - set(i18n.MESSAGES["en"])
-        assert missing == set()
+    def test_builtin_bundles_have_identical_keys(self):
+        # English and German are both shipped as complete built-ins; their key
+        # sets must match exactly (no key only in one). Catches typos and
+        # forgotten translations.
+        assert set(i18n.MESSAGES["en"]) == set(i18n.MESSAGES["de"])
+
+
+class TestWebUiKeys:
+    """The web UI strings (Etappe 3) resolve in both built-in languages and
+    keep their format placeholders intact."""
+
+    def test_generic_labels(self):
+        assert i18n.t("label.author", "de") == "Autor"
+        assert i18n.t("label.author", "en") == "Author"
+        assert i18n.t("label.page", "de") == "Seite"
+        assert i18n.t("label.chapter", "en") == "Chapter"
+
+    def test_webui_chrome(self):
+        assert i18n.t("webui.tab_search", "de") == "🔍 Suche"
+        assert i18n.t("webui.tab_search", "en") == "🔍 Search"
+        assert i18n.t("webui.search_settings", "de") == "Sucheinstellungen"
+        assert i18n.t("webui.index_status", "en") == "Index Status"
+
+    def test_placeholder_formatting(self):
+        # Keys with placeholders must format cleanly in both languages.
+        de = i18n.t("webui.results_found", "de").format(n=3, query="Freiheit")
+        assert "3" in de and "Freiheit" in de
+        en = i18n.t("webui.books_indexed_summary", "en").format(n=12, chunks="1,000")
+        assert "12" in en and "1,000" in en
+        assert i18n.t("webui.parent_chunk", "de").format(id="abc") == "Eltern-Chunk (abc):"
+
+    def test_unknown_language_falls_back(self):
+        assert i18n.t("webui.button_search", "fr") == "🔍 Search"
 
 
 class TestSystemPromptStandardisedEnglish:
