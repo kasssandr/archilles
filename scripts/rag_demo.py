@@ -403,11 +403,11 @@ Examples:
                 chunk_type_filter=chunk_type_filter,
                 max_per_book=args.max_per_book if hasattr(args, 'max_per_book') else 2
             )
-            rag.print_results(results, query_text=args.query)
+            lang = get_languages(get_library_path(required=False))[0]
+            rag.print_results(results, query_text=args.query, lang=lang)
 
             # Export to Markdown if requested
             if args.export:
-                lang = get_languages(get_library_path(required=False))[0]
                 output_file = rag.export_to_markdown(results, args.query, args.export, lang=lang)
                 print(f"? Exported to: {output_file}")
 

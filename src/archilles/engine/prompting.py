@@ -71,7 +71,7 @@ class PromptBuilder:
             # Add page info
             page_val, is_pdf, _ = self._rag._resolve_page_info(metadata)
             if page_val:
-                page_label = t('export.page_pdf', lang) if is_pdf else t('export.page', lang)
+                page_label = t('page.pdf', lang) if is_pdf else t('page.plain', lang)
                 citation_parts.append(f"{page_label} {page_val}")
 
             # Result header with author and year
@@ -102,7 +102,7 @@ class PromptBuilder:
                 lines.append(f"**{t('export.location', lang)}:** {' | '.join(citation_parts)}  ")
 
             # Relevance
-            lines.append(f"**{t('export.relevance', lang)}:** {similarity:.3f}  ")
+            lines.append(f"**{t('label.relevance', lang)}:** {similarity:.3f}  ")
 
             # Direct link to PDF/EPUB (file:/// protocol)
             source_file = metadata.get('source_file')
@@ -159,7 +159,7 @@ class PromptBuilder:
             # Additional metadata
             meta_lines = []
             if metadata.get('language'):
-                meta_lines.append(f"{t('export.language', lang)}: {metadata['language']}")
+                meta_lines.append(f"{t('label.language', lang)}: {metadata['language']}")
             if metadata.get('subject'):
                 meta_lines.append(f"{t('export.subject', lang)}: {metadata['subject']}")
             if metadata.get('publisher'):

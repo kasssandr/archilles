@@ -1075,7 +1075,7 @@ class Indexer:
                     continue
                 elif content and force:
                     deleted = self._rag.store.delete_by_book_id(book_id)
-                    print(f"  {book_id}: {deleted} alte Chunks gelöscht.", end=' ', flush=True)
+                    print(f"  {book_id}: deleted {deleted} old chunks.", end=' ', flush=True)
 
                 # Read chunks
                 chunk_lines = f.readlines()

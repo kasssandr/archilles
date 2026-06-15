@@ -5,6 +5,7 @@ import re
 from typing import Any, Dict, List, Literal
 
 from src.archilles.constants import ChunkType, SectionType
+from src.archilles.i18n import t
 from src.retriever.results import diversify_results, matches_tag_filter
 
 
@@ -466,13 +467,18 @@ class Searcher:
 
         return snippet
 
-    def print_results(self, results: List[Dict[str, Any]], query_text: str = ""):
-        """Pretty print search results with context snippets."""
+    def print_results(self, results: List[Dict[str, Any]], query_text: str = "",
+                      lang: str = "en"):
+        """Pretty print search results with context snippets.
+
+        ``lang`` is the operator/interface language (``get_languages(...)[0]``)
+        for the visible labels; defaults to English.
+        """
         if not results:
-            print("? No results found.\n")
+            print(f"\n{t('results.no_results', lang)}\n")
             return
 
-        print(f"?? TOP {len(results)} RESULTS:\n")
+        print(f"\n{t('results.header', lang).format(n=len(results))}\n")
         print("=" * 80)
 
         for result in results:
@@ -497,7 +503,8 @@ class Searcher:
 
             page_val, is_pdf, page_warning = self._rag._resolve_page_info(metadata)
             if page_val:
-                citation_parts.append(f"PDF S. {page_val}" if is_pdf else f"S. {page_val}")
+                page_label = t('page.pdf', lang) if is_pdf else t('page.plain', lang)
+                citation_parts.append(f"{page_label} {page_val}")
 
             citation = ', '.join(citation_parts) if citation_parts else metadata.get('book_id', 'Unknown')
 
@@ -509,8 +516,15 @@ class Searcher:
             elif chunk_type == ChunkType.PHASE1_METADATA:
                 type_indicator = ' [METADATA]'
 
+            if similarity > 0.8:
+                quality = t('results.relevance_very_high', lang)
+            elif similarity > 0.6:
+                quality = t('results.relevance_high', lang)
+            else:
+                quality = t('results.relevance_medium', lang)
+
             print(f"\n[{rank}] {citation}{type_indicator}")
-            print(f"    Relevanz: {similarity:.3f} ({'sehr hoch' if similarity > 0.8 else 'hoch' if similarity > 0.6 else 'mittel'})")
+            print(f"    {t('label.relevance', lang)}: {similarity:.3f} ({quality})")
 
             # Show page number warning if applicable
             if page_warning:
@@ -522,6 +536,6 @@ class Searcher:
             else:
                 snippet = text[:300] + ('...' if len(text) > 300 else '')
 
-            print(f"    Text: {snippet}")
+            print(f"    {t('results.text', lang)}: {snippet}")
 
         print("\n" + "=" * 80 + "\n")

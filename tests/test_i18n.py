@@ -50,13 +50,13 @@ class TestGetLanguages:
 
 class TestTranslate:
     def test_english(self):
-        assert i18n.t("export.relevance", "en") == "Relevance"
+        assert i18n.t("label.relevance", "en") == "Relevance"
 
     def test_german(self):
-        assert i18n.t("export.relevance", "de") == "Relevanz"
+        assert i18n.t("label.relevance", "de") == "Relevanz"
 
     def test_default_language_is_english(self):
-        assert i18n.t("export.relevance") == "Relevance"
+        assert i18n.t("label.relevance") == "Relevance"
 
     def test_unknown_language_falls_back_to_english(self):
         assert i18n.t("export.title", "fr") == i18n.MESSAGES["en"]["export.title"]
@@ -156,3 +156,49 @@ class TestPromptMarkersAndExport:
         rag.export_to_markdown(self._results(), "theology", out)
         text = Path(out).read_text(encoding="utf-8")
         assert "Search Results" in text
+
+
+class TestPrintResultsI18n:
+    """CLI search output (Searcher.print_results) follows the operator
+    language via ``t()``; defaults to English."""
+
+    @staticmethod
+    def _rag(tmp_path):
+        from src.archilles.engine import ArchillesRAG
+        return ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
+
+    @staticmethod
+    def _results():
+        return [{
+            'rank': 1,
+            'similarity': 0.95,  # > 0.8 -> "very high" / "sehr hoch"
+            'text': 'A test sentence.',
+            'metadata': {'book_title': 'Test Book', 'page_number': 42},
+        }]
+
+    def test_german(self, tmp_path, capsys):
+        self._rag(tmp_path).print_results(self._results(), query_text="", lang="de")
+        out = capsys.readouterr().out
+        assert "TREFFER" in out
+        assert "Relevanz:" in out
+        assert "sehr hoch" in out
+        assert "PDF S." in out
+
+    def test_english(self, tmp_path, capsys):
+        self._rag(tmp_path).print_results(self._results(), query_text="", lang="en")
+        out = capsys.readouterr().out
+        assert "RESULTS" in out
+        assert "Relevance:" in out
+        assert "very high" in out
+        assert "PDF p." in out
+        assert "Relevanz" not in out
+
+    def test_defaults_to_english(self, tmp_path, capsys):
+        self._rag(tmp_path).print_results(self._results(), query_text="")
+        out = capsys.readouterr().out
+        assert "RESULTS" in out and "Relevance:" in out
+
+    def test_empty_results_localised(self, tmp_path, capsys):
+        self._rag(tmp_path).print_results([], lang="de")
+        out = capsys.readouterr().out
+        assert "Keine Ergebnisse" in out

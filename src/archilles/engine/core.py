@@ -376,13 +376,13 @@ class ArchillesRAG:
 
     @staticmethod
     def _compute_metadata_hash(book_metadata: Dict[str, Any]) -> str:
-        # Signatur 1:1 übernehmen; test_watchdog + batch_index rufen klassenseitig auf
+        # Keep the signature identical; test_watchdog + batch_index call it on the class
         return Indexer._compute_metadata_hash(book_metadata)
 
     @staticmethod
     def _compute_annotation_hash(annotations: List[Dict[str, Any]]) -> str:
-        # WICHTIG: test_watchdog patcht ArchillesRAG._compute_annotation_hash (8×) und
-        # watchdog.py ruft es klassenseitig auf — der Delegator ist das Patch-Target.
+        # IMPORTANT: test_watchdog patches ArchillesRAG._compute_annotation_hash (8x) and
+        # watchdog.py calls it on the class — this delegator is the patch target.
         return Indexer._compute_annotation_hash(annotations)
 
 
@@ -431,8 +431,9 @@ class ArchillesRAG:
             chunk_type_filter=chunk_type_filter,
         )
 
-    def print_results(self, results: List[Dict[str, Any]], query_text: str = ""):
-        return self.searcher.print_results(results, query_text=query_text)
+    def print_results(self, results: List[Dict[str, Any]], query_text: str = "",
+                      lang: str = "en"):
+        return self.searcher.print_results(results, query_text=query_text, lang=lang)
 
     @staticmethod
     def _apply_min_similarity(results: List[Dict[str, Any]], min_similarity: float,
