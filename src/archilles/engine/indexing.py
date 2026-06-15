@@ -13,6 +13,7 @@ import numpy as np
 from tqdm import tqdm
 
 from src.archilles.constants import ChunkType
+from src.archilles.indexer import IndexingCheckpoint
 from src.calibre_db import CalibreDB
 from src.calibre_mcp.annotations import get_combined_annotations
 
@@ -1029,7 +1030,6 @@ class Indexer:
             print(f"  Local embedder: {self._rag.device}, batch_size={self._rag.batch_size}")
 
         # Load progress tracker
-        from src.archilles.indexer import IndexingCheckpoint
         cp_path = input_dir / '.embed_checkpoint.json'
         cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
         embedded_set = set(cp.completed_books) | set(cp.skipped_books)
@@ -1067,7 +1067,7 @@ class Indexer:
                 if content and not force:
                     print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
                     cp.skip_book(file_key)
-                    embedded_set.add(file_key)
+                    embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
                     skipped += 1
                     continue
                 elif content and force:
@@ -1112,7 +1112,7 @@ class Indexer:
 
             # Update progress
             cp.complete_book(file_key)
-            embedded_set.add(file_key)
+            embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
 
         print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. {skipped} skipped.")
         cp.delete()
