@@ -1015,7 +1015,10 @@ class Indexer:
         # Set up embedder
         if mode == 'remote':
             if not host:
-                raise ValueError("--host required for remote mode")
+                raise ValueError(
+                    "Remote mode requires a host "
+                    "(pass --host or set embedder.host in .archilles/config.json)"
+                )
             from src.archilles.embedders.remote import RemoteBGEEmbedder
             embedder = RemoteBGEEmbedder(
                 host=host, port=port, token=token,

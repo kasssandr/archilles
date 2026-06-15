@@ -36,7 +36,12 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.archilles.config import get_library_path, get_rag_db_path
+from src.archilles.config import (
+    get_library_path,
+    get_rag_db_path,
+    get_embedder_config,
+    resolve_embedder_settings,
+)
 from src.archilles.constants import ChunkType
 from src.archilles.engine import ArchillesRAG, LanceDBError  # noqa: F401 — LanceDBError: Re-Export fuer Alt-Abnehmer
 
@@ -305,11 +310,12 @@ Examples:
     # Embed command (embed prepared chunks, store in LanceDB)
     embed_parser = subparsers.add_parser('embed', help='Embed prepared chunks and store in LanceDB (Phase 2)')
     embed_parser.add_argument('--input-dir', default='./prepared_chunks', help='Directory with JSONL files from prepare')
-    embed_parser.add_argument('--mode', choices=['local', 'remote'], default='local', help='Embedding mode')
+    embed_parser.add_argument('--mode', choices=['local', 'remote'], default=None,
+                              help='Embedding mode (default: local, or embedder.mode in config.json)')
     embed_parser.add_argument('--host', help='Remote embedding server host (e.g. http://1.2.3.4:8000)')
-    embed_parser.add_argument('--port', type=int, default=8000, help='Remote server port')
+    embed_parser.add_argument('--port', type=int, default=None, help='Remote server port (default: 8000)')
     embed_parser.add_argument('--token', help='Bearer token for remote server')
-    embed_parser.add_argument('--batch-size', type=int, default=100, help='Texts per batch')
+    embed_parser.add_argument('--batch-size', type=int, default=None, help='Texts per batch (default: 100)')
     embed_parser.add_argument('--use-gzip', action='store_true', default=True, help='Use gzip for remote requests')
     embed_parser.add_argument('--no-gzip', action='store_true', help='Disable gzip for remote requests')
     embed_parser.add_argument('--force', action='store_true', help='Re-embed: delete existing chunks and replace with prepared chunks')
@@ -436,18 +442,24 @@ Examples:
             )
 
         elif args.command == 'embed':
-            # Embed prepared chunks
-            use_gzip = not getattr(args, 'no_gzip', False)
+            # Embed prepared chunks. Remote/local settings resolve with
+            # precedence CLI > .archilles/config.json (embedder block) > default.
+            library_path = get_library_path(required=False)
+            cfg = get_embedder_config(library_path)
+            cli = {
+                "mode": args.mode,
+                "host": args.host,
+                "port": args.port,
+                "token": args.token,
+                "batch_size": args.batch_size,
+                "use_gzip": False if getattr(args, 'no_gzip', False) else None,
+            }
+            settings = resolve_embedder_settings(cli, cfg)
             stats = rag.embed_prepared(
                 input_dir=args.input_dir,
-                mode=args.mode,
-                host=args.host,
-                port=args.port,
-                token=args.token,
-                batch_size=args.batch_size,
-                use_gzip=use_gzip,
                 profile=profile,
                 force=getattr(args, 'force', False),
+                **settings,
             )
 
         elif args.command == 'create-index':

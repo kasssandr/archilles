@@ -120,6 +120,74 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
     return list(DEFAULT_EXCLUDED_TAGS)
 
 
+# Built-in defaults for the embed-prepared embedder; mirror the argparse
+# defaults of the ``embed`` CLI command.
+_EMBEDDER_DEFAULTS = {
+    "mode": "local",
+    "host": None,
+    "port": 8000,
+    "token": None,
+    "batch_size": 100,
+    "use_gzip": True,
+}
+
+
+def resolve_embedder_settings(cli: dict, cfg: dict) -> dict:
+    """Merge CLI overrides over config-file values over built-in defaults.
+
+    Precedence per key: ``cli`` (value is not None) > ``cfg`` (key present and
+    not None) > built-in default. ``cli`` carries an explicit ``False`` for
+    ``use_gzip`` when ``--no-gzip`` was passed, which correctly wins as a
+    non-None value.
+
+    Returns kwargs for ``ArchillesRAG.embed_prepared``:
+    ``mode, host, port, token, batch_size, use_gzip``.
+
+    Raises:
+        ValueError: if the resolved ``mode`` is not ``"local"`` or ``"remote"``.
+    """
+    out = {}
+    for key, default in _EMBEDDER_DEFAULTS.items():
+        cli_val = cli.get(key)
+        if cli_val is not None:
+            out[key] = cli_val
+        elif cfg.get(key) is not None:
+            out[key] = cfg[key]
+        else:
+            out[key] = default
+
+    if out["mode"] not in ("local", "remote"):
+        raise ValueError(
+            f"Invalid embedder mode: {out['mode']!r} "
+            "(expected 'local' or 'remote')"
+        )
+    return out
+
+
+def get_embedder_config(library_path: Path | None = None) -> dict:
+    """Return the ``embedder`` block from ``<library>/.archilles/config.json``.
+
+    Returns ``{}`` when there is no library context, no config file, no
+    ``embedder`` block, the block is not an object, or the file cannot be
+    parsed. The block is optional — its absence means "use built-in defaults".
+    """
+    if library_path is None:
+        return {}
+
+    config_path = library_path / ".archilles" / "config.json"
+    if not config_path.exists():
+        return {}
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    block = config.get("embedder") if isinstance(config, dict) else None
+    return block if isinstance(block, dict) else {}
+
+
 # ───────────────────────────────────────────────────────────────────
 # Unified multi-source master config (v2)
 # ───────────────────────────────────────────────────────────────────

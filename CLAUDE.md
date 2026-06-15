@@ -94,9 +94,19 @@ Runtime config at `.archilles/config.json` inside the Calibre library:
 {
   "enable_reranking": true,
   "reranker_device": "cpu",
-  "rag_db_path": ".archilles/rag_db"
+  "rag_db_path": ".archilles/rag_db",
+  "embedder": {
+    "mode": "remote",
+    "host": "http://192.168.1.50:8900",
+    "port": 8900,
+    "token": "…",
+    "batch_size": 100,
+    "use_gzip": true
+  }
 }
 ```
+
+The optional `embedder` block supplies defaults for the `embed` command (Phase 2 of two-phase indexing); CLI flags override it. Omit it for local embedding.
 
 Environment variable: `ARCHILLES_LIBRARY_PATH` (legacy: `CALIBRE_LIBRARY_PATH` also accepted).
 
