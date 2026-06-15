@@ -902,17 +902,18 @@ def batch_reindex_comments(
     import numpy as np
 
     # ── Checkpoint setup ──────────────────────────────────────────
+    from src.archilles.indexer import IndexingCheckpoint
     if checkpoint_path is None:
         checkpoint_path = Path('.archilles_reindex_checkpoint.json')
 
-    done_ids: set = set()
-    if checkpoint_path.exists():
-        try:
-            with open(checkpoint_path, encoding='utf-8') as f:
-                done_ids = set(json.load(f))
+    all_ids = [create_book_id(b) for b in books]
+    if not dry_run:
+        cp = IndexingCheckpoint.load_or_create(checkpoint_path, profile="", book_ids=all_ids)
+        done_ids: set = set(cp.completed_books)
+        if done_ids:
             print(f"  ↩  Resuming — {len(done_ids)} books already done (checkpoint: {checkpoint_path})")
-        except Exception:
-            done_ids = set()
+    else:
+        done_ids = set()
 
     stats = {'updated': 0, 'skipped': 0, 'failed': 0, 'errors': []}
 
@@ -942,7 +943,8 @@ def batch_reindex_comments(
         if not book_path.exists():
             print(f"         ⚠️  File not found: {book_path}")
             stats['skipped'] += 1
-            done_ids.add(book_id)
+            if not dry_run:
+                cp.complete_book(book_id)
             continue
 
         try:
@@ -954,7 +956,8 @@ def batch_reindex_comments(
             if not has_comments:
                 print(f"         — No comments, skipping")
                 stats['skipped'] += 1
-                done_ids.add(book_id)
+                if not dry_run:
+                    cp.complete_book(book_id)
                 continue
 
             deleted = rag.store.delete_by_book_id_and_type(book_id, ChunkType.CALIBRE_COMMENT)
@@ -976,7 +979,8 @@ def batch_reindex_comments(
                 print(f"         — No comment content after parsing")
                 stats['skipped'] += 1
 
-            done_ids.add(book_id)
+            if not dry_run:
+                cp.complete_book(book_id)
 
         except Exception as e:
             print(f"         ❌ {e}")
@@ -984,9 +988,6 @@ def batch_reindex_comments(
             stats['errors'].append({'title': book['title'], 'error': str(e)})
 
         if i % 20 == 0:
-            if not dry_run:
-                with open(checkpoint_path, 'w', encoding='utf-8') as f:
-                    json.dump(list(done_ids), f)
             gc.collect()
             try:
                 import torch
@@ -995,19 +996,14 @@ def batch_reindex_comments(
             except Exception:
                 pass
 
-    # Final checkpoint flush
-    if not dry_run:
-        with open(checkpoint_path, 'w', encoding='utf-8') as f:
-            json.dump(list(done_ids), f)
-
     print(f"\n{'='*60}")
     print(f"  Updated: {stats['updated']}")
     print(f"  Skipped: {stats['skipped']}")
     print(f"  Failed:  {stats['failed']}")
     print(f"{'='*60}\n")
 
-    if stats['failed'] == 0 and checkpoint_path.exists():
-        checkpoint_path.unlink()
+    if not dry_run and stats['failed'] == 0:
+        cp.delete()
         print(f"  ✓ Checkpoint removed (run complete)")
 
     if log_file:
