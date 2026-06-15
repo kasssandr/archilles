@@ -31,7 +31,7 @@ import json
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from datetime import datetime
-from typing import ClassVar, Optional, List, Dict, Any
+from typing import ClassVar, Optional, List, Dict, Any, Union
 import uuid
 import logging
 
@@ -211,7 +211,7 @@ class IndexingCheckpoint:
             json.dump(data, f, indent=2)
         temp_path.replace(self.checkpoint_path)
 
-    def start_book(self, book_id: str, total_chunks: int = 0) -> None:
+    def start_book(self, book_id: Union[int, str], total_chunks: int = 0) -> None:
         """
         Mark a book as currently being processed.
 
@@ -257,7 +257,7 @@ class IndexingCheckpoint:
             self.save()
             self._dirty = False
 
-    def complete_book(self, book_id: str, chunk_count: int = 0) -> None:
+    def complete_book(self, book_id: Union[int, str], chunk_count: int = 0) -> None:
         """
         Mark a book as successfully indexed.
 
@@ -277,7 +277,7 @@ class IndexingCheckpoint:
         self.save()
         logger.info(f"Completed book: {book_id} ({chunk_count} chunks)")
 
-    def fail_book(self, book_id: str, error: str) -> None:
+    def fail_book(self, book_id: Union[int, str], error: str) -> None:
         """
         Mark a book as failed.
 
@@ -291,7 +291,7 @@ class IndexingCheckpoint:
         self.save()
         logger.warning(f"Failed book: {book_id} - {error[:100]}")
 
-    def skip_book(self, book_id: str) -> None:
+    def skip_book(self, book_id: Union[int, str]) -> None:
         """
         Mark a book as skipped (already indexed).
 
@@ -305,7 +305,7 @@ class IndexingCheckpoint:
         self.save()
         logger.debug(f"Skipped book: {book_id}")
 
-    def get_remaining_books(self, all_book_ids: List[str]) -> List[str]:
+    def get_remaining_books(self, all_book_ids: List[Union[int, str]]) -> List[Union[int, str]]:
         """
         Get list of books that still need to be processed.
 

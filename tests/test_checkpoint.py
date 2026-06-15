@@ -45,3 +45,16 @@ def test_load_or_create_starts_fresh_when_absent(tmp_path: Path):
     cp_path = tmp_path / "cp.json"
     cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=["9"])
     assert cp.get_remaining_books(["9"]) == ["9"]
+
+
+def test_load_defaults_phase_to_both_for_checkpoints_without_phase(tmp_path: Path):
+    import json
+    cp_path = tmp_path / "cp.json"
+    # Checkpoint aus der Zeit vor dem phase-Feld: valides Format, nur ohne 'phase'.
+    cp = IndexingCheckpoint.create_new(cp_path, profile="", book_ids=["1"])
+    data = json.loads(cp_path.read_text(encoding="utf-8"))
+    del data["phase"]
+    cp_path.write_text(json.dumps(data), encoding="utf-8")
+    loaded = IndexingCheckpoint.load(cp_path)
+    assert loaded is not None
+    assert loaded.phase == "both"
