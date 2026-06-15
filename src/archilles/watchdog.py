@@ -408,19 +408,18 @@ class WatchdogScanner:
             if index_new or index_metadata_only:
                 rag = self._load_rag()
                 ni0 = time.time()
-                cp3 = IndexingCheckpoint.load(self.checkpoint_file)
-                done_ids = {int(b) for b in cp3.completed_books} if cp3 else set()
+                cp_new = IndexingCheckpoint.load(self.checkpoint_file)
+                done_ids = {int(b) for b in cp_new.completed_books} if cp_new else set()
                 pending = [e for e in results['new_books'] if e['calibre_id'] not in done_ids]
                 pending.sort(key=lambda e: _index_priority_key(
                     e, calibre_books,
                     first_authors or [], first_tags or [], first_titles or [],
                 ))
                 already_done = len(done_ids)
-                saved_total = cp3.total_books if cp3 else 0
+                saved_total = cp_new.total_books if cp_new else 0
                 total_p3 = max(saved_total, already_done + len(pending))
-                if cp3 is None:
-                    self.archilles_dir.mkdir(parents=True, exist_ok=True)
-                    cp3 = IndexingCheckpoint.create_new(
+                if cp_new is None:
+                    cp_new = IndexingCheckpoint.create_new(
                         self.checkpoint_file,
                         profile="",
                         book_ids=[str(e['calibre_id']) for e in pending],
@@ -453,17 +452,16 @@ class WatchdogScanner:
                         else:
                             rag.index_book(formats[0]['path'], str(cid), force=False)
                         results['new_indexed'] += 1
-                        done_ids.add(cid)
-                        cp3.complete_book(cid)
+                        cp_new.complete_book(cid)
                     except Exception as exc:
                         logger.error(f"New-book indexing failed for calibre_id={cid}: {exc}")
                         results['errors'].append({'calibre_id': cid, 'error': str(exc)})
-                        cp3.fail_book(str(cid), str(exc))
+                        cp_new.fail_book(str(cid), str(exc))
                 # Only clear the checkpoint when the run finished cleanly. On a
                 # graceful shutdown we keep it so the next watchdog run resumes
                 # exactly where this one stopped.
                 if not self._shutdown_requested:
-                    cp3.delete()
+                    cp_new.delete()
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
 
         # ── Phase 4: fulltext-pending backlog ─────────────────────────
@@ -474,8 +472,8 @@ class WatchdogScanner:
         if index_fulltext_pending and results['fulltext_pending'] and not dry_run:
             rag = self._load_rag()
             ft0 = time.time()
-            cp4 = IndexingCheckpoint.load(self.fulltext_checkpoint_file)
-            done_ids = {int(b) for b in cp4.completed_books} if cp4 else set()
+            cp_fulltext = IndexingCheckpoint.load(self.fulltext_checkpoint_file)
+            done_ids = {int(b) for b in cp_fulltext.completed_books} if cp_fulltext else set()
             pending = [
                 e for e in results['fulltext_pending']
                 if e['calibre_id'] not in done_ids
@@ -492,11 +490,10 @@ class WatchdogScanner:
                 first_authors or [], first_tags or [], first_titles or [],
             ))
             already_done = len(done_ids)
-            saved_total = cp4.total_books if cp4 else 0
+            saved_total = cp_fulltext.total_books if cp_fulltext else 0
             total_p4 = max(saved_total, already_done + len(pending))
-            if cp4 is None:
-                self.archilles_dir.mkdir(parents=True, exist_ok=True)
-                cp4 = IndexingCheckpoint.create_new(
+            if cp_fulltext is None:
+                cp_fulltext = IndexingCheckpoint.create_new(
                     self.fulltext_checkpoint_file,
                     profile="",
                     book_ids=[str(e['calibre_id']) for e in pending],
@@ -525,14 +522,13 @@ class WatchdogScanner:
                 try:
                     rag.index_book(formats[0]['path'], str(cid), force=False)
                     results['fulltext_indexed'] += 1
-                    done_ids.add(cid)
-                    cp4.complete_book(cid)
+                    cp_fulltext.complete_book(cid)
                 except Exception as exc:
                     logger.error(f"Fulltext indexing failed for calibre_id={cid}: {exc}")
                     results['errors'].append({'calibre_id': cid, 'error': str(exc)})
-                    cp4.fail_book(str(cid), str(exc))
+                    cp_fulltext.fail_book(str(cid), str(exc))
             if not self._shutdown_requested:
-                cp4.delete()
+                cp_fulltext.delete()
             results['fulltext_indexed_time'] = round(time.time() - ft0, 1)
 
         results['total_time'] = round(time.time() - t0, 1)

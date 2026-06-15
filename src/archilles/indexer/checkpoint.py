@@ -189,6 +189,7 @@ class IndexingCheckpoint:
 
     def save(self) -> None:
         """Save checkpoint to file (atomic via temp-file rename)."""
+        self.checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         self.last_updated = datetime.now().isoformat()
         self._dirty = False
 

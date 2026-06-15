@@ -58,3 +58,9 @@ def test_load_defaults_phase_to_both_for_checkpoints_without_phase(tmp_path: Pat
     loaded = IndexingCheckpoint.load(cp_path)
     assert loaded is not None
     assert loaded.phase == "both"
+
+
+def test_save_creates_missing_parent_directory(tmp_path: Path):
+    nested = tmp_path / "does" / "not" / "exist" / "cp.json"
+    cp = IndexingCheckpoint.create_new(nested, profile="", book_ids=["1"])
+    assert nested.exists()
