@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "archilles"
+description = "Calibre RAG for researchers: page-level citations and LLM access via MCP."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Thomas Radau", email = "tomradau@gmail.com" }]
+keywords = ["rag", "calibre", "semantic-search", "mcp", "bge-m3", "lancedb", "citations"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Indexing",
+    "Operating System :: OS Independent",
+]
+# version: src/__init__.py::__version__  ·  dependencies: requirements.txt
+# (requirements.txt stays the canonical, pinned, commented source — see below)
+dynamic = ["version", "dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/kasssandr/archilles"
+Repository = "https://github.com/kasssandr/archilles"
+
+[project.scripts]
+archilles-rag = "scripts.rag_demo:main"
+archilles-index = "scripts.batch_index:main"
+archilles-web = "scripts.web_ui:main"
+archilles-mcp = "mcp_server:main"
+
+[tool.setuptools]
+py-modules = ["mcp_server"]
+
+[tool.setuptools.dynamic]
+version = { attr = "src.__version__" }
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
+namespaces = true
+
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
