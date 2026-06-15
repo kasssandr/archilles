@@ -5,7 +5,6 @@ ARCHILLES Safe Indexer
 Crash-safe wrapper around indexing with:
 - Signal handlers for graceful CTRL+C shutdown
 - Auto-backup every N books
-- Progress tracking
 - Corruption detection and recovery
 """
 
@@ -14,13 +13,11 @@ import signal
 import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Callable
+from typing import Optional
 import time
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-from scripts.progress_tracker import ProgressTracker
 
 
 class SafeIndexer:
@@ -30,23 +27,20 @@ class SafeIndexer:
     Handles:
     - CTRL+C graceful shutdown (finish current book, then stop)
     - Auto-backup every N books
-    - Progress tracking
-    - Resume after interruption
+    - Resume after interruption (skip-existing comes from LanceDB, not here)
     """
 
     def __init__(
         self,
         db_path: Path,
-        progress_db_path: Optional[Path] = None,
         backup_interval: int = 50,
-        max_backups: int = 2
+        max_backups: int = 2,
     ):
         """
         Initialize safe indexer.
 
         Args:
-            db_path: Path to ChromaDB directory
-            progress_db_path: Path to progress database (default: db_path/../progress.db)
+            db_path: Path to LanceDB directory
             backup_interval: Create backup every N books (default: 50)
             max_backups: Maximum number of backups to keep (default: 2)
         """
@@ -54,15 +48,9 @@ class SafeIndexer:
         self.backup_interval = backup_interval
         self.max_backups = max_backups
 
-        # Progress tracker
-        if progress_db_path is None:
-            progress_db_path = self.db_path.parent / "progress.db"
-        self.tracker = ProgressTracker(progress_db_path)
-
         # State
         self.shutdown_requested = False
         self.books_since_backup = 0
-        self.current_session_id = None
 
         # Register signal handlers
         self._register_signal_handlers()
@@ -88,132 +76,19 @@ class SafeIndexer:
         if hasattr(signal, 'SIGTERM'):
             signal.signal(signal.SIGTERM, signal_handler)
 
-    def start_session(self, phase: str = 'both', interactive: bool = None) -> str:
-        """
-        Start a new indexing session.
-
-        Args:
-            phase: 'phase1', 'phase2', or 'both'
-            interactive: If True, prompt user for resume. If False, auto-resume.
-                        If None, auto-detect based on stdin.
-
-        Returns:
-            session_id
-        """
-        # Auto-detect interactive mode if not specified
-        if interactive is None:
-            interactive = sys.stdin.isatty()
-
-        # Check for interrupted sessions
-        resume_info = self.tracker.get_resume_info()
-        if resume_info:
-            print(f"\n{'='*60}")
-            print(f"📋 INTERRUPTED SESSION FOUND")
-            print(f"{'='*60}")
-            print(f"  Session: {resume_info['session_id']}")
-            print(f"  Started: {resume_info['start_time']}")
-            print(f"  Phase: {resume_info['phase']}")
-            print(f"  Progress: {resume_info['successful']}/{resume_info['total_processed']} books")
-            print(f"{'='*60}\n")
-
-            # In interactive mode, ask user
-            if interactive:
-                try:
-                    response = input("Resume this session? [Y/n]: ").strip().lower()
-                    should_resume = response in ['', 'y', 'yes']
-                except (EOFError, KeyboardInterrupt):
-                    # If input fails, default to resuming
-                    print("(Auto-resuming due to input error)")
-                    should_resume = True
-            else:
-                # In non-interactive mode, auto-resume
-                print("🔄 Auto-resuming session (non-interactive mode)\n")
-                should_resume = True
-
-            if should_resume:
-                self.current_session_id = resume_info['session_id']
-                print(f"✅ Resuming session {self.current_session_id}\n")
-                return self.current_session_id
-            else:
-                # Mark old session as abandoned and start new one
-                print(f"⏭️  Starting new session (old session abandoned)\n")
-
-        # Start new session
-        self.current_session_id = self.tracker.start_session(phase)
-        print(f"✅ Started new session: {self.current_session_id}\n")
-        return self.current_session_id
-
-    def end_session(self, status: str = 'completed'):
-        """
-        End the current session.
-
-        Args:
-            status: 'completed' or 'interrupted'
-        """
-        if self.current_session_id:
-            self.tracker.end_session(self.current_session_id, status)
-
-            # Print final stats
-            stats = self.tracker.get_session_stats(self.current_session_id)
-            print(f"\n{'='*60}")
-            print(f"📊 SESSION {status.upper()}")
-            print(f"{'='*60}")
-            print(f"  Session ID: {self.current_session_id}")
-            print(f"  Total books: {stats.get('total_books', 0)}")
-            print(f"  Successfully indexed: {stats.get('books_indexed', 0)}")
-            print(f"  Failed: {stats.get('books_failed', 0)}")
-            print(f"{'='*60}\n")
-
-    def record_book(
-        self,
-        book_id: str,
-        phase: str,
-        status: str,
-        chunks: int = 0,
-        duration: float = 0,
-        error: Optional[str] = None
-    ):
-        """
-        Record that a book was processed.
-
-        Args:
-            book_id: Book identifier
-            phase: 'phase1' or 'phase2'
-            status: 'success', 'failed', or 'skipped'
-            chunks: Number of chunks indexed
-            duration: Time taken in seconds
-            error: Error message if failed
-        """
-        if not self.current_session_id:
-            raise RuntimeError("No active session! Call start_session() first.")
-
-        self.tracker.record_book(
-            self.current_session_id,
-            book_id,
-            phase,
-            status,
-            chunks,
-            duration,
-            error
-        )
-
-        # Trigger backup if needed
-        if status == 'success':
-            self.books_since_backup += 1
-            if self.books_since_backup >= self.backup_interval:
-                self.create_backup()
-                self.books_since_backup = 0
-
-    def is_book_indexed(self, book_id: str, phase: str) -> bool:
-        """Check if a book has been successfully indexed."""
-        return self.tracker.is_book_indexed(book_id, phase)
+    def note_indexed(self) -> None:
+        """Zähle ein erfolgreich indexiertes Buch und sichere periodisch."""
+        self.books_since_backup += 1
+        if self.books_since_backup >= self.backup_interval:
+            self.create_backup()
+            self.books_since_backup = 0
 
     def should_shutdown(self) -> bool:
         """Check if shutdown was requested."""
         return self.shutdown_requested
 
     def create_backup(self):
-        """Create a backup of the ChromaDB directory."""
+        """Create a backup of the LanceDB directory."""
         if not self.db_path.exists():
             print(f"  ⚠️  Database not found, skipping backup")
             return
@@ -358,9 +233,7 @@ if __name__ == '__main__':
     elif args.restore:
         safe_indexer.restore_from_backup(args.restore)
     else:
-        # Test session
-        session_id = safe_indexer.start_session('phase1')
-
+        # Test signal handling
         print("Simulating indexing... (Press CTRL+C to test graceful shutdown)")
         for i in range(20):
             if safe_indexer.should_shutdown():
@@ -371,13 +244,6 @@ if __name__ == '__main__':
             print(f"Indexing {book_id}...")
             time.sleep(0.5)  # Simulate work
 
-            safe_indexer.record_book(
-                book_id=book_id,
-                phase='phase1',
-                status='success',
-                chunks=100,
-                duration=0.5
-            )
+            safe_indexer.note_indexed()
 
-        safe_indexer.end_session('completed' if not safe_indexer.should_shutdown() else 'interrupted')
         safe_indexer.list_backups()

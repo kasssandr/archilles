@@ -216,18 +216,7 @@ def test_watchdog_hash_matches_adapter_hash(calibre_library):
     assert _compute_metadata_hash(meta) == adapter_hash
 
 
-# ── 7.5: --reset-db must clear the SafeIndexer progress tracker ───────────
-
-def test_reset_progress_tracker_removes_stale_db(tmp_path):
-    from scripts.batch_index import _reset_progress_tracker
-
-    rag_db = tmp_path / "rag_db"
-    rag_db.mkdir()
-    progress = tmp_path / "progress.db"
-    progress.write_text("stale")
-
-    _reset_progress_tracker(str(rag_db))
-    assert not progress.exists()
-
-    # Idempotent when nothing exists
-    _reset_progress_tracker(str(rag_db))
+# ── 7.5: obsolet seit 7.14 — kein ProgressTracker mehr ───────────────────
+# _reset_progress_tracker und progress.db wurden in 7.14 Task 1 entfernt.
+# Skip-existing kommt ausschließlich aus LanceDB (get_indexed_book_ids, phase-aware).
+# Der Test ist absichtlich leer gelassen statt gelöscht, damit der Kommentar sichtbar bleibt.

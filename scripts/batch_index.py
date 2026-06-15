@@ -784,18 +784,6 @@ def _adapter_list_books(
     return books
 
 
-def _reset_progress_tracker(db_path: str) -> None:
-    """Delete the SafeIndexer progress DB that lives next to the RAG database.
-
-    --reset-db wipes LanceDB, but a surviving progress.db would make
-    --skip-existing skip books that no longer exist in the fresh index
-    (code review finding 7.5).
-    """
-    progress_db = Path(db_path).parent / "progress.db"
-    if progress_db.exists():
-        progress_db.unlink()
-        print(f"    Deleted stale progress tracker: {progress_db}")
-
 
 def create_book_id(book: Dict[str, Any]) -> str:
     """
@@ -811,7 +799,8 @@ def get_indexed_book_ids(
     rag: ArchillesRAG,
     reindex_before: datetime = None,
     reindex_missing_labels: bool = False,
-    db_path: str = None
+    db_path: str = None,
+    phase: str = 'phase2',
 ) -> set:
     """
     Get set of already indexed book IDs from RAG database.
@@ -853,9 +842,10 @@ def get_indexed_book_ids(
             if not chunk or 'book_id' not in chunk:
                 continue
 
-            # Only count content chunks as "fully indexed"
+            # Only count content chunks as "fully indexed" (except in phase1 where
+            # any chunk — including phase1_metadata stubs — counts as done)
             chunk_type = chunk.get('chunk_type', ChunkType.CONTENT)
-            if chunk_type not in content_types:
+            if phase != 'phase1' and chunk_type not in content_types:
                 continue
 
             book_id = chunk['book_id']
@@ -1179,17 +1169,9 @@ def batch_index(
     # If reindex_before is set, exclude old books from the existing set
     # Also check progress tracker if available
     should_check = skip_existing or reindex_before or reindex_missing_labels
-    if safe_indexer:
-        # Check progress tracker for indexed books
-        existing_ids_from_tracker = set(safe_indexer.tracker.get_indexed_books(phase))
-        existing_ids_from_lancedb = get_indexed_book_ids(
-            rag, reindex_before, reindex_missing_labels, db_path
-        ) if should_check else set()
-        existing_ids = existing_ids_from_tracker | existing_ids_from_lancedb
-    else:
-        existing_ids = get_indexed_book_ids(
-            rag, reindex_before, reindex_missing_labels, db_path
-        ) if should_check else set()
+    existing_ids = get_indexed_book_ids(
+        rag, reindex_before, reindex_missing_labels, db_path, phase=phase
+    ) if should_check else set()
 
     # When --skip-existing is set (without reindex flags), pre-filter the book
     # list so already-indexed books are never passed to index_book() at all.
@@ -1285,14 +1267,6 @@ def batch_index(
             tried = ', '.join(f['format'] for f in ordered_formats)
             print(f"         ❌ FAILED (tried: {tried}): {error_msg}")
 
-            if safe_indexer:
-                safe_indexer.record_book(
-                    book_id=book_id,
-                    phase=phase,
-                    status='failed',
-                    error=error_msg[:500],
-                )
-
             stats['failed'] += 1
             stats['errors'].append({
                 'book_id': book_id,
@@ -1307,12 +1281,10 @@ def batch_index(
             })
             continue
 
-        # Handle already-indexed books (from LanceDB check, not progress tracker)
+        # Handle already-indexed books (from LanceDB check)
         if result.get('status') == 'already_indexed':
             print(f"         ⏭️  SKIPPED (already in LanceDB: {result['chunks_indexed']} chunks)")
             stats['skipped'] += 1
-            if safe_indexer:
-                safe_indexer.record_book(book_id, phase, 'skipped')
             stats['books_processed'].append({
                 'id': book_id,
                 'title': book['title'],
@@ -1326,9 +1298,7 @@ def batch_index(
             print(f"         📝 Metadata updated in {result.get('total_time', 0):.1f}s (content unchanged)")
             stats['indexed'] += 1
             if safe_indexer:
-                safe_indexer.record_book(book_id, phase, 'success',
-                                       chunks=result.get('chunks_indexed', 0),
-                                       duration=result.get('total_time', 0))
+                safe_indexer.note_indexed()
             stats['books_processed'].append({
                 'id': book_id,
                 'title': book['title'],
@@ -1345,15 +1315,8 @@ def batch_index(
         if format_type != best['format']:
             print(f"         ↩️  Used fallback format: {format_type} (primary {best['format']} failed)")
 
-        # Record success in progress tracker
         if safe_indexer:
-            safe_indexer.record_book(
-                book_id=book_id,
-                phase=phase,
-                status='success',
-                chunks=result.get('chunks_indexed', 0),
-                duration=elapsed
-            )
+            safe_indexer.note_indexed()
 
         stats['indexed'] += 1
         if result.get('needs_ocr'):
@@ -1674,11 +1637,6 @@ Profiles:
             print(f"\n{'='*60}\n")
             sys.exit(1)
 
-        # A DB reset must also clear the progress tracker, otherwise
-        # --skip-existing would skip books missing from the fresh index (7.5).
-        if args.reset_db:
-            _reset_progress_tracker(args.db_path)
-
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"
     stats = {'indexed': 0, 'failed': 0}
@@ -1808,17 +1766,15 @@ Profiles:
                     sys.exit(1)
                 return
 
-            # Initialize SafeIndexer for crash-safety
+            # Initialize SafeIndexer for signal handling + backup only
             safe_indexer = None
+            phase = 'phase1' if args.phase1_only else 'phase2'
             if not args.dry_run:
                 safe_indexer = SafeIndexer(
                     db_path=Path(args.db_path),
                     backup_interval=50,
-                    max_backups=2
+                    max_backups=2,
                 )
-                phase = 'phase1' if args.phase1_only else 'phase2'
-                interactive = None if not args.non_interactive else False
-                session_id = safe_indexer.start_session(phase, interactive=interactive)
 
             # Run batch indexing
             log_file = Path(args.log) if args.log else None
@@ -1832,16 +1788,11 @@ Profiles:
                 force=args.force,
                 log_file=log_file,
                 safe_indexer=safe_indexer,
-                phase=phase if safe_indexer else 'phase2',
+                phase=phase,
                 db_path=args.db_path,
                 prefer_format=args.prefer_format,
                 quality_select=getattr(args, 'quality_select', False),
             )
-
-            # End session (if not dry run)
-            if safe_indexer:
-                status = 'completed' if not safe_indexer.should_shutdown() else 'interrupted'
-                safe_indexer.end_session(status)
 
             # Create FTS index if we indexed something new
             if not args.dry_run and stats['indexed'] > 0:
