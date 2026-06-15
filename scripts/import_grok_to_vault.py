@@ -19,21 +19,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def slugify(text: str, max_length: int = 50) -> str:
-    """Convert text to a filesystem-safe slug."""
-    text = text.lower().strip()
-    replacements = {
-        "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
-        "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
-    }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    if len(text) > max_length:
-        text = text[:max_length].rstrip("-")
-    return text or "untitled"
+from vault_import import make_filename, render_markdown, select_conversations
 
 
 def parse_grok_timestamp(ts) -> datetime:
@@ -151,8 +137,7 @@ def conversation_to_markdown(conv_data: dict) -> tuple[str, str, str]:
             model = msg["model"]
             break
     
-    slug = slugify(title)
-    filename = f"{date_str}_grok_{slug}.md"
+    filename = make_filename(date_str, "grok", title)
     
     # Build frontmatter
     tags = ["chat-protokoll", "KI-generiert"]
@@ -177,63 +162,17 @@ def conversation_to_markdown(conv_data: dict) -> tuple[str, str, str]:
         frontmatter_lines.append(f"modified: {modify_dt.strftime('%Y-%m-%d')}")
     frontmatter_lines.append(f"message_count: {len(messages)}")
     frontmatter_lines.append("---")
-    
-    # Build body
-    body_lines = [f"# {title}", ""]
-    
-    for msg in messages:
-        role_label = "**User:**" if msg["role"] == "user" else "**Grok:**"
-        body_lines.append(role_label)
-        body_lines.append("")
-        body_lines.append(msg["text"])
-        body_lines.append("")
-        body_lines.append("---")
-        body_lines.append("")
-    
-    markdown = "\n".join(frontmatter_lines) + "\n\n" + "\n".join(body_lines)
-    
+
+    markdown = render_markdown(frontmatter_lines, title, messages, "**Grok:**")
+
     return filename, markdown, month_folder
 
 
-def preview_conversations(conversations: list[dict]) -> None:
-    """Print a numbered list of conversations for interactive selection."""
-    print(f"\n{'#':>4}  {'Date':10}  {'Msgs':>5}  Title")
-    print("-" * 70)
-    for i, conv_data in enumerate(conversations):
-        conv_meta = conv_data.get("conversation", {})
-        title = conv_meta.get("title", "Untitled")[:45]
-        create_time_str = conv_meta.get("create_time", "")
-        if create_time_str:
-            dt = parse_grok_timestamp(create_time_str)
-            date_str = dt.strftime("%Y-%m-%d")
-        else:
-            date_str = "unknown"
-        msgs = len(extract_messages(conv_data))
-        print(f"{i:4d}  {date_str:10}  {msgs:5d}  {title}")
-
-
-def interactive_select(conversations: list[dict]) -> list[dict]:
-    """Let user pick conversations interactively."""
-    preview_conversations(conversations)
-    print(f"\nTotal: {len(conversations)} conversations")
-    print("Enter numbers to import (comma-separated), ranges (3-7), or 'all':")
-    print("Example: 0,3,5-10,15")
-    
-    selection = input("> ").strip()
-    
-    if selection.lower() == "all":
-        return conversations
-    
-    indices = set()
-    for part in selection.split(","):
-        part = part.strip()
-        if "-" in part:
-            start, end = part.split("-", 1)
-            indices.update(range(int(start), int(end) + 1))
-        else:
-            indices.add(int(part))
-    
-    return [conversations[i] for i in sorted(indices) if 0 <= i < len(conversations)]
+def _describe(conv_data: dict) -> tuple[str, int, str]:
+    meta = conv_data.get("conversation", {})
+    cts = meta.get("create_time", "")
+    date_str = parse_grok_timestamp(cts).strftime("%Y-%m-%d") if cts else "unknown"
+    return date_str, len(extract_messages(conv_data)), meta.get("title", "Untitled")
 
 
 def main():
@@ -315,7 +254,7 @@ def main():
     
     # Interactive selection or limit
     if args.interactive:
-        conversations = interactive_select(conversations)
+        conversations = select_conversations(conversations, _describe)
     elif args.limit:
         conversations = conversations[:args.limit]
     

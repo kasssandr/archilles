@@ -28,6 +28,14 @@ from pathlib import Path
 from html.parser import HTMLParser
 from typing import Optional
 
+from vault_import import (
+    format_date,
+    get_month_folder,
+    make_filename,
+    render_markdown,
+    select_conversations,
+)
+
 
 class HTMLToText(HTMLParser):
     """Strip HTML tags, keep text."""
@@ -95,18 +103,6 @@ def html_to_text(html: str) -> str:
 
 def plain_strip(html: str) -> str:
     return re.sub(r"<[^>]+>", "", html).strip()
-
-
-def slugify(text: str, max_length: int = 50) -> str:
-    text = text.lower().strip()
-    for k, v in {"ae": "ae", "oe": "oe", "ue": "ue", "ss": "ss",
-                  "\u00e4": "ae", "\u00f6": "oe", "\u00fc": "ue", "\u00df": "ss"}.items():
-        text = text.replace(k, v)
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    if len(text) > max_length:
-        text = text[:max_length].rstrip("-")
-    return text or "untitled"
 
 
 def parse_timestamp(text: str) -> Optional[datetime]:
@@ -260,14 +256,13 @@ def conversation_to_markdown(conv: dict) -> tuple[str, str, str]:
     if not messages:
         return "", "", ""
 
-    date_str = ts.strftime("%Y-%m-%d") if ts else "unknown"
-    month_folder = ts.strftime("%Y-%m") if ts else "undated"
-    slug = slugify(title)
-    filename = f"{date_str}_gemini_{slug}.md"
+    date_str = format_date(ts)
+    month_folder = get_month_folder(ts)
+    filename = make_filename(date_str, "gemini", title)
 
     safe_title = title.replace('"', "'")  # Avoid YAML breakage from nested quotes
 
-    frontmatter = "\n".join([
+    frontmatter_lines = [
         "---",
         f'title: "{safe_title}"',
         "authors: [Gemini]",
@@ -278,41 +273,14 @@ def conversation_to_markdown(conv: dict) -> tuple[str, str, str]:
         f"created: {date_str}",
         f"message_count: {conv['message_count']}",
         "---",
-    ])
+    ]
 
-    body = [f"# {title}", ""]
-    for msg in messages:
-        label = "**User:**" if msg["role"] == "user" else "**Gemini:**"
-        body.extend([label, "", msg["text"], "", "---", ""])
-
-    return filename, frontmatter + "\n\n" + "\n".join(body), month_folder
+    markdown = render_markdown(frontmatter_lines, title, messages, "**Gemini:**")
+    return filename, markdown, month_folder
 
 
-def preview_conversations(convs):
-    print(f"\n{'#':>4}  {'Date':10}  {'Msgs':>5}  Title")
-    print("-" * 70)
-    for i, c in enumerate(convs):
-        ts = c["timestamp"]
-        d = ts.strftime("%Y-%m-%d") if ts else "unknown"
-        print(f"{i:4d}  {d:10}  {c['message_count']:5d}  {c['title'][:45]}")
-
-
-def interactive_select(convs):
-    preview_conversations(convs)
-    print(f"\nTotal: {len(convs)} conversations")
-    print("Enter numbers (comma-separated), ranges (3-7), or 'all':")
-    sel = input("> ").strip()
-    if sel.lower() == "all":
-        return convs
-    indices = set()
-    for part in sel.split(","):
-        part = part.strip()
-        if "-" in part:
-            s, e = part.split("-", 1)
-            indices.update(range(int(s), int(e) + 1))
-        else:
-            indices.add(int(part))
-    return [convs[i] for i in sorted(indices) if 0 <= i < len(convs)]
+def _describe(conv: dict) -> tuple[str, int, str]:
+    return format_date(conv["timestamp"]), conv["message_count"], conv["title"]
 
 
 def main():
@@ -350,7 +318,7 @@ def main():
     convs.sort(key=lambda c: c["timestamp"] or datetime.min, reverse=True)
 
     if args.interactive:
-        convs = interactive_select(convs)
+        convs = select_conversations(convs, _describe)
     elif args.limit:
         convs = convs[:args.limit]
 

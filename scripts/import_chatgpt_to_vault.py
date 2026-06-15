@@ -13,31 +13,13 @@ Usage:
 """
 
 import json
-import re
 import sys
 import argparse
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-
-def slugify(text: str, max_length: int = 50) -> str:
-    """Convert text to a filesystem-safe slug."""
-    text = text.lower().strip()
-    # German umlauts
-    replacements = {
-        "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
-        "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
-    }
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    # Replace non-alphanumeric with hyphens
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    # Truncate
-    if len(text) > max_length:
-        text = text[:max_length].rstrip("-")
-    return text or "untitled"
+from vault_import import make_filename, render_markdown, select_conversations
 
 
 def format_timestamp(unix_ts: Optional[float]) -> Optional[str]:
@@ -46,16 +28,6 @@ def format_timestamp(unix_ts: Optional[float]) -> Optional[str]:
         return None
     try:
         return datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%d")
-    except (ValueError, OSError):
-        return None
-
-
-def format_datetime(unix_ts: Optional[float]) -> Optional[str]:
-    """Convert Unix timestamp to ISO datetime string."""
-    if not unix_ts:
-        return None
-    try:
-        return datetime.fromtimestamp(unix_ts).strftime("%Y-%m-%dT%H:%M:%S")
     except (ValueError, OSError):
         return None
 
@@ -132,8 +104,7 @@ def conversation_to_markdown(conversation: dict) -> tuple[str, str, str]:
     
     date_str = format_timestamp(create_time) or "unknown"
     month_folder = get_month_folder(create_time)
-    slug = slugify(title)
-    filename = f"{date_str}_chatgpt_{slug}.md"
+    filename = make_filename(date_str, "chatgpt", title)
     
     # Extract messages
     messages = extract_messages(conversation)
@@ -168,57 +139,15 @@ def conversation_to_markdown(conversation: dict) -> tuple[str, str, str]:
         frontmatter_lines.append(f"modified: {format_timestamp(update_time)}")
     frontmatter_lines.append(f"message_count: {len(messages)}")
     frontmatter_lines.append("---")
-    
-    # Build body
-    body_lines = [f"# {title}", ""]
-    
-    for msg in messages:
-        role_label = "**User:**" if msg["role"] == "user" else "**ChatGPT:**"
-        body_lines.append(role_label)
-        body_lines.append("")
-        body_lines.append(msg["text"])
-        body_lines.append("")
-        body_lines.append("---")
-        body_lines.append("")
-    
-    markdown = "\n".join(frontmatter_lines) + "\n\n" + "\n".join(body_lines)
-    
+
+    markdown = render_markdown(frontmatter_lines, title, messages, "**ChatGPT:**")
+
     return filename, markdown, month_folder
 
 
-def preview_conversations(conversations: list[dict]) -> None:
-    """Print a numbered list of conversations for interactive selection."""
-    print(f"\n{'#':>4}  {'Date':10}  {'Msgs':>5}  Title")
-    print("-" * 70)
-    for i, conv in enumerate(conversations):
-        title = conv.get("title", "Untitled")[:45]
-        date_str = format_timestamp(conv.get("create_time")) or "unknown"
-        msgs = len(extract_messages(conv))
-        print(f"{i:4d}  {date_str:10}  {msgs:5d}  {title}")
-
-
-def interactive_select(conversations: list[dict]) -> list[dict]:
-    """Let user pick conversations interactively."""
-    preview_conversations(conversations)
-    print(f"\nTotal: {len(conversations)} conversations")
-    print("Enter numbers to import (comma-separated), ranges (3-7), or 'all':")
-    print("Example: 0,3,5-10,15")
-    
-    selection = input("> ").strip()
-    
-    if selection.lower() == "all":
-        return conversations
-    
-    indices = set()
-    for part in selection.split(","):
-        part = part.strip()
-        if "-" in part:
-            start, end = part.split("-", 1)
-            indices.update(range(int(start), int(end) + 1))
-        else:
-            indices.add(int(part))
-    
-    return [conversations[i] for i in sorted(indices) if 0 <= i < len(conversations)]
+def _describe(conv: dict) -> tuple[str, int, str]:
+    date_str = format_timestamp(conv.get("create_time")) or "unknown"
+    return date_str, len(extract_messages(conv)), conv.get("title", "Untitled")
 
 
 def main():
@@ -297,7 +226,7 @@ def main():
     
     # Interactive selection or limit
     if args.interactive:
-        conversations = interactive_select(conversations)
+        conversations = select_conversations(conversations, _describe)
     elif args.limit:
         conversations = conversations[:args.limit]
     
