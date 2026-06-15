@@ -5,6 +5,7 @@ from html import escape as _html_escape
 from typing import Any, Dict, List
 
 from src.archilles.constants import ChunkType
+from src.archilles.i18n import t
 
 
 class PromptBuilder:
@@ -17,7 +18,8 @@ class PromptBuilder:
         self,
         results: List[Dict[str, Any]],
         query_text: str,
-        output_file: str = None
+        output_file: str = None,
+        lang: str = "en"
     ) -> str:
         """
         Export search results to Markdown format (optimized for Joplin).
@@ -26,6 +28,8 @@ class PromptBuilder:
             results: Search results from query()
             query_text: Original search query
             output_file: Optional file path (default: auto-generated)
+            lang: Operator/interface language for the visible labels
+                (``get_languages(...)[0]``); defaults to English.
 
         Returns:
             Path to the created markdown file
@@ -39,11 +43,11 @@ class PromptBuilder:
         lines = []
 
         # Header
-        lines.append(f"# ARCHILLES RAG - Suchergebnisse")
+        lines.append(f"# {t('export.title', lang)}")
         lines.append(f"")
-        lines.append(f"**Query:** `{query_text}`  ")
-        lines.append(f"**Datum:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
-        lines.append(f"**Ergebnisse:** {len(results)}")
+        lines.append(f"**{t('export.query', lang)}:** `{query_text}`  ")
+        lines.append(f"**{t('export.date', lang)}:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ")
+        lines.append(f"**{t('export.results', lang)}:** {len(results)}")
         lines.append(f"")
         lines.append(f"---")
         lines.append(f"")
@@ -67,7 +71,8 @@ class PromptBuilder:
             # Add page info
             page_val, is_pdf, _ = self._rag._resolve_page_info(metadata)
             if page_val:
-                citation_parts.append(f"PDF S. {page_val}" if is_pdf else f"S. {page_val}")
+                page_label = t('export.page_pdf', lang) if is_pdf else t('export.page', lang)
+                citation_parts.append(f"{page_label} {page_val}")
 
             # Result header with author and year
             author = metadata.get('author', '')
@@ -94,10 +99,10 @@ class PromptBuilder:
 
             # Location (section + page)
             if citation_parts:
-                lines.append(f"**Ort:** {' | '.join(citation_parts)}  ")
+                lines.append(f"**{t('export.location', lang)}:** {' | '.join(citation_parts)}  ")
 
-            # Relevanz
-            lines.append(f"**Relevanz:** {similarity:.3f}  ")
+            # Relevance
+            lines.append(f"**{t('export.relevance', lang)}:** {similarity:.3f}  ")
 
             # Direct link to PDF/EPUB (file:/// protocol)
             source_file = metadata.get('source_file')
@@ -139,10 +144,10 @@ class PromptBuilder:
                 if metadata.get('page'):
                     calibre_url += f"#page={metadata['page']}"
 
-                link_parts.append(f"[📚 Open in Calibre]({calibre_url})")
+                link_parts.append(f"[📚 {t('export.open_in_calibre', lang)}]({calibre_url})")
 
             if link_parts:
-                lines.append(f"**Quelle:** {' | '.join(link_parts)}  ")
+                lines.append(f"**{t('export.source', lang)}:** {' | '.join(link_parts)}  ")
 
             lines.append(f"")
 
@@ -154,11 +159,11 @@ class PromptBuilder:
             # Additional metadata
             meta_lines = []
             if metadata.get('language'):
-                meta_lines.append(f"Sprache: {metadata['language']}")
+                meta_lines.append(f"{t('export.language', lang)}: {metadata['language']}")
             if metadata.get('subject'):
-                meta_lines.append(f"Thema: {metadata['subject']}")
+                meta_lines.append(f"{t('export.subject', lang)}: {metadata['subject']}")
             if metadata.get('publisher'):
-                meta_lines.append(f"Verlag: {metadata['publisher']}")
+                meta_lines.append(f"{t('export.publisher', lang)}: {metadata['publisher']}")
             if metadata.get('isbn'):
                 isbn_text = f"ISBN: {metadata['isbn']}"
                 # Add warning if ISBN from Calibre (not from file)
@@ -174,11 +179,11 @@ class PromptBuilder:
             lines.append(f"")
 
         # Footer with tags
-        tags = ["#archilles", "#rag", "#suche"]
+        tags = ["#archilles", "#rag", t('export.tag_search', lang)]
         if any(r['metadata'].get('language') == 'la' for r in results):
-            tags.append("#latein")
+            tags.append(t('export.tag_latin', lang))
         if any(r['metadata'].get('language') == 'de' for r in results):
-            tags.append("#deutsch")
+            tags.append(t('export.tag_german', lang))
 
         lines.append(f"")
         lines.append(" ".join(tags))
@@ -205,20 +210,20 @@ class PromptBuilder:
         if citation_config is not None:
             from src.citation.config import format_bibliography_instruction
             bib_instruction = (
-                "Fasse am Ende alle zitierten Quellen als Literaturliste zusammen. "
+                "Summarize all cited sources as a bibliography at the end. "
                 + format_bibliography_instruction(citation_config)
             )
         else:
-            bib_instruction = "Fasse am Ende alle zitierten Quellen als Literaturliste zusammen."
+            bib_instruction = "Summarize all cited sources as a bibliography at the end."
 
         return f"""<system_instructions>
-Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage des Nutzers NUR auf Basis der bereitgestellten Dokumentenauszüge zu beantworten.
+You are an academic research assistant. Your task is to answer the user's question based ONLY on the provided document excerpts.
 
 <rules>
-1. Zitiere jede Tatsachenbehauptung sofort mit der ID des Dokuments in eckigen Klammern, z.B. [doc_1].
-2. Nutze keine externen Informationen. Wenn die Antwort nicht in den Dokumenten steht, sage das klar.
-3. Antworte in der Sprache des Nutzers, behalte aber den wissenschaftlichen Fachjargon bei.
-4. Bei mehreren Quellen für dieselbe Aussage: gib alle relevanten IDs an, z.B. [doc_1, doc_3].
+1. Cite every factual claim immediately with the document's ID in square brackets, e.g. [doc_1].
+2. Do not use external information. If the answer is not in the documents, say so clearly.
+3. Answer in the user's language, but keep the scholarly terminology.
+4. For multiple sources supporting the same statement, give all relevant IDs, e.g. [doc_1, doc_3].
 5. {bib_instruction}
 </rules>
 </system_instructions>"""
@@ -262,11 +267,11 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
             meta_parts = []
 
             if metadata.get('author'):
-                meta_parts.append(f"Autor: {metadata['author']}")
+                meta_parts.append(f"Author: {metadata['author']}")
             if metadata.get('book_title'):
-                meta_parts.append(f"Titel: {metadata['book_title']}")
+                meta_parts.append(f"Title: {metadata['book_title']}")
             if metadata.get('year'):
-                meta_parts.append(f"Jahr: {metadata['year']}")
+                meta_parts.append(f"Year: {metadata['year']}")
 
             section_meta = self._rag._format_section_meta(metadata)
             if section_meta:
@@ -274,16 +279,16 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
             page_val, _, _ = self._rag._resolve_page_info(metadata)
             if page_val:
-                meta_parts.append(f"Seite: {page_val}")
+                meta_parts.append(f"Page: {page_val}")
 
-            meta_str = " | ".join(meta_parts) if meta_parts else "Metadaten nicht verfügbar"
+            meta_str = " | ".join(meta_parts) if meta_parts else "Metadata not available"
 
             # Build inline metadata for content injection
             inline_meta = self._build_inline_metadata(metadata, doc_id)
 
             # Inject metadata into text content
             # This helps Claude understand context (e.g., a quote from Arendt vs. Heidegger)
-            text_with_metadata = f"{inline_meta}\n{text}\n<<<ENDE QUELLE>>>"
+            text_with_metadata = f"{inline_meta}\n{text}\n<<<END SOURCE>>>"
 
             # Build XML document entry
             lines.append(f"   <document id=\"{doc_id}\">")
@@ -340,8 +345,8 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         """
         Build inline metadata string to inject before chunk text.
 
-        Format: <<<QUELLE ID=doc_1>>>
-                [Autor: Arendt | Titel: Vita activa | Jahr: 1958 | Kapitel: Das Handeln | Seite: 213]
+        Format: <<<SOURCE ID=doc_1>>>
+                [Author: Arendt | Title: Vita activa | Year: 1958 | Chapter: Action | Page: 213]
 
         This provides context for interpretation -- a sentence from Arendt
         means something different than the same sentence from Heidegger.
@@ -349,11 +354,11 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
         meta_parts = []
 
         if metadata.get('author'):
-            meta_parts.append(f"Autor: {metadata['author']}")
+            meta_parts.append(f"Author: {metadata['author']}")
         if metadata.get('book_title'):
-            meta_parts.append(f"Titel: {metadata['book_title']}")
+            meta_parts.append(f"Title: {metadata['book_title']}")
         if metadata.get('year'):
-            meta_parts.append(f"Jahr: {metadata['year']}")
+            meta_parts.append(f"Year: {metadata['year']}")
 
         section_meta = self._rag._format_section_meta(metadata)
         if section_meta:
@@ -361,14 +366,14 @@ Du bist ein akademischer Forschungsassistent. Deine Aufgabe ist es, die Frage de
 
         page_val, _, _ = self._rag._resolve_page_info(metadata)
         if page_val:
-            meta_parts.append(f"Seite: {page_val}")
+            meta_parts.append(f"Page: {page_val}")
 
         if metadata.get('language'):
-            meta_parts.append(f"Sprache: {metadata['language']}")
+            meta_parts.append(f"Language: {metadata['language']}")
 
-        meta_str = " | ".join(meta_parts) if meta_parts else "keine Metadaten"
+        meta_str = " | ".join(meta_parts) if meta_parts else "no metadata"
 
-        return f"<<<QUELLE ID={doc_id}>>>\n[{meta_str}]"
+        return f"<<<SOURCE ID={doc_id}>>>\n[{meta_str}]"
 
     @staticmethod
     def _escape_xml(text: str) -> str:

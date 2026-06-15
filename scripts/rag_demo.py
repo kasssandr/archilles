@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import (
     get_library_path,
+    get_languages,
     get_rag_db_path,
     get_embedder_config,
     resolve_embedder_settings,
@@ -406,7 +407,8 @@ Examples:
 
             # Export to Markdown if requested
             if args.export:
-                output_file = rag.export_to_markdown(results, args.query, args.export)
+                lang = get_languages(get_library_path(required=False))[0]
+                output_file = rag.export_to_markdown(results, args.query, args.export, lang=lang)
                 print(f"? Exported to: {output_file}")
 
         elif args.command == 'stats':

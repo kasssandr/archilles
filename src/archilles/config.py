@@ -120,6 +120,52 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
     return list(DEFAULT_EXCLUDED_TAGS)
 
 
+# Languages the system operates in. ``languages[0]`` is the operator/interface
+# language that drives user-visible output (CLI, web UI, markdown export); the
+# whole list is the corpus language set used for language-dependent data (OCR
+# codes, keyword lists, …), consumed incrementally by later i18n stages.
+# Prompts to the LLM standardise on English regardless of this setting.
+DEFAULT_LANGUAGES: list[str] = ['en']
+
+
+def get_languages(library_path: Path | None = None) -> list[str]:
+    """Return the configured language list from ``.archilles/config.json``.
+
+    ``languages[0]`` is the operator/interface language; the whole list is the
+    corpus language set. The config value **replaces** the default (symmetric
+    with ``excluded_tags``). Falls back to :data:`DEFAULT_LANGUAGES`
+    (``['en']``) when there is no library context, no config file, no/empty/
+    invalid ``languages`` key, or the file cannot be parsed. Non-string and
+    blank entries are dropped.
+
+    Example ``config.json``::
+
+        {
+          "languages": ["de", "en", "la"]
+        }
+    """
+    if library_path is None:
+        return list(DEFAULT_LANGUAGES)
+
+    config_path = library_path / ".archilles" / "config.json"
+    if not config_path.exists():
+        return list(DEFAULT_LANGUAGES)
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return list(DEFAULT_LANGUAGES)
+
+    custom = config.get("languages") if isinstance(config, dict) else None
+    if isinstance(custom, list):
+        langs = [x for x in custom if isinstance(x, str) and x.strip()]
+        if langs:
+            return langs
+
+    return list(DEFAULT_LANGUAGES)
+
+
 # Built-in defaults for the embed-prepared embedder; mirror the argparse
 # defaults of the ``embed`` CLI command.
 _EMBEDDER_DEFAULTS = {

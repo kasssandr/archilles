@@ -123,7 +123,7 @@ class ArchillesRAG:
         return ''
 
     @staticmethod
-    def _format_section_meta(metadata: Dict[str, Any], label: str = "Kapitel") -> str:
+    def _format_section_meta(metadata: Dict[str, Any], label: str = "Chapter") -> str:
         """
         Build a section/chapter metadata string for XML/inline output.
         Returns empty string if no section info is available.
@@ -136,7 +136,7 @@ class ArchillesRAG:
         if section_title:
             return f"{label}: {section_title}"
         if section:
-            return f"Abschnitt: {section}"
+            return f"Section: {section}"
         if metadata.get('chapter'):
             return f"{label}: {metadata['chapter']}"
         return ''
@@ -443,9 +443,10 @@ class ArchillesRAG:
         self,
         results: List[Dict[str, Any]],
         query_text: str,
-        output_file: str = None
+        output_file: str = None,
+        lang: str = "en"
     ) -> str:
-        return self.prompt_builder.export_to_markdown(results, query_text, output_file)
+        return self.prompt_builder.export_to_markdown(results, query_text, output_file, lang=lang)
 
     def create_claude_prompt(
         self,
