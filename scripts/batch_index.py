@@ -895,9 +895,9 @@ def batch_reindex_comments(
 
     Use after editing Calibre comments or after upgrading the comment indexing logic.
 
-    Supports resuming an interrupted run via checkpoint_path. Already-processed
-    book_ids are written to the checkpoint file after each success; the file is
-    deleted automatically when the run completes without errors.
+    Supports resuming an interrupted run via checkpoint_path. Each completed or
+    skipped book_id is persisted to the IndexingCheckpoint immediately; the
+    checkpoint is removed automatically when the run finishes with no failures.
     """
     import gc
     import numpy as np
