@@ -145,6 +145,49 @@ class TestSourceIdInSearch:
         assert len(results) == 3
 
 
+class TestIndexedBooksColumns:
+    """get_indexed_books must map aggregated columns to the right names.
+
+    Regression: when source_id is present (it is part of the schema), the old
+    code inserted 'source_id' into the name list at position 4 while the
+    aggregation appended it last, shifting every following column by one. The
+    visible symptom was tags holding the int chunk count, which crashed the
+    web UI's tags filter (`int.split`).
+    """
+
+    def _book_chunks(self, n, **meta):
+        chunks = _make_chunks(n, **{k: v for k, v in meta.items()
+                                    if k in ("book_id", "calibre_id", "source_id",
+                                             "tags", "author", "language")})
+        for c in chunks:
+            c["year"] = meta.get("year", 2001)
+            c["format"] = meta.get("format", "pdf")
+        return chunks
+
+    def test_fields_aligned_with_source_id(self, store):
+        chunks = self._book_chunks(
+            3, calibre_id=42, source_id="42",
+            tags="Geschichte, Politik", year=1999, format="epub",
+        )
+        store.add_chunks(chunks, _random_embeddings(3))
+
+        book = store.get_indexed_books()[0]
+        assert book["tags"] == "Geschichte, Politik"
+        assert book["year"] == 1999
+        assert book["format"] == "epub"
+        assert book["chunks"] == 3  # the int chunk count belongs here, not in tags
+        assert str(book["source_id"]) == "42"
+
+    def test_tags_is_string_not_count(self, store):
+        """The exact field that crashed the UI: tags must stay a string."""
+        chunks = self._book_chunks(5, source_id="folder:x", tags="Philosophie")
+        store.add_chunks(chunks, _random_embeddings(5))
+
+        book = store.get_indexed_books()[0]
+        assert book["tags"] == "Philosophie"
+        assert book["chunks"] == 5
+
+
 class TestSchemaMigration:
     def test_source_id_in_migratable_columns(self, store):
         """source_id is listed for auto-migration."""

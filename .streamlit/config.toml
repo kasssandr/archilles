@@ -1,0 +1,10 @@
+# Streamlit configuration for the ARCHILLES web UI.
+#
+# fileWatcherType = "none" is required: the project ships scripts/watchdog.py,
+# whose name shadows the PyPI "watchdog" package on sys.path when Streamlit runs
+# scripts/web_ui.py. Streamlit's default (event-based) watcher imports
+# `from watchdog import events`, which then resolves to scripts/watchdog.py and
+# crashes every browser session. Disabling the watcher avoids the collision; it
+# only turns off auto-reload-on-edit, which is irrelevant for normal use.
+[server]
+fileWatcherType = "none"

@@ -29,7 +29,7 @@ python scripts/rag_demo.py list-indexed
 
 ### Web UI
 ```bash
-python scripts/web_ui.py
+streamlit run scripts/web_ui.py
 ```
 
 ### MCP Server (Claude Desktop)

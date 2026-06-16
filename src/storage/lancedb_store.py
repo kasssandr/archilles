@@ -1016,7 +1016,22 @@ class LanceDBStore:
         if self.table is None:
             return []
 
-        df = self.table.to_pandas()
+        # Only metadata columns are needed; never decode 'text'/'vector'/
+        # 'window_text', which dominate row size. Column projection keeps this
+        # cheap even on libraries with millions of chunks (see the projection
+        # pattern used by get_*_hashes_* above).
+        columns = [
+            "book_id", "book_title", "author", "calibre_id",
+            "source_id", "year", "format", "tags", "id", "indexed_at",
+        ]
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            projection = [c for c in columns if c in existing]
+            df = lance_dataset.to_table(columns=projection).to_pandas()
+        except Exception as e:
+            logger.warning(f"Fast column projection failed, loading full table: {e}")
+            df = self.table.to_pandas()
 
         # Group by book_id and aggregate
         agg_dict = {
@@ -1034,8 +1049,13 @@ class LanceDBStore:
             "year", "format", "tags", "chunks", "indexed_at",
         ]
         if "source_id" in df.columns:
+            # Appended LAST to match agg_dict insertion order: the aggregated
+            # frame lists source_id as its final column. Inserting it earlier
+            # (the previous behaviour) shifted every following column by one,
+            # so tags ended up holding the int chunk count, year held the
+            # format, etc. — the real root cause of the web UI tag crash.
             agg_dict["source_id"] = "first"
-            col_names.insert(4, "source_id")  # after calibre_id
+            col_names.append("source_id")
 
         books = df.groupby("book_id").agg(agg_dict).reset_index()
         books.columns = col_names
@@ -1064,7 +1084,17 @@ class LanceDBStore:
                 "section_types": {},
             }
 
-        df = self.table.to_pandas()
+        # Project only the columns the stats need — avoids decoding text/vector/
+        # window_text for every chunk on each page load.
+        columns = ["book_id", "chunk_type", "format", "section_type", "language"]
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            projection = [c for c in columns if c in existing]
+            df = lance_dataset.to_table(columns=projection).to_pandas()
+        except Exception as e:
+            logger.warning(f"Fast column projection failed, loading full table: {e}")
+            df = self.table.to_pandas()
 
         return {
             "total_chunks": len(df),

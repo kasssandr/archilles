@@ -38,6 +38,20 @@ def _ui_lang() -> str:
     return get_languages(get_library_path(required=False))[0]
 
 
+def _safe_str(value: Any) -> str:
+    """Coerce a possibly int/None/NaN metadata value to a clean string.
+
+    Aggregating the store's book list (groupby/first) can yield non-string
+    values — numeric tags, or NaN for sparse author/title — which break the
+    downstream .split()/.lower()/slicing assumptions and crash the page.
+    """
+    if value is None:
+        return ''
+    if isinstance(value, float) and value != value:  # NaN
+        return ''
+    return str(value)
+
+
 @st.cache_resource
 def load_service():
     """Load ARCHILLES service (cached for performance)."""
@@ -69,7 +83,7 @@ def get_available_tags(_service) -> List[str]:
         return []
     all_tags = set()
     for book in books:
-        tags_str = book.get('tags', '')
+        tags_str = _safe_str(book.get('tags'))
         if tags_str:
             for tag in tags_str.split(', '):
                 tag = tag.strip()
@@ -85,7 +99,12 @@ def get_indexed_books_list(_service) -> List[Dict[str, Any]]:
         books = _service.get_book_list()
     except Exception:
         return []
-    return sorted(books, key=lambda x: x.get('title', '') or '')
+    # Normalize string-ish fields up front; aggregation can yield int/NaN, which
+    # would break sorting, slicing and .lower() in the books tab and book filter.
+    for book in books:
+        for key in ('title', 'author', 'tags'):
+            book[key] = _safe_str(book.get(key))
+    return sorted(books, key=lambda x: x.get('title', ''))
 
 
 def highlight_text(text: str, query_terms: List[str]) -> str:
