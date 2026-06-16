@@ -87,6 +87,18 @@ def test_parse_meta_line_invalid():
     assert _parse_meta_line("not a metadata line") is None
 
 
+def test_clipping_locales_extension_contract():
+    """Each locale entry carries the keys the parser relies on, so adding a
+    language (finding 6.14) is a pure data edit."""
+    from src.archilles.annotation_providers.kindle_provider import _CLIPPING_LOCALES
+
+    assert {"en", "de"} <= set(_CLIPPING_LOCALES)
+    for code, loc in _CLIPPING_LOCALES.items():
+        assert hasattr(loc["meta"], "match"), code
+        assert isinstance(loc["date_fmt"], str), code
+        assert isinstance(loc["months"], dict), code
+
+
 # ── Provider tests ──────────────────────────────────────────────────
 
 

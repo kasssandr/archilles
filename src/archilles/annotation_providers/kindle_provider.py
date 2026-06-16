@@ -3,8 +3,7 @@ Kindle Annotation Provider.
 
 Two input modes:
 
-1. **My Clippings.txt** — the text export written by Kindle e-ink devices
-   (supports English and German UI localizations).
+1. **My Clippings.txt** — the text export written by Kindle e-ink devices.
 2. **Kindle for PC** — accepts either a single ``<ASIN>_EBOK`` directory or
    the whole ``My Kindle Content`` root. Reads the per-book ``.mbpV2``
    (modern JSON variant) for highlights / notes and parses Mobi/AZW3 EXTH
@@ -12,6 +11,14 @@ Two input modes:
    ``.azw`` files are detected and skipped (they expose no readable
    metadata to us). For matching against Calibre, the ASIN from the
    directory name is exposed in ``Annotation.raw_metadata['asin']``.
+
+Locale support
+--------------
+Clippings (mode 1) are parsed for every UI language in ``_CLIPPING_LOCALES`` —
+currently **English and German**. Add a language by appending one entry there
+(regex + date format + month names); the parser auto-tries all locales. The
+Kindle-for-PC note *footer* (mode 2) is recognized for **German only**
+(finding 6.4); see ``_NOTE_FOOTER_RE``.
 """
 
 import json
@@ -31,24 +38,47 @@ _SEPARATOR = "=========="
 # Title line: "Book Title (Author Name)"
 _TITLE_RE = re.compile(r"^(.+?)\s*\(([^)]+)\)\s*$")
 
-# Metadata line patterns (English + German)
-_META_PATTERNS = [
-    # English
-    re.compile(
-        r"- Your (?P<type>Highlight|Note|Bookmark) on "
-        r"(?:page (?P<page>\d+) \| )?Location (?P<loc>[\d-]+)"
-        r" \| Added on .+?,\s*(?P<date>.+)$",
-        re.IGNORECASE,
-    ),
-    # German
-    re.compile(
-        r"- Ihre (?P<type>Markierung|Notiz|Lesezeichen) "
-        r"(?:auf Seite (?P<page>\d+) \| )?bei Position (?P<loc>[\d-]+)"
-        r" \| Hinzugefügt am .+?,\s*(?P<date>.+)$",
-        re.IGNORECASE,
-    ),
-]
+# ── Clipping locales (My Clippings.txt) ──────────────────────────────
+# Each entry bundles everything Kindle localizes for the metadata line of one
+# UI language. Add a locale by appending one entry — the parser needs no change
+# (finding 6.14). Currently supported: English, German. FR/ES/IT etc. Kindles
+# stay unparsed until their exact UI strings + month names are added here.
+#
+#   meta:     regex for "- Your Highlight on ... | Added on ..." with named
+#             groups type/page/loc/date.
+#   date_fmt: strptime format for the trailing date.
+#   months:   non-English month-name → English map (strptime parses English
+#             month names natively, so English needs none).
+_CLIPPING_LOCALES: dict[str, dict] = {
+    "en": {
+        "meta": re.compile(
+            r"- Your (?P<type>Highlight|Note|Bookmark) on "
+            r"(?:page (?P<page>\d+) \| )?Location (?P<loc>[\d-]+)"
+            r" \| Added on .+?,\s*(?P<date>.+)$",
+            re.IGNORECASE,
+        ),
+        "date_fmt": "%B %d, %Y %I:%M:%S %p",  # March 15, 2026 10:23:45 AM
+        "months": {},
+    },
+    "de": {
+        "meta": re.compile(
+            r"- Ihre (?P<type>Markierung|Notiz|Lesezeichen) "
+            r"(?:auf Seite (?P<page>\d+) \| )?bei Position (?P<loc>[\d-]+)"
+            r" \| Hinzugefügt am .+?,\s*(?P<date>.+)$",
+            re.IGNORECASE,
+        ),
+        "date_fmt": "%d. %B %Y %H:%M:%S",  # 15. März 2026 10:23:45
+        "months": {
+            "Januar": "January", "Februar": "February", "März": "March",
+            "April": "April", "Mai": "May", "Juni": "June", "Juli": "July",
+            "August": "August", "September": "September", "Oktober": "October",
+            "November": "November", "Dezember": "December",
+        },
+    },
+}
 
+# Localized annotation-type word → canonical type (all locales, lower-cased).
+# Extend alongside a new _CLIPPING_LOCALES entry.
 _TYPE_MAP = {
     "highlight": "highlight",
     "markierung": "highlight",
@@ -58,37 +88,16 @@ _TYPE_MAP = {
     "lesezeichen": "bookmark",
 }
 
-# Date formats to try
-_DATE_FORMATS = [
-    "%B %d, %Y %I:%M:%S %p",  # English: March 15, 2026 10:23:45 AM
-    "%d. %B %Y %H:%M:%S",  # German: 15. März 2026 10:23:45
-]
-
-# German month names for parsing
-_GERMAN_MONTHS = {
-    "Januar": "January",
-    "Februar": "February",
-    "März": "March",
-    "April": "April",
-    "Mai": "May",
-    "Juni": "June",
-    "Juli": "July",
-    "August": "August",
-    "September": "September",
-    "Oktober": "October",
-    "November": "November",
-    "Dezember": "December",
-}
-
 
 def _parse_clipping_date(date_str: str) -> Optional[datetime]:
-    """Parse date string from Kindle clipping (English or German)."""
+    """Parse a Kindle clipping date in any supported locale."""
     date_str = date_str.strip()
-    for de, en in _GERMAN_MONTHS.items():
-        date_str = date_str.replace(de, en)
-    for fmt in _DATE_FORMATS:
+    for loc in _CLIPPING_LOCALES.values():
+        candidate = date_str
+        for foreign, english in loc["months"].items():
+            candidate = candidate.replace(foreign, english)
         try:
-            return datetime.strptime(date_str, fmt)
+            return datetime.strptime(candidate, loc["date_fmt"])
         except ValueError:
             continue
     logger.debug(f"Could not parse Kindle date: {date_str}")
@@ -96,9 +105,10 @@ def _parse_clipping_date(date_str: str) -> Optional[datetime]:
 
 
 def _parse_meta_line(line: str) -> Optional[dict]:
-    """Parse the metadata line (type, location, date)."""
-    for pattern in _META_PATTERNS:
-        m = pattern.match(line.strip())
+    """Parse the metadata line (type, location, date) in any supported locale."""
+    stripped = line.strip()
+    for loc in _CLIPPING_LOCALES.values():
+        m = loc["meta"].match(stripped)
         if m:
             raw_type = m.group("type").lower()
             return {
@@ -124,6 +134,13 @@ _EXTH_LABELS = {
 
 # Footer Kindle appends to copied notes, always preceded by a blank line.
 # Two-stage parsing: first locate the footer block, then split into fields.
+#
+# LIMITATION (finding 6.4): German-only — keys on "(S. <page>)" + "Kindle-
+# Version". English (and other) Kindle-for-PC notes keep their footer as index
+# noise, and _title_author_from_notes can't recover title/author from them. To
+# add a locale, generalize the page marker and the "Kindle-Version" token
+# against a REAL sample (likely "(p. <page>)" + "Kindle Edition"); deferred
+# because the exact English footer format is unverified.
 _NOTE_FOOTER_RE = re.compile(
     r"\n+[^\n]*?\(S\.\s*\d+\)[^\n]*?Kindle-Version\.?\s*$"
 )
