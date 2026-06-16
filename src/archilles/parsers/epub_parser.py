@@ -69,10 +69,14 @@ class EPUBParser(DocumentParser):
         extractor = EPUBExtractor()
         extracted = extractor.extract(file_path)
 
-        # Convert ExtractedText chunks → ParsedChunks (chapter-level)
+        # Convert ExtractedText chunks → ParsedChunks (keep rich metadata)
         chunks = []
         for i, chunk_dict in enumerate(extracted.chunks):
-            meta = chunk_dict.get('metadata', {})
+            meta = dict(chunk_dict.get('metadata', {}))
+            # window_text lives on the chunk dict, not in metadata — carry it
+            # through so Small-to-Big context survives (Befund 1.28).
+            if chunk_dict.get('window_text'):
+                meta['window_text'] = chunk_dict['window_text']
             chunks.append(ParsedChunk(
                 text=chunk_dict.get('text', ''),
                 source_file=str(file_path),
@@ -80,6 +84,8 @@ class EPUBParser(DocumentParser):
                 chunk_index=i,
                 section_title=meta.get('section_title'),
                 chapter=meta.get('chapter'),
+                start_char=meta.get('char_start'),  # Befund 2.17
+                end_char=meta.get('char_end'),
                 metadata=meta,
             ))
 

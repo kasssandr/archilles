@@ -141,14 +141,14 @@ class ModularPipeline:
     @classmethod
     def _create_from_profile(cls, profile: IndexingProfile) -> 'ModularPipeline':
         """Create pipeline from IndexingProfile object."""
-        # Import implementations
         from .chunkers.semantic import SemanticChunker
-        from .chunkers.base import ChunkerConfig
 
-        # Create chunker with profile settings
+        # Profile chunk_size/overlap are documented as *token* counts; declare
+        # the unit so the chunker scales them to characters (Befund 3.2).
         chunker_config = ChunkerConfig(
             chunk_size=profile.chunk_size,
             chunk_overlap=profile.chunk_overlap,
+            size_unit="tokens",
             respect_sentences=True,
             respect_paragraphs=True
         )
@@ -301,6 +301,39 @@ class ModularPipeline:
             self._dialogue_chunker = DialogueChunker()
         return self._dialogue_chunker
 
+    # ── Parser-chunk conversion ─────────────────────────────────
+
+    @staticmethod
+    def _parsed_to_textchunk(pc) -> TextChunk:
+        """Convert a parser-produced ParsedChunk to a TextChunk, preserving
+        page mapping and all structural metadata (Befund 3.1).
+
+        Structural fields (section_title, chapter) are promoted into
+        ``metadata`` so the storage layer reads them uniformly from one place.
+        char offsets fall back to the extractor's ``char_start/char_end``
+        metadata when the dedicated fields are unset (Befund 2.17).
+        """
+        meta = dict(pc.metadata or {})
+        if pc.section_title and "section_title" not in meta:
+            meta["section_title"] = pc.section_title
+        if pc.chapter and "chapter" not in meta:
+            meta["chapter"] = pc.chapter
+
+        start_char = pc.start_char if pc.start_char is not None else (meta.get("char_start") or 0)
+        end_char = pc.end_char if pc.end_char is not None else (meta.get("char_end") or 0)
+
+        return TextChunk(
+            text=pc.text,
+            chunk_index=pc.chunk_index,
+            source_file=pc.source_file,
+            page_start=pc.page_number,
+            page_end=pc.page_number,
+            start_char=start_char,
+            end_char=end_char,
+            token_count=pc.token_count,
+            metadata=meta,
+        )
+
     # ── Main processing ─────────────────────────────────────────
 
     def process(self, file_path: str | Path) -> ProcessedDocument:
@@ -323,24 +356,24 @@ class ModularPipeline:
         parse_time = time.time() - start
         logger.info(f"Parsed in {parse_time:.2f}s: {parsed.page_count} pages")
 
-        # Step 2: Chunk — select chunker based on file type / frontmatter
-        chunker = self._select_chunker(file_path)
+        # Step 2: Chunk
         start = time.time()
         if parsed.has_chunks:
-            # Parser already chunked by page, re-chunk with our chunker
-            page_texts = [c.text for c in parsed.chunks]
-            chunks = chunker.chunk_with_pages(page_texts, str(file_path))
+            # The parser already produced structured, page-mapped chunks
+            # (TOC-aware, with section_type/page_label/char offsets). Take them
+            # as-is instead of re-chunking — re-chunking would mistake chunks
+            # for "pages" and discard all rich metadata (Befund 3.1/2.17/1.28).
+            chunks = [self._parsed_to_textchunk(pc) for pc in parsed.chunks]
         else:
+            # No parser chunks (e.g. TXT/MD): chunk the full text, choosing the
+            # chunker by file type / frontmatter.
+            chunker = self._select_chunker(file_path)
             chunks = chunker.chunk(parsed.full_text, str(file_path))
 
-        # DialogueChunker returns [] when no turn markers are found → fall back
-        if not chunks and chunker is not self._get_default_chunker():
-            logger.info("Dialogue chunker found no turns, falling back to default chunker")
-            default = self._get_default_chunker()
-            if parsed.has_chunks:
-                chunks = default.chunk_with_pages(page_texts, str(file_path))
-            else:
-                chunks = default.chunk(parsed.full_text, str(file_path))
+            # DialogueChunker returns [] when no turn markers are found → fall back
+            if not chunks and chunker is not self._get_default_chunker():
+                logger.info("Dialogue chunker found no turns, falling back to default chunker")
+                chunks = self._get_default_chunker().chunk(parsed.full_text, str(file_path))
 
         chunk_time = time.time() - start
         logger.info(f"Chunked in {chunk_time:.2f}s: {len(chunks)} chunks")

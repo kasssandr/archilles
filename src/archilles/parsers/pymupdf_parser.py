@@ -18,6 +18,8 @@ except ImportError:
     PYMUPDF_AVAILABLE = False
     PYMUPDF_VERSION = "0.0.0"
 
+from src.extractors.ocr_extractor import OCRBackend
+
 from .base import (
     DocumentParser,
     DocumentType,
@@ -48,7 +50,7 @@ class PyMuPDFParser(DocumentParser):
         self,
         enable_ocr: bool = False,
         force_ocr: bool = False,
-        ocr_backend: str = "auto",
+        ocr_backend: "str | OCRBackend" = "auto",
         ocr_language: str = "deu+eng",
     ):
         if not PYMUPDF_AVAILABLE:
@@ -57,7 +59,8 @@ class PyMuPDFParser(DocumentParser):
             )
         self._enable_ocr = enable_ocr
         self._force_ocr = force_ocr
-        self._ocr_backend = ocr_backend
+        # PDFExtractor expects an OCRBackend enum, not a raw string (Befund 2.16)
+        self._ocr_backend = OCRBackend.from_string(ocr_backend)
         self._ocr_language = ocr_language
 
     @property
@@ -98,10 +101,14 @@ class PyMuPDFParser(DocumentParser):
         )
         extracted = extractor.extract(file_path)
 
-        # Convert ExtractedText chunks → ParsedChunks (page-level)
+        # Convert ExtractedText chunks → ParsedChunks (keep rich metadata)
         chunks = []
         for i, chunk_dict in enumerate(extracted.chunks):
-            meta = chunk_dict.get('metadata', {})
+            meta = dict(chunk_dict.get('metadata', {}))
+            # window_text lives on the chunk dict, not in metadata — carry it
+            # through so Small-to-Big context survives (Befund 1.28).
+            if chunk_dict.get('window_text'):
+                meta['window_text'] = chunk_dict['window_text']
             chunks.append(ParsedChunk(
                 text=chunk_dict.get('text', ''),
                 source_file=str(file_path),
@@ -109,6 +116,8 @@ class PyMuPDFParser(DocumentParser):
                 chunk_index=i,
                 section_title=meta.get('section_title'),
                 chapter=meta.get('chapter'),
+                start_char=meta.get('char_start'),  # Befund 2.17
+                end_char=meta.get('char_end'),
                 metadata=meta,
             ))
 

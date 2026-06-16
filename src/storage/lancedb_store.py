@@ -332,9 +332,15 @@ class LanceDBStore:
                 title_part = doc.title or Path(doc.file_path).stem
                 book_id = f"{author_part}_{title_part}_{calibre_id or 0}"
 
-            # Convert TextChunk objects to the dict format expected by add_chunks()
+            # Convert TextChunk objects to the dict format expected by add_chunks().
+            # All structural metadata is read from chunk.metadata — TextChunk has
+            # no .chapter/.section_title attributes (Befund 3.1), and char offsets,
+            # window_text, parent_id and page_label are wired through from the
+            # parser instead of being dropped (Befund 2.17/1.28).
             chunks = []
             for i, chunk in enumerate(doc.chunks):
+                meta = chunk.metadata or {}
+                section = meta.get("section")
                 chunk_dict = {
                     "id": f"{book_id}_chunk_{i}",
                     "text": chunk.text,
@@ -352,23 +358,23 @@ class LanceDBStore:
 
                     # Position metadata
                     "chunk_index": chunk.chunk_index,
-                    "chunk_type": chunk.metadata.get("chunk_type", ChunkType.CONTENT),
+                    "chunk_type": meta.get("chunk_type", ChunkType.CONTENT),
                     "page_number": chunk.page_start or 0,
-                    "page_label": str(chunk.page_start) if chunk.page_start else "",
-                    "chapter": chunk.chapter or "",
+                    "page_label": meta.get("page_label") or (str(chunk.page_start) if chunk.page_start else ""),
+                    "chapter": meta.get("chapter", ""),
 
                     # Section metadata (if EPUB)
-                    "section": chunk.metadata.get("section", ""),
-                    "section_title": chunk.section_title or "",
-                    "section_type": chunk.metadata.get("section_type", ""),
+                    "section": str(section) if section not in (None, "") else "",
+                    "section_title": meta.get("section_title", ""),
+                    "section_type": meta.get("section_type", ""),
 
-                    # Context expansion
-                    "char_start": chunk.start_char or 0,
-                    "char_end": chunk.end_char or 0,
-                    "window_text": "",
+                    # Context expansion (Small-to-Big retrieval)
+                    "char_start": chunk.start_char or meta.get("char_start") or 0,
+                    "char_end": chunk.end_char or meta.get("char_end") or 0,
+                    "window_text": meta.get("window_text", ""),
 
                     # Parent-Child hierarchy
-                    "parent_id": "",
+                    "parent_id": meta.get("parent_id", ""),
 
                     # Technical metadata
                     "source_file": doc.file_path,

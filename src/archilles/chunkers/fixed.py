@@ -61,6 +61,20 @@ def _sliding_window_chunks(
                 char_count=len(stripped),
                 token_count=token_count,
             ))
+        elif stripped and end >= text_len and chunks:
+            # Trailing remainder shorter than min_size → merge into the
+            # previous chunk instead of dropping it (Befund 3.3).
+            last = chunks[-1]
+            merged = last.text + " " + stripped
+            chunks[-1] = TextChunk(
+                text=merged,
+                chunk_index=last.chunk_index,
+                source_file=source_file,
+                start_char=last.start_char,
+                end_char=end,
+                char_count=len(merged),
+                token_count=token_count_fn(merged) if token_count_fn else None,
+            )
 
         position += step
 

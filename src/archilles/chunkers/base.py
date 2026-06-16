@@ -17,6 +17,10 @@ from typing import List, Dict, Any, Optional, Literal
 
 SizeUnit = Literal["characters", "tokens"]
 
+# Rough average characters per token for multilingual text (BGE-M3).
+# Matches estimate_tokens() (len // 4) so token↔char conversions are consistent.
+CHARS_PER_TOKEN = 4
+
 
 @dataclass
 class ChunkerConfig:
@@ -183,7 +187,19 @@ class TextChunker(ABC):
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count (~4 chars/token). Override with actual tokenizer."""
-        return len(text) // 4
+        return len(text) // CHARS_PER_TOKEN
+
+    def _to_chars(self, size: int) -> int:
+        """Convert a configured size to characters, honouring ``config.size_unit``.
+
+        When ``size_unit == "tokens"`` the profile/config value is multiplied
+        by ``CHARS_PER_TOKEN`` (Befund 3.2: a 512-*token* budget must not be
+        applied as 512 *characters*). Character-based configs pass through
+        unchanged.
+        """
+        if self.config.size_unit == "tokens":
+            return int(size * CHARS_PER_TOKEN)
+        return size
 
     def __repr__(self) -> str:
         return (

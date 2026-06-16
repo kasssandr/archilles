@@ -27,6 +27,22 @@ class OCRBackend(Enum):
     OLMOCR = "olmocr"            # Alternative VLM (future)
     AUTO = "auto"                # Automatic selection
 
+    @classmethod
+    def from_string(cls, value: "str | OCRBackend") -> "OCRBackend":
+        """Coerce a backend name (or enum) to an OCRBackend.
+
+        Canonical converter for the str→enum boundary (Befund 2.16):
+        callers accept user-facing strings ("auto"/"tesseract"/…) but
+        PDFExtractor and get_ocr_extractor() require the enum. Unknown or
+        empty values fall back to AUTO rather than raising.
+        """
+        if isinstance(value, cls):
+            return value
+        try:
+            return cls(str(value).strip().lower())
+        except ValueError:
+            return cls.AUTO
+
 
 class OCROutputFormat(Enum):
     """Output format for OCR results.

@@ -211,15 +211,9 @@ class ArchillesRAG:
         print(f"  Database: {db_path}")
         print(f"  Model: {model_name}")
 
-        # Map string backend to enum
+        # Map string backend to enum (Befund 2.16: canonical converter)
         from src.extractors import OCRBackend
-        backend_map = {
-            "auto": OCRBackend.AUTO,
-            "tesseract": OCRBackend.TESSERACT,
-            "lighton": OCRBackend.LIGHTON,
-            "olmocr": OCRBackend.OLMOCR,
-        }
-        ocr_backend_enum = backend_map.get(ocr_backend.lower(), OCRBackend.AUTO)
+        ocr_backend_enum = OCRBackend.from_string(ocr_backend)
 
         # Initialize extractor with OCR options
         self.extractor = UniversalExtractor(

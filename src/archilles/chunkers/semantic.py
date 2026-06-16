@@ -71,27 +71,27 @@ class SemanticChunker(TextChunker):
     def _chunk_markdown(self, text: str, source_file: str) -> List[TextChunk]:
         """Heading-aware chunking for Markdown text."""
         sections = self._split_into_sections(text)
-        chunk_size = self.config.chunk_size
-        overlap = self.config.chunk_overlap
-        min_size = self.config.min_chunk_size
+        chunk_size = self._to_chars(self.config.chunk_size)
+        overlap = self._to_chars(self.config.chunk_overlap)
 
         chunks: List[TextChunk] = []
-        # Accumulator: list of (level, section_text) tuples being merged
-        acc: List[tuple[int, str]] = []
+        # Accumulator: list of (level, section_text, start_char) triples being merged
+        acc: List[tuple[int, str, int]] = []
         acc_chars = 0
 
         def flush():
             nonlocal acc, acc_chars
             if not acc:
                 return
-            merged = "\n\n".join(s for _, s in acc).strip()
-            if len(merged) >= min_size:
-                chunks.append(self._create_chunk(merged, len(chunks), source_file, 0, len(merged)))
+            merged = "\n\n".join(s for _, s, _ in acc).strip()
+            # Real source span: first section's start → last section's end (Befund 3.4)
+            start = acc[0][2]
+            end = acc[-1][2] + len(acc[-1][1])
+            self._emit_or_merge(chunks, merged, source_file, start, end)
             acc = []
             acc_chars = 0
 
-        for level, section_text in sections:
-            section_text = section_text.strip()
+        for level, section_text, sec_start in sections:
             if not section_text:
                 continue
 
@@ -103,19 +103,22 @@ class SemanticChunker(TextChunker):
 
             if len(section_text) > chunk_size:
                 # Section is too large on its own — flush accumulator first,
-                # then sub-split the section using plain paragraph logic
+                # then sub-split the section using plain paragraph logic.
+                # Shift sub-chunk offsets to absolute positions (Befund 3.4).
                 flush()
                 sub_chunks = self._chunk_plain(section_text, source_file)
                 for sc in sub_chunks:
                     sc.chunk_index = len(chunks)
+                    sc.start_char += sec_start
+                    sc.end_char += sec_start
                     chunks.append(sc)
             elif acc_chars + len(section_text) > chunk_size and acc:
                 # Adding this section would overflow — flush and start fresh
                 flush()
-                acc.append((level, section_text))
+                acc.append((level, section_text, sec_start))
                 acc_chars = len(section_text)
             else:
-                acc.append((level, section_text))
+                acc.append((level, section_text, sec_start))
                 acc_chars += len(section_text)
 
         flush()
@@ -125,29 +128,36 @@ class SemanticChunker(TextChunker):
 
         return chunks
 
-    def _split_into_sections(self, text: str) -> List[tuple[int, str]]:
-        """Split *text* into ``(heading_level, section_text)`` pairs.
+    def _split_into_sections(self, text: str) -> List[tuple[int, str, int]]:
+        """Split *text* into ``(heading_level, section_text, start_char)`` triples.
 
         ``heading_level`` is 0 for preamble text before the first heading.
         The heading line itself is included at the top of each section body.
+        ``start_char`` is the offset of the section's first non-whitespace
+        character in the original text — needed for real chunk offsets
+        (Befund 3.4) so page mapping and overlap compute correctly.
         """
+        def _stripped_start(raw: str, base: int) -> int:
+            return base + (len(raw) - len(raw.lstrip()))
+
         matches = list(self.HEADING_RE.finditer(text))
         if not matches:
-            return [(0, text)]
+            return [(0, text.strip(), _stripped_start(text, 0))]
 
-        sections: List[tuple[int, str]] = []
+        sections: List[tuple[int, str, int]] = []
 
         # Preamble before first heading
-        preamble = text[:matches[0].start()].strip()
+        raw_preamble = text[:matches[0].start()]
+        preamble = raw_preamble.strip()
         if preamble:
-            sections.append((0, preamble))
+            sections.append((0, preamble, _stripped_start(raw_preamble, 0)))
 
         for i, m in enumerate(matches):
             level = len(m.group(1))
             body_start = m.start()
             body_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            section_body = text[body_start:body_end]
-            sections.append((level, section_body))
+            raw_body = text[body_start:body_end]
+            sections.append((level, raw_body.strip(), _stripped_start(raw_body, body_start)))
 
         return sections
 
@@ -155,9 +165,9 @@ class SemanticChunker(TextChunker):
 
     def _chunk_plain(self, text: str, source_file: str) -> List[TextChunk]:
         """Original paragraph-based chunking for non-Markdown text."""
-        chunk_size = self.config.chunk_size
-        overlap = self.config.chunk_overlap
-        min_size = self.config.min_chunk_size
+        chunk_size = self._to_chars(self.config.chunk_size)
+        overlap = self._to_chars(self.config.chunk_overlap)
+        min_size = self._to_chars(self.config.min_chunk_size)
 
         # Build (text, start_offset) pairs directly from split positions
         # to avoid O(n) text.find() per paragraph.
@@ -190,11 +200,11 @@ class SemanticChunker(TextChunker):
                 continue
 
             # Flush the current chunk before starting a new one
-            if current_chunk_text and len(current_chunk_text) >= min_size:
-                chunks.append(self._create_chunk(
-                    current_chunk_text, len(chunks), source_file,
+            if current_chunk_text:
+                self._emit_or_merge(
+                    chunks, current_chunk_text, source_file,
                     current_start, current_start + len(current_chunk_text),
-                ))
+                )
 
             # Handle the paragraph that caused overflow
             if len(para) <= chunk_size:
@@ -216,17 +226,10 @@ class SemanticChunker(TextChunker):
                     current_chunk_text = ""
 
         # Emit or merge the trailing chunk
-        if current_chunk_text and len(current_chunk_text) >= min_size:
-            chunks.append(self._create_chunk(
-                current_chunk_text, len(chunks), source_file,
+        if current_chunk_text:
+            self._emit_or_merge(
+                chunks, current_chunk_text, source_file,
                 current_start, current_start + len(current_chunk_text),
-            ))
-        elif current_chunk_text and chunks:
-            last = chunks[-1]
-            merged_text = last.text + "\n\n" + current_chunk_text
-            chunks[-1] = self._create_chunk(
-                merged_text, last.chunk_index, source_file,
-                last.start_char, current_start + len(current_chunk_text),
             )
 
         if overlap > 0 and len(chunks) > 1:
@@ -361,6 +364,33 @@ class SemanticChunker(TextChunker):
             end_char=end,
             char_count=len(text.strip())
         )
+
+    def _emit_or_merge(
+        self,
+        chunks: List[TextChunk],
+        text: str,
+        source_file: str,
+        start: int,
+        end: int,
+    ) -> None:
+        """Append *text* as a new chunk, or merge it into the previous one.
+
+        Fragments shorter than ``min_chunk_size`` are merged into the
+        preceding chunk instead of being silently dropped (Befund 3.3).
+        When there is no preceding chunk, the fragment is emitted as-is —
+        a short chunk is preferable to losing the text entirely.
+        """
+        text = text.strip()
+        if not text:
+            return
+        if len(text) >= self._to_chars(self.config.min_chunk_size) or not chunks:
+            chunks.append(self._create_chunk(text, len(chunks), source_file, start, end))
+        else:
+            last = chunks[-1]
+            merged = last.text + "\n\n" + text
+            chunks[-1] = self._create_chunk(
+                merged, last.chunk_index, source_file, last.start_char, end
+            )
 
 
 # Quick test
