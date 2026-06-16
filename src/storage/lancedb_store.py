@@ -987,25 +987,6 @@ class LanceDBStore:
 
         return result
 
-    def get_all(self, limit: int = 1000, offset: int = 0) -> list[dict[str, Any]]:
-        """
-        Get all chunks (with pagination).
-
-        Args:
-            limit: Maximum number of chunks to return
-            offset: Number of chunks to skip
-
-        Returns:
-            List of chunk dictionaries
-        """
-        if self.table is None:
-            return []
-
-        # LanceDB doesn't have native offset, so we fetch more and slice
-        df = self.table.to_pandas()
-        df = df.iloc[offset:offset + limit]
-        return df.to_dict(orient="records")
-
     def get_indexed_books(self) -> list[dict[str, Any]]:
         """
         Get list of all indexed books with statistics.

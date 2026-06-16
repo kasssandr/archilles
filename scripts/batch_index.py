@@ -836,7 +836,7 @@ def get_indexed_book_ids(
     try:
         # Load only the minimal columns required (book_id, chunk_type, indexed_at).
         # This avoids reading the large 'text' and 'vector' columns and is 10-50x
-        # faster than get_all(limit=100000) on large databases.
+        # faster than loading the full table on large databases.
         all_chunks = rag.store.get_book_ids_for_skip_check()
 
         # Extract unique book_ids — only count books with actual CONTENT chunks

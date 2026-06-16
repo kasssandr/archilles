@@ -262,7 +262,7 @@ class Searcher:
         resolved_book_id, calibre_id, source_id = self._rag._resolve_book_id(book_id)
 
         # Use FTS with individual words as pre-filter — much smaller candidate
-        # set than get_all(), but avoids Tantivy phrase-query tokenization issues
+        # set than a full table scan, but avoids Tantivy phrase-query tokenization issues
         candidates = self._rag.store.fts_search(
             query_text=query_text,
             top_k=top_k * 10,
