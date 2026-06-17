@@ -122,7 +122,9 @@ Als konkrete Implementierungsoption wird **Docling** (IBM, Open Source, lokal la
 
 **Begründung:** Das Pattern ermöglicht die spätere Erweiterung um neue Extraktoren (etwa für DJVU, OCR-intensive Dokumente oder proprietäre Formate), neue Chunking-Strategien (semantisch vs. fixed-size vs. hybrid) und neue Embedding-Modelle, ohne den Kern des Systems zu modifizieren. Es ist zudem die technische Voraussetzung für das Freemium-Modell: Die Basisversion nutzt Standard-Komponenten, Special Editions können optimierte Varianten einsetzen.
 
-**Implementierungsstand:** Das Registry-Pattern ist vollständig implementiert. In `src/archilles/` existieren drei formale Registries mit dynamischer Registrierung und Laufzeit-Discovery: `ParserRegistry` (für `PyMuPDFParser`, `EPUBParser`), `ChunkerRegistry` (für `FixedSizeChunker`, `SemanticChunker`) und `EmbedderRegistry` (für `BGEEmbedder` mit bge-small/base/m3-Varianten). Jedes Registry bietet `register()`, `get()`, `list_*()` und `get_default()`. Factory-Funktionen wie `create_chunker_for_profile()` verbinden Registries mit den Hardware-Profilen. Die `ModularPipeline` (`pipeline.py`) orchestriert den Dreischritt Parser → Chunker → Embedder. Parallel dazu existieren die Extractors (`src/extractors/`) als eigenständige Schicht für die Rohtextextraktion, koordiniert durch `UniversalExtractor` mit `FormatDetector`.
+**Implementierungsstand (aktualisiert Juni 2026, P2-Etappe 5):** Das Registry-Pattern wird dort eingesetzt, wo Selektion ein echter Dispatch ist — nicht flächendeckend. Im Code existieren zwei formale Registries auf der generischen Basis `BaseRegistry[T]` (`src/archilles/registry.py`): `ParserRegistry` (Dispatch nach Dateiformat: `PyMuPDFParser`, `EPUBParser`) und `AnnotationProviderRegistry` (Annotation-Quellen). Chunker und Embedder haben **keine** Registry mehr: Der Chunker wird per Frontmatter-Strategie direkt selektiert (`pipeline._select_chunker`), der Embedder per Hardware-Profil (`pipeline._create_embedder_from_profile`). Ihre Offenheit kommt aus den ABCs `TextChunker`/`TextEmbedder` — eine neue Variante ist eine einzige Klasse.
+
+Diese Korrektur geht auf das Code-Review (10. Juni 2026, Befund 3.13) zurück: Die ursprünglich angelegten `ChunkerRegistry` und `EmbedderRegistry` wurden als „tote Infrastruktur, die Erweiterbarkeit vortäuscht" identifiziert und in P2-Etappe 5 entfernt. Das Leitprinzip „weniger Code, mehr Architektur" gilt auch für Registries: Offenheit gehört dorthin, wo sie real genutzt wird, nicht als Zeremonie über jede Komponente. Die `ModularPipeline` (`pipeline.py`) orchestriert weiterhin den Dreischritt Parser → Chunker → Embedder. Parallel dazu existieren die Extractors (`src/extractors/`) als eigenständige Schicht für die Rohtextextraktion, koordiniert durch `UniversalExtractor` mit `FormatDetector`.
 
 ### ADR-005: Keine direkte Modifikation von Calibres metadata.db
 
@@ -184,7 +186,9 @@ Die konzeptionelle Zwei-Datenbanken-Architektur ist damit technisch als Filterun
 
 **Begründung:** Das ist kein glamouröses Feature, sondern Architekturhygiene. Der Service-Layer kapselt alle Operationen – `search()`, `index_book()`, `get_index_status()`, `get_book_list()` – und wird von allen drei Clients einheitlich genutzt. Änderungen an der Suchlogik, etwa die Integration von Cross-Encoder-Reranking, müssen nur noch an einer Stelle erfolgen. Der Service-Layer ist zudem die Voraussetzung dafür, dass das in ADR-004 formulierte Prinzip der modularen Erweiterbarkeit tatsächlich funktioniert: Neue Backends, neue Suchstrategien oder neue Filter werden im Service implementiert und stehen sofort überall zur Verfügung.
 
-**Verzeichnisstruktur nach Refactoring:**
+**Verzeichnisstruktur nach Refactoring (Stand Februar 2026 — historisch):**
+
+> **Hinweis (Juni 2026):** Der folgende Baum zeigt den Stand zum Zeitpunkt von ADR-009 und ist seitdem an mehreren Stellen überholt — die Engine ist nach `src/archilles/engine/` umgezogen (ADR-026), die `adapters/`-Schicht ist hinzugekommen (ADR-021), `chunkers/`/`embedders/` haben keine Registry mehr (ADR-004, P2-Etappe 5), und `annotations_indexer.py` ist entfallen. Die **maßgebliche, aktuelle Verzeichnisstruktur steht in [ARCHITECTURE.md](ARCHITECTURE.md#directory-structure)**. Der Baum hier bleibt als historischer Beleg des damaligen Refactoring-Stands erhalten.
 
 ```
 src/
@@ -193,8 +197,8 @@ src/
 │   ├── profiles.py                # Hardware-Profile (minimal/balanced/maximal)
 │   ├── hardware.py                # Hardware-Erkennung (GPU, VRAM)
 │   ├── parsers/                   # ParserRegistry + PyMuPDFParser, EPUBParser
-│   ├── chunkers/                  # ChunkerRegistry + FixedSize, Semantic
-│   ├── embedders/                 # EmbedderRegistry + BGEEmbedder
+│   ├── chunkers/                  # FixedSize, Semantic, Dialogue (Auswahl per Strategie, keine Registry)
+│   ├── embedders/                 # BGEEmbedder (Auswahl per Profil, keine Registry)
 │   └── indexer/checkpoint.py      # Checkpoint-Resume für Batch-Indexierung
 ├── service/
 │   └── archilles_service.py       # Zentrale Geschäftslogik-Fassade
@@ -215,9 +219,8 @@ src/
 ├── retriever/
 │   └── reranker.py                # Cross-Encoder Reranking (optional)
 ├── calibre_mcp/
-│   ├── server.py                  # CalibreMCPServer (12 MCP-Tools)
+│   ├── server.py                  # CalibreMCPServer (13 MCP-Tools, Stand Juni 2026)
 │   ├── annotations.py             # Annotation-Extraktion, Hash-Mapping
-│   ├── annotations_indexer.py     # ChromaDB semantische Suche (Legacy; LanceDB-Integration in ADR-012)
 │   └── calibre_analyzer.py        # Bibliotheks-Statistiken
 └── calibre_db.py                  # Read-only Calibre-Metadaten-Zugriff
 ```
@@ -598,6 +601,12 @@ Das Risiko: MCP ist ein junger Standard, und seine Durchsetzung hängt von Anthr
 **Entscheidung:** Small-to-Big Retrieval und Parent-Child-Hierarchien werden implementiert, Semantic-Hybrid-Chunking mit dynamischen Thresholds wird evaluiert.
 
 **Begründung:** Die Grundidee: Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, aber liefere dem LLM den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Die Chunking-Intelligence-Analyse ergab, dass selbst einfaches Recursive Hierarchical Chunking bereits 80% des Qualitätsgewinns gegenüber flachem Chunking bringt, während Semantic-Hybrid-Varianten mit Agglomerative Clustering weitere 20-30% liefern, aber signifikant mehr Implementierungsaufwand erfordern. Die Reihenfolge ist daher: erst Parent-Child über bestehende Recursive-Struktur, dann optional Semantic-Hybrid als Upgrade-Pfad.
+
+**Implementierungsstand (Juni 2026): end-to-end verdrahtet, noch nicht produktiv aktiviert.** Die Mechanik existiert vollständig und durchgängig: `_group_chunks_hierarchically()` (`src/extractors/base.py`) bildet die zweistufige Parent/Child-Hierarchie aus den bereits strukturbewusst extrahierten Chunks (Children = die Extractor-Chunks selbst, ~512 Token; aufeinanderfolgende Children einer Sektion zu Parents mit ~2048-Token-Budget gruppiert) mit `parent_id`-Verlinkung und `window_text`; `ChunkType.PARENT`/`CHILD` sind als Konstanten definiert (`src/archilles/constants.py`, beide in `HIERARCHICAL_TYPES`). Das Flag `--hierarchical` ist in `rag_demo.py` und `batch_index.py` vorhanden und wird über `ArchillesService` → `ArchillesRAG.hierarchical` → `Indexer._apply_hierarchical_chunking()` durchgereicht; im Retrieval lädt der `PromptBuilder` (`prompting.py`) bei vorhandenem `parent_id` den Parent-Chunk als Kontext, und `LanceDBStore` bezieht `child`-Chunks in die Suche ein.
+
+**Was noch fehlt** (Stand Code-Review 16. Juni 2026, P4-Fazit): Das Flag ist per Default `False` — hierarchisches Chunking ist nicht standardaktiv. Der modulare `parser → chunker → embedder`-Pfad wurde in P4 nur *verdrahtet*, nicht hierarchisch gechunkt; das volle Small-to-Big/`window_text` auf diesem Pfad steht aus. Vor allem ist der Bestand nicht hierarchisch reindexiert und die Retrieval-Qualität nicht auf dem Korpus validiert. Der „Parent-Child-Refresh" ist im Code-Review-Gesamtfazit als **zentraler Knoten eines koordinierten Reindex** benannt, der mit drei weiteren anstehenden Reindex-Anlässen gebündelt werden sollte: Duplikat-Bereinigung (~27.479 Duplikat-IDs in 2.112 Büchern), i18n-Index-Präfix-Reindex (Befund 1.34/3.20) und die deutsche EPUB-Sektionserkennung. Diese Bündelung ist Voraussetzung, bevor Parent-Child als Default geschaltet wird.
+
+**Validierung und Metadaten-Fix (17. Juni 2026, ADR-027):** Eine gezielte Validierung des hierarchischen Pfads gegen Echtdaten (GPU-frei) deckte einen Regress auf: die ursprüngliche Mechanik chunkte `extracted.full_text` mit minimaler `ChunkMetadata` neu und verwarf dabei die strukturbewussten Extractor-Chunks. Die `child`-Chunks trugen daher **kein** `section_type`/`page_label`/`chapter`/`section_title` (0 % Abdeckung im Test) — sie waren suchbar, aber nicht zitierfähig; der USP wäre bei Default-Schaltung verloren gegangen. Zusätzlich drifteten die char-Offsets auf realem Whitespace-Text (gestrippte Absatzlängen vs. ungestrippter `full_text`). **Entscheidung (Option A):** Die Hierarchie wird aus den bereits strukturbewusst extrahierten Chunks gebaut (`_group_chunks_hierarchically()`), sodass Children Metadaten **und** korrekte Offsets erben; der frühere `full_text`-Re-Chunking-Pfad (`_create_hierarchical_chunks()`) wurde entfernt. Embedding-freier Regressionstest: `tests/test_hierarchical_chunking.py` (16 Fälle, Suite 643 → 659). Aus der Validierung offen geblieben: (1) bei gefülltem `window_text` greift im `PromptBuilder` ausnahmslos der window_text-Pfad — der `parent_id`-Lookup ist toter Pfad, und Parent-Chunks werden zwar embeddet, aber im Default-Retrieval weder gesucht noch als Kontext genutzt; ob die Parent-Ebene ihre ~25–30 % Mehr-Vektoren rechtfertigt, ist vor der Default-Schaltung zu klären. (2) Die VRAM-Messung am 4-GB-Gerät steht aus (entscheidet lokal vs. remote für den Reindex).
 
 ---
 

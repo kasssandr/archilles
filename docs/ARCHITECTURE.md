@@ -157,18 +157,18 @@ The `src/archilles/` package implements the modular processing pipeline with for
 
 The pipeline is orchestrated by `ModularPipeline` (`pipeline.py`), which chains three stages:
 
-1.  **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry`.
+1.  **Parsers** (`parsers/`): Convert files into `ParsedDocument` objects with structural metadata. `PyMuPDFParser` and `EPUBParser` are registered in `ParserRegistry` — parser selection is a genuine dispatch by file format, so it goes through a formal registry.
     
-2.  **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. Three chunkers registered in `ChunkerRegistry`:
+2.  **Chunkers** (`chunkers/`): Split parsed text into `TextChunk` objects. Three chunkers are available; selection happens directly by frontmatter strategy (`pipeline._select_chunker`), **not** via a registry:
     - `FixedSizeChunker`: Simple token/character-based splitting
     - `SemanticChunker`: Sentence-boundary-aware, with Markdown heading detection (H1/H2 force chunk breaks) and oversized paragraph splitting
     - `DialogueChunker`: Specialized for chat/Q&A exports (ChatGPT, Gemini, Grok, NotebookLM). Recognizes turn markers (`## User`, `**Q:**`, etc.) and chunks per turn or turn-pair, preserving `speaker` metadata.
     Configuration via `ChunkerConfig` (chunk_size, chunk_overlap, size_unit, respect_sentences, respect_paragraphs).
     
-3.  **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Registered in `EmbedderRegistry`.
+3.  **Embedders** (`embedders/`): Generate vector representations. `BGEEmbedder` supports bge-small (384 dim), bge-base (768 dim), and bge-m3 (1024 dim, multilingual). Embedder selection happens directly by hardware profile (`pipeline._create_embedder_from_profile`), **not** via a registry.
     
 
-Each registry provides `register()`, `get()`, `list_*()`, and `get_default()`. Factory functions like `create_chunker_for_profile()` select and configure components based on hardware profiles.
+**On registries:** ARCHILLES uses formal registries only where component selection is a real runtime dispatch. Two exist, both on the generic `BaseRegistry[T]` (`src/archilles/registry.py`): `ParserRegistry` (by file format) and `AnnotationProviderRegistry` (annotation sources). Chunkers and embedders are *not* registry-based — their openness comes from the `TextChunker`/`TextEmbedder` ABCs, where a new variant is a single class. The earlier `ChunkerRegistry`/`EmbedderRegistry` were removed in the June 2026 code-review hardening (P2-Etappe 5) as dead infrastructure that merely simulated extensibility. See DECISIONS.md (ADR-004).
 
 #### Hardware Profiles (`profiles.py`)
 
@@ -282,7 +282,7 @@ The primary interface. Implements the Model Context Protocol for integration wit
 
 Both transports expose the same tools via the same `CalibreMCPServer` and `create_mcp_tools()`. The SSE path uses `mcp.server.Server` (low-level MCP SDK) with `mcp.server.sse.SseServerTransport`; tool dispatch runs in a thread pool (`run_in_executor`) because `ArchillesService` calls are synchronous.
 
-**Exposed tools** (10 tools via `create_mcp_tools()`):
+**Exposed tools** (13 tools via `create_mcp_tools()`):
 
 | Tool | Description |
 | --- | --- |
@@ -291,11 +291,16 @@ Both transports expose the same tools via the same `CalibreMCPServer` and `creat
 | `list_annotated_books` | Lists all books with indexed annotations |
 | `get_book_annotations` | Get annotations for a specific book by path |
 | `get_book_details` | Full metadata for a specific Calibre book ID |
+| `list_books_by_author` | All titles by an author, directly from Calibre metadata (partial match, optional tag/year filter) |
 | `export_bibliography` | Bibliography in BibTeX, RIS, EndNote, JSON, CSV |
 | `detect_duplicates` | Find duplicate books by title+author, ISBN, or exact title |
 | `list_tags` | All Calibre tags with book counts |
+| `set_research_interests` | Register project keywords that receive a score boost in subsequent searches (no re-indexing) |
+| `watchdog_scan` | Hash-diff scan of the Calibre library; updates metadata/annotation deltas and queues new books (Calibre-only) |
 | `compute_annotation_hash` | Compute Calibre annotation hash for a book path |
 | `get_doublette_tag_instruction` | Helper for Calibre duplicate tagging workflow |
+
+> The unified multi-library server (`src/calibre_mcp/unified_server.py`) exposes the same tool set with adapter-aware gating: `detect_duplicates` and `watchdog_scan` are Calibre-only (`_CALIBRE_ONLY_TOOLS`), while aggregation tools and `set_research_interests`/`get_book_details` accept an optional `source`.
 
 Each search result includes sufficient metadata for academic citation: author, title, year, and either page number/page label (PDF) or chapter/section (EPUB).
 
@@ -392,7 +397,8 @@ BGE-M3 embedding generation (1024 dimensions)
         │
         ▼
 LanceDB storage
-  • archilles_books table: full-text chunks + embeddings + metadata
+  • single "chunks" table: full-text chunks + annotations + comments,
+    separated by chunk_type (content/child/parent/annotation/calibre_comment)
   • IVF-PQ + FTS indexes created after bulk ingestion
 ```
 
@@ -490,16 +496,17 @@ archilles/
 │   │   │   ├── pymupdf_parser.py  # PDF parser
 │   │   │   ├── epub_parser.py     # EPUB parser
 │   │   │   └── registry.py        # ParserRegistry
-│   │   ├── chunkers/
+│   │   ├── chunkers/             # selected by strategy (no registry)
 │   │   │   ├── base.py            # TextChunker ABC, TextChunk, ChunkerConfig
 │   │   │   ├── fixed.py           # FixedSizeChunker
 │   │   │   ├── semantic.py        # SemanticChunker (sentence + heading aware)
-│   │   │   ├── dialogue.py        # DialogueChunker (chat/Q&A exports)
-│   │   │   └── registry.py        # ChunkerRegistry
-│   │   ├── embedders/
+│   │   │   └── dialogue.py        # DialogueChunker (chat/Q&A exports)
+│   │   ├── embedders/            # selected by profile (no registry)
 │   │   │   ├── base.py            # TextEmbedder ABC, EmbeddingResult
-│   │   │   ├── bge.py             # BGEEmbedder (bge-small/base/m3)
-│   │   │   └── registry.py        # EmbedderRegistry
+│   │   │   └── bge.py             # BGEEmbedder (bge-small/base/m3)
+│   │   ├── annotation_providers/ # AnnotationProviderRegistry + calibre/kindle/pdf/zotero
+│   │   ├── registry.py           # BaseRegistry[T] (generic base)
+│   │   ├── constants.py          # ChunkType (content/parent/child/annotation/...)
 │   │   └── indexer/
 │   │       └── checkpoint.py      # IndexingCheckpoint (resume support)
 │   │
@@ -526,9 +533,15 @@ archilles/
 │   ├── service/
 │   │   └── archilles_service.py   # ArchillesService (central facade)
 │   │
+│   ├── citation/
+│   │   └── config.py             # Citation style config (CSL-ready, Zotero-compatible)
+│   │
 │   ├── calibre_mcp/               # MCP server + annotation infrastructure
-│   │   ├── server.py              # CalibreMCPServer + create_mcp_tools()
+│   │   ├── server.py              # CalibreMCPServer + create_mcp_tools() (13 tools)
+│   │   ├── unified_server.py      # Unified multi-library server (adapter-gated tools)
 │   │   ├── annotations.py         # Annotation extraction, hash mapping, text search
+│   │   ├── annotation_writer.py   # Writes annotation chunks into LanceDB
+│   │   ├── annotation_providers/  # Provider registry: calibre, kindle, pdf
 │   │   └── calibre_analyzer.py    # Library statistics and analysis
 │   │
 │   └── calibre_db.py              # Read-only Calibre metadata.db access

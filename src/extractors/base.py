@@ -210,75 +210,93 @@ class BaseExtractor(ABC):
             return text[:last_match.start() + 1].rstrip()
         return text
 
-    def _create_hierarchical_chunks(
-        self,
-        text: str,
+    @staticmethod
+    def _group_chunks_hierarchically(
+        child_chunks: list[dict[str, Any]],
         book_id: str,
-        base_metadata: ChunkMetadata = None,
-        detect_language: bool = True,
         parent_size: int = 2048,
-        parent_overlap: int = 400,
-        child_size: int = 512,
-        child_overlap: int = 100,
-        window_chars: int = 500
     ) -> list[dict[str, Any]]:
         """
-        Create two-level hierarchical chunks (parent + child).
+        Build two-level hierarchy (parent + child) from already-extracted,
+        structure-aware chunks (Small-to-Big retrieval).
 
-        Parents are large chunks for broad context. Children are small chunks
-        for precise retrieval, each linked to its parent via parent_id.
+        The input chunks become the CHILD chunks unchanged — their section/page
+        metadata (``section_type``/``page``/``page_label``/``chapter``/
+        ``section_title``), char offsets and ``window_text`` are preserved, so
+        children stay citation-grade. Consecutive children are grouped into a
+        PARENT chunk for broad context; a new parent starts when adding the next
+        child would exceed ``parent_size`` tokens or when the child's section
+        identity (section_type/chapter/section_title) changes — keeping each
+        parent coherent and its inherited metadata consistent.
+
+        This replaces the earlier ``full_text`` re-chunking path, which built
+        children from raw text with minimal metadata and thereby dropped all
+        structure/page metadata (validation finding, Prüfschritt 1). Because
+        children keep the extractor's offsets, the offset drift of that path is
+        gone as well.
+
+        Returns a flat list in [parent, child, child, …, parent, …] order.
         """
-        if not text:
+        if not child_chunks:
             return []
 
-        all_chunks = []
+        def tokens(chunk: dict[str, Any]) -> float:
+            return len(chunk["text"].split()) * 1.3
 
-        # Create parent chunks (large)
-        with self._temporary_chunk_params(parent_size, parent_overlap):
-            parent_chunks = self._create_chunks(
-                text, base_metadata, detect_language=False, window_chars=0
+        def section_key(chunk: dict[str, Any]):
+            meta = chunk.get("metadata", {})
+            return (
+                meta.get("section_type"),
+                meta.get("chapter"),
+                meta.get("section_title"),
             )
 
-        # For each parent, create child chunks
-        for p_idx, parent in enumerate(parent_chunks):
-            parent_id = f"{book_id}_parent_{p_idx}"
-            parent['metadata']['chunk_type'] = ChunkType.PARENT
-            parent['chunk_id'] = parent_id
-            parent['parent_id'] = ''
+        all_chunks: list[dict[str, Any]] = []
+        parent_idx = 0
+        i = 0
+        n = len(child_chunks)
+        while i < n:
+            group = [child_chunks[i]]
+            group_tokens = tokens(child_chunks[i])
+            key = section_key(child_chunks[i])
+            j = i + 1
+            while j < n:
+                nxt = child_chunks[j]
+                if section_key(nxt) != key:
+                    break
+                nxt_tokens = tokens(nxt)
+                # Always keep at least one child per parent; only stop when the
+                # group already has content and the budget would be exceeded.
+                if group_tokens + nxt_tokens > parent_size:
+                    break
+                group.append(nxt)
+                group_tokens += nxt_tokens
+                j += 1
 
-            if window_chars > 0:
-                self._add_window_text([parent], text, window_chars)
+            parent_id = f"{book_id}_parent_{parent_idx}"
+            parent_meta = dict(group[0].get("metadata", {}))
+            parent_meta["chunk_type"] = ChunkType.PARENT
+            parent_meta["char_start"] = group[0].get("metadata", {}).get("char_start")
+            parent_meta["char_end"] = group[-1].get("metadata", {}).get("char_end")
+            all_chunks.append(
+                {
+                    "text": "\n\n".join(c["text"] for c in group),
+                    "metadata": parent_meta,
+                    "chunk_id": parent_id,
+                    "parent_id": "",
+                }
+            )
 
-            all_chunks.append(parent)
-
-            # Create children from parent text
-            with self._temporary_chunk_params(child_size, child_overlap):
-                children = self._create_chunks(
-                    parent['text'], base_metadata,
-                    detect_language=False, window_chars=0
-                )
-
-            # Adjust child offsets relative to full text and link to parent
-            parent_char_start = parent['metadata'].get('char_start', 0)
-            for c_idx, child in enumerate(children):
-                child['chunk_id'] = f"{book_id}_parent_{p_idx}_child_{c_idx}"
-                child['parent_id'] = parent_id
-                child['metadata']['chunk_type'] = ChunkType.CHILD
-
-                child['metadata']['char_start'] = (
-                    parent_char_start + child['metadata'].get('char_start', 0)
-                )
-                child['metadata']['char_end'] = (
-                    parent_char_start + child['metadata'].get('char_end', 0)
-                )
-
-                if window_chars > 0:
-                    self._add_window_text([child], text, window_chars)
-
+            for c_idx, src in enumerate(group):
+                child = dict(src)
+                child["metadata"] = dict(src.get("metadata", {}))
+                child["metadata"]["chunk_type"] = ChunkType.CHILD
+                child["chunk_id"] = f"{parent_id}_child_{c_idx}"
+                child["parent_id"] = parent_id
                 all_chunks.append(child)
 
-        if detect_language and LanguageDetector.is_available():
-            all_chunks = LanguageDetector.detect_for_chunks(all_chunks)
+            parent_idx += 1
+            i = j
 
         return all_chunks
 

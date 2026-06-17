@@ -44,33 +44,21 @@ class Indexer:
         if book_metadata.get('tags'):
             chunk_data['tags'] = self._rag._format_tags(book_metadata['tags'])
 
-    def _apply_hierarchical_chunking(self, extracted, book_id: str, book_metadata: Dict[str, Any], book_path: Path) -> None:
-        """Replace extracted.chunks with hierarchical parent/child chunks (in-place)."""
+    def _apply_hierarchical_chunking(self, extracted, book_id: str) -> None:
+        """Replace extracted.chunks with hierarchical parent/child chunks (in-place).
+
+        Builds the hierarchy from the already-extracted, structure-aware chunks
+        so children inherit section/page metadata and offsets — keeping them
+        citation-grade (see ``BaseExtractor._group_chunks_hierarchically``).
+        Book-level metadata (title/author/tags) is applied downstream in
+        ``_build_chunk_dicts`` for parent and child alike.
+        """
         from src.extractors.base import BaseExtractor
-        from src.extractors.models import ChunkMetadata
 
-        chunker = type('HierarchicalChunker', (BaseExtractor,), {
-            'extract': lambda self, fp: None,
-            'supports': lambda self, fp: True
-        })(chunk_size=512, overlap=100)
-
-        base_meta = ChunkMetadata(
-            book_id=book_metadata.get('calibre_id'),
-            title=book_metadata.get('title'),
-            author=book_metadata.get('author'),
-            year=book_metadata.get('year'),
-            source_file=str(book_path),
-        )
-
-        extracted.chunks = chunker._create_hierarchical_chunks(
-            text=extracted.full_text,
+        extracted.chunks = BaseExtractor._group_chunks_hierarchically(
+            extracted.chunks,
             book_id=book_id,
-            base_metadata=base_meta,
             parent_size=2048,
-            parent_overlap=400,
-            child_size=512,
-            child_overlap=100,
-            window_chars=500,
         )
 
     def _build_chunk_dicts(
@@ -703,8 +691,8 @@ class Indexer:
                     wpp = total_words // total_pages
                     print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
 
-        if self._rag.hierarchical and extracted.full_text:
-            self._apply_hierarchical_chunking(extracted, book_id, book_metadata, book_path)
+        if self._rag.hierarchical and extracted.chunks:
+            self._apply_hierarchical_chunking(extracted, book_id)
             parent_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.PARENT)
             child_count = sum(1 for c in extracted.chunks if c.get('metadata', {}).get('chunk_type') == ChunkType.CHILD)
             print(f"  Extract: {parent_count}p+{child_count}c chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
@@ -918,8 +906,8 @@ class Indexer:
         extract_time = time.time() - start_time
 
         # Handle hierarchical chunking if requested
-        if self._rag.hierarchical and extracted.full_text:
-            self._apply_hierarchical_chunking(extracted, book_id, book_metadata, book_path)
+        if self._rag.hierarchical and extracted.chunks:
+            self._apply_hierarchical_chunking(extracted, book_id)
 
         print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
 
