@@ -231,7 +231,7 @@ class BaseExtractor(ABC):
 
         This replaces the earlier ``full_text`` re-chunking path, which built
         children from raw text with minimal metadata and thereby dropped all
-        structure/page metadata (validation finding, Prüfschritt 1). Because
+        structure/page metadata (validation finding #1). Because
         children keep the extractor's offsets, the offset drift of that path is
         gone as well.
 

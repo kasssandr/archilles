@@ -44,6 +44,18 @@ flake8 src/ scripts/   # linting
 pytest                 # tests
 ```
 
+## Conventions
+
+### Language in code: English only
+
+All source code — comments, docstrings, identifiers, log/error messages and test prose — is written in **English**. This keeps the public repository consistent and accessible to contributors who don't read German.
+
+German is allowed only where it is **data, not code**:
+- **User-facing / locale strings**: translations and language-specific content (e.g. `src/archilles/i18n.py`, the German locale entries in `kindle_provider.py`).
+- **Docs under `docs/`**: `DECISIONS.md` (the German *Entscheidungsarchiv*), `ROADMAP.md`, etc. are intentionally German.
+
+Note: parts of the codebase still carry German comments/docstrings from before this rule. New or touched code must be English; a repo-wide cleanup is a separate task.
+
 ## Architecture
 
 The system follows a layered pipeline:

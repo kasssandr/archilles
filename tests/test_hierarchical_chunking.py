@@ -1,43 +1,43 @@
 """
-Tests für hierarchisches (Parent-Child / Small-to-Big) Chunking — Option A.
+Tests for hierarchical (parent-child / small-to-big) chunking — Option A.
 
-Der hierarchische Pfad baut die Hierarchie aus den bereits strukturbewusst
-extrahierten Chunks (``extracted.chunks``): die Eingabe-Chunks werden zu
-CHILD-Chunks (Metadaten — section_type/page/page_label/chapter — und char-
-Offsets bleiben erhalten), aufeinanderfolgende Children derselben Sektion
-werden zu PARENT-Chunks gruppiert.
+The hierarchical path builds the hierarchy from the already structure-aware
+extracted chunks (``extracted.chunks``): the input chunks become CHILD chunks
+(their metadata — section_type/page/page_label/chapter — and char offsets are
+preserved), and consecutive children of the same section are grouped into
+PARENT chunks.
 
-Das ist die Korrektur des Regresses, den die Validierung (Briefing „Parent-
-Child-Validierung", Prüfschritt 1) gefunden hatte: der frühere Pfad chunkte
-``full_text`` neu und verlor dabei alle Struktur-/Seiten-Metadaten.
+This is the fix for the regression that validation (finding #1) surfaced: the
+earlier path re-chunked ``full_text`` and thereby lost all structure/page
+metadata, leaving child chunks non-citable.
 
-Embedding-frei — reine Gruppierungs-Logik, analog zu ``test_chunker_textloss``.
+Embedding-free — pure grouping logic, analogous to ``test_chunker_textloss``.
 """
 
 from src.extractors.base import BaseExtractor
 from src.archilles.constants import ChunkType
 
 
-PARENT_SIZE = 200  # Token-Budget für Parents im Test (klein → mehrere Parents)
+PARENT_SIZE = 200  # token budget for parents in the test (small -> several parents)
 
 
 def _structured_chunks():
-    """Simuliert strukturbewusste Extractor-Chunks (PDF-Extractor-Form):
-    metadata-Dict mit section_type/page/page_label/chapter/section_title und
-    char_start/char_end; jeder Chunk trägt window_text."""
+    """Simulate structure-aware extractor chunks (PDF-extractor shape): a
+    metadata dict with section_type/page/page_label/chapter/section_title and
+    char_start/char_end; every chunk carries window_text."""
     # (chapter, section_title, n_chunks, start_page)
     specs = [
-        ("Einleitung", None, 5, 1),
-        ("Hauptteil", "Abschnitt A", 8, 5),
-        ("Hauptteil", "Abschnitt B", 8, 12),
-        ("Schluss", None, 4, 20),
+        ("Introduction", None, 5, 1),
+        ("Main", "Section A", 8, 5),
+        ("Main", "Section B", 8, 12),
+        ("Conclusion", None, 4, 20),
     ]
     chunks = []
     pos = 0
     for chapter, section_title, n, start_page in specs:
         for k in range(n):
             idx = len(chunks)
-            text = f"{chapter[:3]} Absatz {k:02d}. " + " ".join(
+            text = f"{chapter[:3]} para {k:02d}. " + " ".join(
                 f"w{idx}_{j}" for j in range(40)
             )
             meta = {
@@ -116,7 +116,7 @@ class TestLinkage:
 
 
 class TestMetadataInheritance:
-    """Kern der Korrektur (Prüfschritt 1): Children erben Struktur-/Seiten-Metadaten."""
+    """Core of the fix (finding #1): children inherit structure/page metadata."""
 
     def test_children_inherit_section_and_page_metadata(self):
         src = _structured_chunks()
@@ -129,7 +129,7 @@ class TestMetadataInheritance:
             for key in ("section_type", "page", "page_label", "chapter", "section_title"):
                 assert cm.get(key) == origin.get(key), (
                     f"{child['chunk_id']}.{key}={cm.get(key)!r} != "
-                    f"Quelle {origin.get(key)!r}"
+                    f"source {origin.get(key)!r}"
                 )
 
     def test_child_char_offsets_preserved(self):
@@ -152,7 +152,7 @@ class TestMetadataInheritance:
         for parent in parents:
             pm = parent["metadata"]
             assert pm.get("section_type") == "main_content"
-            assert pm.get("chapter")  # nicht leer
+            assert pm.get("chapter")  # non-empty
             assert pm.get("char_start") is not None
             assert pm.get("char_end") is not None
 
@@ -167,8 +167,8 @@ class TestSectionBoundaries:
             keys = {
                 _sect_key(c["metadata"]) for c in children_by_parent[parent["chunk_id"]]
             }
-            assert len(keys) == 1, f"{parent['chunk_id']} mischt Sektionen: {keys}"
-            # Parent erbt die Sektion seiner Children
+            assert len(keys) == 1, f"{parent['chunk_id']} mixes sections: {keys}"
+            # parent inherits its children's section
             assert _sect_key(parent["metadata"]) == keys.pop()
 
 
@@ -181,8 +181,8 @@ class TestTokenBudget:
         for parent in parents:
             kids = children_by_parent[parent["chunk_id"]]
             total = sum(_tokens(c["text"]) for c in kids)
-            # Budget darf nur überschritten werden, wenn ein einzelner Child
-            # für sich schon zu groß ist (dann Gruppe der Größe 1).
+            # The budget may only be exceeded when a single child is already
+            # too large on its own (then a group of size 1).
             assert total <= PARENT_SIZE or len(kids) == 1
 
 
@@ -208,7 +208,7 @@ class TestEdgeCases:
 
     def test_single_oversized_chunk_becomes_its_own_parent(self):
         big = {
-            "text": " ".join(f"x{j}" for j in range(500)),  # >> PARENT_SIZE Tokens
+            "text": " ".join(f"x{j}" for j in range(500)),  # >> PARENT_SIZE tokens
             "metadata": {"section_type": "main_content", "chapter": "K", "char_start": 0, "char_end": 1},
         }
         parents, children = _split(_group([big], parent_size=PARENT_SIZE))
