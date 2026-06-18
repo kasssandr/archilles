@@ -311,32 +311,37 @@ You are an academic research assistant. Your task is to answer the user's questi
         expansion_chars: int = 400
     ) -> str:
         """
-        Expand chunk context using stored window_text or parent chunk (Small-to-Big Retrieval).
+        Expand chunk context using the parent chunk or stored window_text (Small-to-Big Retrieval).
 
         Priority:
-        1. Use window_text if stored in the index (pre-computed context window)
-        2. Use parent chunk text if parent_id is available (hierarchical retrieval)
-        3. Fall back to original chunk text
+        1. Use the parent chunk text if parent_id resolves (hierarchical index):
+           the full structural section (~2048 tokens) is the richer "Big" context.
+        2. Use window_text if stored (flat index / chunk without a parent):
+           the pre-computed ±500-char window.
+        3. Fall back to original chunk text.
 
         Args:
             chunk_text: Original chunk text from search result
             metadata: Chunk metadata (may contain window_text, parent_id)
-            expansion_chars: Characters to add before and after (not used for window_text)
+            expansion_chars: Characters to add before and after (not used here)
 
         Returns:
             Expanded text with context, or original chunk if expansion not possible
         """
-        # Option 1: Use pre-computed window_text from the index
-        window_text = metadata.get('window_text', '')
-        if window_text and len(window_text) > len(chunk_text):
-            return window_text
-
-        # Option 2: Load parent chunk for context (hierarchical retrieval)
+        # Option 1: Load parent chunk for context (hierarchical Small-to-Big).
+        # Preferred over window_text — the parent is the whole structural section,
+        # a broader context than the ±500-char window. Children carry a parent_id;
+        # flat-index chunks do not and fall through to window_text below.
         parent_id = metadata.get('parent_id', '')
         if parent_id and hasattr(self._rag, 'store'):
             parent = self._rag.store.get_by_id(parent_id)
             if parent and parent.get('text'):
                 return parent['text']
+
+        # Option 2: Use pre-computed window_text from the index (flat fallback)
+        window_text = metadata.get('window_text', '')
+        if window_text and len(window_text) > len(chunk_text):
+            return window_text
 
         # Graceful degradation: return original chunk
         return chunk_text
