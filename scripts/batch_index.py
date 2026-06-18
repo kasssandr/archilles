@@ -1031,6 +1031,7 @@ def batch_prepare(
         'failed': 0,
         'quality_selected': 0,
         'errors': [],
+        'needs_ocr': [],
     }
 
     print(f"\n{'='*60}")
@@ -1097,6 +1098,8 @@ def batch_prepare(
                 stats['skipped'] += 1
             else:
                 stats['prepared'] += 1
+            if result.get('needs_ocr'):
+                stats['needs_ocr'].append({'id': book_id, 'title': book['title']})
         except Exception as e:
             print(f"         FAILED: {e}")
             stats['failed'] += 1
@@ -1104,6 +1107,10 @@ def batch_prepare(
 
     print(f"\n{'='*60}")
     print(f"  Prepared: {stats['prepared']}, Skipped: {stats['skipped']}, Failed: {stats['failed']}")
+    if stats['needs_ocr']:
+        print(f"\n  🔍 Scanned PDFs (no/low text — OCR with PDF24, then re-prepare):")
+        for b in stats['needs_ocr']:
+            print(f"     - [{b['id']}] {b['title']}")
     print(f"{'='*60}\n")
     return stats
 
