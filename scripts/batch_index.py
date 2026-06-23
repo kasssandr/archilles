@@ -1365,7 +1365,11 @@ def batch_index(
     return stats
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the batch_index argument parser.
+
+    Extracted from main() so the CLI defaults are unit-testable.
+    """
     parser = argparse.ArgumentParser(
         description="Batch index books from Calibre library into ARCHILLES RAG",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1529,14 +1533,21 @@ Profiles:
                              'Writes JSONL files to --output-dir. No GPU required.')
     parser.add_argument('--output-dir', default='./prepared_chunks',
                         help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks)')
-    parser.add_argument('--prepare-chunk-size', type=int, default=1024, metavar='TOKENS',
-                        help='Chunk size in tokens for --prepare-only (default: 1024). '
+    parser.add_argument('--prepare-chunk-size', type=int, default=None, metavar='TOKENS',
+                        help='Chunk size in tokens for --prepare-only '
+                             '(default: from the index recipe, 512). '
                              'Larger values = fewer chunks, less DB volume, slightly broader retrieval. '
                              'Has no effect on the live --skip-existing path.')
-    parser.add_argument('--prepare-overlap', type=int, default=128, metavar='TOKENS',
-                        help='Chunk overlap in tokens for --prepare-only (default: 128). '
+    parser.add_argument('--prepare-overlap', type=int, default=None, metavar='TOKENS',
+                        help='Chunk overlap in tokens for --prepare-only '
+                             '(default: from the index recipe, 64). '
                              'Has no effect on the live --skip-existing path.')
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Handle --show-profiles

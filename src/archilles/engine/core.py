@@ -12,6 +12,7 @@ from sentence_transformers import SentenceTransformer
 
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.i18n import get_ocr_language, get_stopwords
+from src.archilles.recipe import IndexRecipe, default_recipe
 from src.extractors import UniversalExtractor
 from src.storage import LanceDBStore
 
@@ -148,8 +149,9 @@ class ArchillesRAG:
         hierarchical: bool = False,  # Enable parent-child chunking
         adapter=None,  # Optional SourceAdapter for metadata lookup
         skip_model: bool = False,  # Skip loading embedding model (for prepare-only mode)
-        prepare_chunk_size: int = 1024,  # Phase-1 chunk size (tokens), only used in prepare_book()
-        prepare_overlap: int = 128,      # Phase-1 chunk overlap (tokens)
+        prepare_chunk_size: int | None = None,  # Phase-1 chunk size (tokens); None → recipe child size
+        prepare_overlap: int | None = None,      # Phase-1 chunk overlap (tokens); None → recipe child overlap
+        recipe: IndexRecipe | None = None,  # Index identity/chunk schema; None → default_recipe()
     ):
         """
         Initialize RAG system.
@@ -177,11 +179,20 @@ class ArchillesRAG:
         if ocr_language is None:
             ocr_language = get_ocr_language(languages)
         self.stop_words = get_stopwords(languages)
+        # Index recipe: single source of truth for the chunk schema (child/
+        # parent sizes) and identity (model/dimension) of the main path.
+        self.recipe = recipe or default_recipe()
         # Phase-1 chunk settings (used in prepare_book(), not in index_book()).
-        # Larger than the live default to keep prepared JSONL volume manageable
-        # for cloud-GPU embedding later — bestehender Live-Index bleibt unberuehrt.
-        self._prepare_chunk_size = prepare_chunk_size
-        self._prepare_overlap = prepare_overlap
+        # Default to the recipe's child sizes so prepare and the live path share
+        # one schema; an explicit prepare_chunk_size/overlap (CLI) still wins.
+        self._prepare_chunk_size = (
+            prepare_chunk_size if prepare_chunk_size is not None
+            else self.recipe.child_chunk_size
+        )
+        self._prepare_overlap = (
+            prepare_overlap if prepare_overlap is not None
+            else self.recipe.child_overlap
+        )
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
@@ -201,9 +212,9 @@ class ArchillesRAG:
                     print(f"  ⚠️  CUDA not available, falling back to CPU")
             print(f"Initializing ARCHILLES RAG (profile: {profile})...")
         else:
-            # Default to BGE-M3 and auto-detect device
+            # Default to the recipe's model and auto-detect device
             if model_name is None:
-                model_name = "BAAI/bge-m3"
+                model_name = self.recipe.embedding_model
             self.batch_size = 8  # Conservative default for 4GB GPUs
             self.device = 'cuda' if cuda_available else 'cpu'
             print(f"Initializing ARCHILLES RAG...")
@@ -215,10 +226,11 @@ class ArchillesRAG:
         from src.extractors import OCRBackend
         ocr_backend_enum = OCRBackend.from_string(ocr_backend)
 
-        # Initialize extractor with OCR options
+        # Initialize extractor with OCR options. Child chunk size/overlap come
+        # from the recipe (single source) — unifies the live path with prepare.
         self.extractor = UniversalExtractor(
-            chunk_size=512,
-            overlap=128,
+            chunk_size=self.recipe.child_chunk_size,
+            overlap=self.recipe.child_overlap,
             enable_ocr=enable_ocr,
             force_ocr=force_ocr,
             ocr_backend=ocr_backend_enum,

@@ -58,7 +58,7 @@ class Indexer:
         extracted.chunks = BaseExtractor._group_chunks_hierarchically(
             extracted.chunks,
             book_id=book_id,
-            parent_size=2048,
+            parent_size=self._rag.recipe.parent_size,
         )
 
     def _build_chunk_dicts(
