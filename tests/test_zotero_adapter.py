@@ -267,6 +267,26 @@ def _create_zotero_db(library_path: Path, items=None, collections=None):
             storage_dir.mkdir(parents=True, exist_ok=True)
             (storage_dir / att["filename"]).write_bytes(b"dummy content")
 
+        # Multiple attachments (format-priority / link-only edge cases).
+        # linkMode 3 => link only, no local file. `content` supplies real bytes
+        # (e.g. an HTML snapshot to extract); defaults to dummy content.
+        for att in item.get("attachments", []):
+            conn.execute(
+                "INSERT INTO items (itemID, itemTypeID, key, dateAdded, dateModified) VALUES (?, 3, ?, ?, ?)",
+                (att["itemID"], att["key"], item.get("dateAdded"), item.get("dateModified")),
+            )
+            conn.execute(
+                "INSERT INTO itemAttachments (itemID, parentItemID, linkMode, contentType, path) VALUES (?, ?, ?, ?, ?)",
+                (att["itemID"], item["itemID"], att["linkMode"], att.get("contentType"), att.get("path")),
+            )
+            if att.get("filename") and att["linkMode"] in (0, 1):
+                storage_dir = library_path / "storage" / att["key"]
+                storage_dir.mkdir(parents=True, exist_ok=True)
+                content = att.get("content", b"dummy content")
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
+                (storage_dir / att["filename"]).write_bytes(content)
+
         # Notes
         for note_html in item.get("notes", []):
             note_counter += 1
@@ -528,6 +548,110 @@ class TestZoteroFilePaths:
         adapter = create_adapter(zotero_library)
         meta = adapter.get_metadata("ABCD1234")
         assert meta.file_format == "pdf"
+
+
+# ── Content extraction (the indexing path, not just metadata) ───
+
+
+# A nested HTML structure as a SingleFile web snapshot produces: an <li>
+# inside an <li>. The buggy extractor emitted the inner text once per level.
+_NESTED_SNAPSHOT_HTML = (
+    "<html><head><title>Web Article</title></head><body>"
+    "<ul><li>OUTER_ITEM"
+    "<ul><li>INNER_UNIQUE_SENTENCE</li></ul>"
+    "</li></ul>"
+    "</body></html>"
+)
+
+
+class TestZoteroHTMLSnapshotExtraction:
+    """End-to-end: a Zotero HTML snapshot must extract without duplicating
+    text. This is the gap that hid the 16x index-inflation bug — adapter
+    tests only checked *which* file was chosen, never the extracted content.
+    """
+
+    def _library_with_snapshot(self, tmp_path):
+        items = [{
+            "itemID": 1, "key": "WEBPAGE1", "itemTypeID": 12,  # journalArticle
+            "title": "A Web Article",
+            "attachments": [{
+                "itemID": 100, "key": "SNAP0001", "linkMode": 1,
+                "contentType": "text/html", "path": "storage:article.html",
+                "filename": "article.html", "content": _NESTED_SNAPSHOT_HTML,
+            }],
+        }]
+        _create_zotero_db(tmp_path, items=items)
+        return tmp_path
+
+    def test_snapshot_resolves_to_html_file(self, tmp_path):
+        adapter = create_adapter(self._library_with_snapshot(tmp_path))
+        meta = adapter.get_metadata("WEBPAGE1")
+        assert meta.file_format == "html"
+        assert meta.file_path.exists()
+
+    def test_snapshot_extracts_without_duplication(self, tmp_path):
+        from src.extractors.html_extractor import HTMLExtractor
+
+        adapter = create_adapter(self._library_with_snapshot(tmp_path))
+        path = adapter.get_file_path("WEBPAGE1")
+
+        result = HTMLExtractor().extract(path)
+
+        assert result.full_text.count("INNER_UNIQUE_SENTENCE") == 1
+        # Text must not be lost either: both blocks survive.
+        assert "OUTER_ITEM" in result.full_text
+        # The inflation must not reach the chunk level.
+        chunk_text = "\n".join(c["text"] for c in result.chunks)
+        assert chunk_text.count("INNER_UNIQUE_SENTENCE") == 1
+
+
+class TestZoteroFormatPriority:
+    """An item carrying several attachments must index the best format."""
+
+    def test_pdf_preferred_over_html_snapshot(self, tmp_path):
+        # HTML is inserted FIRST so a naive "first match" would pick it;
+        # the PDF must still win via _FORMAT_PRIORITY.
+        items = [{
+            "itemID": 1, "key": "MULTI001", "itemTypeID": 7,  # book
+            "title": "Has both formats",
+            "attachments": [
+                {"itemID": 100, "key": "ATTHTML1", "linkMode": 1,
+                 "contentType": "text/html", "path": "storage:page.html",
+                 "filename": "page.html"},
+                {"itemID": 101, "key": "ATTPDF01", "linkMode": 1,
+                 "contentType": "application/pdf", "path": "storage:doc.pdf",
+                 "filename": "doc.pdf"},
+            ],
+        }]
+        _create_zotero_db(tmp_path, items=items)
+        adapter = create_adapter(tmp_path)
+        meta = adapter.get_metadata("MULTI001")
+        assert meta.file_format == "pdf"
+        assert meta.file_path.name == "doc.pdf"
+
+
+class TestZoteroLinkOnly:
+    """A web page saved as a bookmark (no snapshot) must not be indexable."""
+
+    def test_bookmark_without_snapshot_has_no_indexable_file(self, tmp_path):
+        # linkMode 3 = linked URL: an attachment row exists, but no local file.
+        items = [{
+            "itemID": 1, "key": "LINKONLY", "itemTypeID": 12,
+            "title": "Bookmark only",
+            "attachments": [
+                {"itemID": 100, "key": "ATTLINK1", "linkMode": 3,
+                 "contentType": "text/html",
+                 "path": "https://example.org/article"},
+            ],
+        }]
+        _create_zotero_db(tmp_path, items=items)
+        adapter = create_adapter(tmp_path)
+        meta = adapter.get_metadata("LINKONLY")
+        # Empty file_path -> batch_index.py treats the item as "skip"
+        # (see batch_index.py: it skips docs whose str(file_path) is '' or '.').
+        assert str(meta.file_path) in ("", ".")
+        assert meta.file_format == ""
+        assert adapter.get_file_path("LINKONLY") is None
 
 
 # ── Annotations & Notes ────────────────────────────────────────
