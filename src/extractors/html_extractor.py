@@ -63,9 +63,16 @@ class HTMLExtractor(BaseExtractor):
             toc = self._extract_toc(soup)
 
             # Extract text, preserving paragraph structure
+            block_tags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']
             text_parts = []
 
-            for element in soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li']):
+            for element in soup.find_all(block_tags):
+                # Skip blocks nested inside another block: their text is already
+                # captured by the ancestor's get_text(). Emitting them again
+                # duplicates content — catastrophically on deeply nested
+                # snapshots (e.g. SingleFile saves nest <p> dozens deep).
+                if element.find_parent(block_tags):
+                    continue
                 text = element.get_text(strip=True)
                 if text:
                     text_parts.append(text)
