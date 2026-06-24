@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 11. Juni 2026 (ADR-026: Engine-Umzug nach src/archilles/engine mit Fassaden-Zerlegung)
+**Letzte Überarbeitung:** 24. Juni 2026 (ADR-028: Hardware-Stufen 2.0 — „Ein Ziel, mehrere Wege")
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -511,6 +511,31 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 - Bewusst zurückgestellt (P2-Folge-Etappen): Packaging via pyproject.toml, der vorbestehende Eager-Import von SentenceTransformer beim Engine-Import, der Schichtungs-Smell `engine → calibre_mcp.annotations` (aus dem Monolithen übernommen, kein Zyklus)
 
 **Verworfen:** Die Engine als ein flaches Modul statt Subpackage zu verschieben (hätte den 2.600-Zeilen-Monolithen nur umgetopft, 8.16 verlangt die Zerlegung); die Zerlegung im CLI-Skript zu belassen; Delegatoren mit `*args/**kwargs` (hätte Signatur-Drift und Patch-Target-Brüche kaschiert).
+
+---
+
+### ADR-028: Hardware-Stufen 2.0 — „Ein Ziel, mehrere Wege" (Juni 2026)
+
+**Kontext:** Die drei Indexierungsprofile `minimal`/`balanced`/`maximal` waren faktisch nur eine `batch_size`-Staffel (8/32/64). `embedding_model` war überall BGE-M3, `device` wurde ohnehin auto-detektiert, und `chunk_size`/`chunk_overlap`/`max_parallel_docs`/`max_tokens_per_chunk`/`embedding_dimension` waren tote Felder (Chunking hartkodierte 512/128). Die eigentlichen Qualitäts- und Durchsatz-Hebel — Parent-Child (`--hierarchical`, Parent-Budget 2048) und lokales vs. externes Embedding (Remote-Embedder über `config.json`) — lagen **komplett außerhalb** der Profile. Zugleich hatte sich ein Default-Wildwuchs angesammelt (512/128 vs. 1024/128 vs. 512/64 vs. 1000/200). Vor allem aber deckte die Profil-Philosophie „Qualität ist überall gleich, nur Geschwindigkeit variiert" die Realität nicht mehr: Schwache Hardware (hier real verfügbar: eine 4-GB-GPU) kann hierarchisches Embedding lokal nicht in vernünftiger Zeit erreichen.
+
+**Entscheidung:** Sauberer Schnitt statt Erweiterung von `IndexingProfile`. Die vermischte Profilklasse wird durch drei getrennte Begriffe ersetzt: `HardwareCapabilities` (auto-detektiert, baut auf vorhandenem `HardwareProfile` auf) / `IndexRecipe` (hardware-**unabhängig**, eine Wahrheitsquelle für Modell, Dimension und Chunk-Schema) / `ExecutionPlan` (abgeleitet aus Capabilities + Recipe). Nach außen gibt es **keine** 10 Klassen, sondern „Auto-Erkennung + eine Variable": `mode` in `.archilles/config.json` (CLI-Override `--mode`) mit den Werten `auto | light | full-local | full-external`. Die fünf internen Hardware-Klassen (`cpu-only`, `apple-mps`, `gpu-small` <8 GB, `gpu-mid` 8–<16 GB, `gpu-large` ≥16 GB) sind reine Implementierungsdetails von `plan()` und kollabieren auf drei verständliche Wege: **light** (flach, lokal, gratis), **full-local** (hierarchisch, lokal) und **full-external** (hierarchisch, lokal vorbereitet + extern embeddet). Unter `auto` wählt `plan()` selbst: fähige HW → `full-local`, schwache HW → `light`; `auto` verlangt **nie** ungefragt externes Embedding.
+
+**Begründung und Schichtung:** Leitprinzip ist nicht „schlechtere Qualität für schwache Hardware" (das erzeugt inkompatible DBs), sondern **unterschiedliche Wege zum selben Index**, über vier Schichten getrennt:
+- **Identität** (Modell BGE-M3, Dimension 1024, Metrik) — variiert **nie**, sonst werden Vektoren maschinenübergreifend inkompatibel.
+- **Index-Qualität** (flach ↔ hierarchisch) — *degradiert-kompatibel*: eine flach indexierte DB funktioniert, das Retrieval fällt für solche Chunks sauber auf `window_text` zurück (kein Datenverlust, nur kein Small-to-Big).
+- **Such-Qualität** (Reranking an/aus + Device) — DB-neutral, daher überall Default an; CPU für schwache Klassen, GPU ab `gpu-mid` (BGE-M3 + bge-reranker je ~2,5 GB ⇒ ~6–7 GB Spitze gemeinsam, deshalb die 8-GB-Schwelle).
+- **Durchsatz** (batch/device, lokal ↔ extern) — qualitätsneutral. Über den externen Weg entstehen **exakt dieselben Vektoren** wie auf einer starken GPU.
+
+`remote` ist damit kein eigener Modus, sondern ein Querschnitt — das hält das System local-first (extern = Opt-in). Entscheidend für die Testbarkeit: `plan(capabilities, recipe, mode)` ist eine **reine Funktion** und mit synthetischen Specs vollständig CI-testbar, obwohl physisch nur `gpu-small` vorliegt.
+
+**Inkrementeller Nachschub (full-external).** Bulk-`full-external` ist automatisch prepare-only (prepare → extern embedden → `rag_db` zurück). Der laufende Nachschub (Watchdog, manuelles `index_book`) kann nicht jedes Mal sofort extern embedden, würde aber ohne Behandlung durchs Raster fallen. Lösung (Trickle-Upgrade): neue Titel werden sofort **provisorisch light** indexiert (flach, lokal, sofort durchsuchbar) und per Marker `pending_external` an den Chunks vermerkt; ein späterer `--prepare-pending-external`-Lauf bereitet sie hierarchisch auf, und das bestehende `embed --mode remote` ersetzt sie automatisch (die frischen Chunks tragen keinen Marker → implizit gelöscht). Der Marker an den Chunks (statt einer Queue-Datei) hält die DB als einzige Wahrheitsquelle und nutzt den risikolosen Schema-Migrations-Mechanismus von `lancedb_store.py`; „bewusst light" (final) vs. „provisorisch light" (wartend) lässt sich über `chunk_type` allein nicht unterscheiden — dafür braucht es genau diesen Marker.
+
+**Konsequenzen:**
+- Umgesetzt in sechs Etappen, durchgängig TDD (Suite 672 → 752): E1 `IndexRecipe` (eine Chunk-Param-Quelle, tote Felder entfernt), E2 `classify_hardware` + reine `plan()`/`ExecutionPlan`, E3 `mode`-Verdrahtung (config + CLI, `core.py` konsumiert den Plan), E4 Watchdog-Angleichung (beide Scanner mode→plan) + full-external-Trickle-Queue (`pending_external`), E5 Doku (`docs/USAGE.md` § „Indexing mode"), E6 dieser ADR.
+- `--profile minimal/balanced/maximal` bleibt als Legacy-/Fortgeschrittenen-Override erhalten (umgeht `--mode`/auto), damit bestehende Skripte und Power-User unberührt bleiben.
+- Identität bleibt fix ⇒ Datenbanken bleiben maschinenübergreifend kompatibel und die Suche reproduzierbar, unabhängig vom gewählten Weg.
+
+**Verworfen:** `IndexingProfile` erweitern statt sauber schneiden (hätte die Drei-Dinge-Vermischung zementiert); die 10 Kombinationen (5 HW × extern) nach außen zeigen (widerspricht „maximal einfach"); externes Embedding als Cloud-Feature ausbauen (bräche local-first und wäre volumenintensiv — Voll-Auslagerung bleibt ein dokumentiertes LAN-Szenario); das Embedding-Modell oder die Dimension je Hardware variieren (bräche die DB-Kompatibilität); eine separate Queue-Datei statt des Chunk-Markers (Drift-Risiko bei Löschung/Reindex). Offen (Umsetzungsdetail): Form des Fortgeschrittenen-Overrides (`--hardware-class` erzwingen?) und das exakte `rag_db`-Rückspiel-Vorgehen für das LAN-Szenario; der Modularpfad `chunkers/` wird vorerst nicht mitgezogen.
 
 ---
 

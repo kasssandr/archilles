@@ -314,7 +314,7 @@ Search through your collection of primary sources and secondary literature simul
 - Multi-language support (75+ languages, stop-word removal for 12 languages)
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
-- Hardware-adaptive indexing profiles (minimal/balanced/maximal; CUDA, Apple Silicon MPS, CPU)
+- Hardware-adaptive indexing: auto-detects your machine and picks the path; one optional `mode` knob (light / full-local / full-external). CUDA, Apple Silicon MPS, CPU
 - Streamlit Web UI *(experimental)*
 - Section-type filtering (exclude bibliography/index noise)
 - Context expansion (Small-to-Big retrieval with `window_text`)
