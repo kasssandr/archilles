@@ -11,6 +11,7 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from src.archilles.constants import ChunkType, SectionType
+from src.archilles.execution import ExecutionPlan
 from src.archilles.i18n import get_ocr_language, get_stopwords
 from src.archilles.recipe import IndexRecipe, default_recipe
 from src.extractors import UniversalExtractor
@@ -152,6 +153,7 @@ class ArchillesRAG:
         prepare_chunk_size: int | None = None,  # Phase-1 chunk size (tokens); None → recipe child size
         prepare_overlap: int | None = None,      # Phase-1 chunk overlap (tokens); None → recipe child overlap
         recipe: IndexRecipe | None = None,  # Index identity/chunk schema; None → default_recipe()
+        execution_plan: "ExecutionPlan | None" = None,  # Hardware-Tiers-V2: drives batch/device
     ):
         """
         Initialize RAG system.
@@ -196,8 +198,32 @@ class ArchillesRAG:
         # Determine model and settings from profile
         import torch
         cuda_available = torch.cuda.is_available()
+        try:
+            mps_available = torch.backends.mps.is_available()
+        except AttributeError:
+            mps_available = False
 
-        if profile:
+        if execution_plan is not None:
+            # Hardware-Tiers-V2: the ExecutionPlan owns the throughput knobs
+            # (batch size + device). Identity (model/dimension) still comes from
+            # the recipe — never from the plan — so vectors stay compatible.
+            self.batch_size = execution_plan.batch_size
+            if model_name is None:
+                model_name = self.recipe.embedding_model
+            want = execution_plan.embedding_device
+            if want == "cuda" and cuda_available:
+                self.device = "cuda"
+            elif want == "mps" and mps_available:
+                self.device = "mps"
+            else:
+                self.device = "cpu"
+                if want in ("cuda", "mps"):
+                    print(f"  ⚠️  {want.upper()} not available, falling back to CPU")
+            print(
+                f"Initializing ARCHILLES RAG "
+                f"(mode: {execution_plan.mode}, class: {execution_plan.hardware_class})..."
+            )
+        elif profile:
             from src.archilles.profiles import get_profile
             profile_config = get_profile(profile)
             if model_name is None:
