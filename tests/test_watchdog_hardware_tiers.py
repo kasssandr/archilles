@@ -181,3 +181,47 @@ class TestProvisionalLightMarking:
                    return_value=_caps(cuda=True, vram_gb=4)):
             scanner.scan(dry_run=False, queue_new=False, index_metadata_only=True)
         assert fake.store.marked == []
+
+
+class TestProvisionalLightMarkingPhase4:
+    """Phase 4 (--index-fulltext-pending) drains phase1 stubs into full content.
+    Under full-external that content is flat/provisional and must be marked too."""
+
+    def _run_fulltext(self, calibre_library, *, mode, hw):
+        from src.archilles.watchdog import (
+            _calibre_metadata_for_hash, _compute_metadata_hash,
+        )
+        stored = _compute_metadata_hash(
+            _calibre_metadata_for_hash(calibre_library)[101]
+        )
+        scanner = WatchdogScanner(
+            library_path=calibre_library,
+            db_path=str(calibre_library / ".archilles" / "rag_db"),
+            archilles_dir=calibre_library / ".archilles",
+        )
+        scanner._load_indexed_hashes = lambda: {
+            101: {"book_id": "101", "metadata_hash": stored,
+                  "annotation_hash": "", "has_content": False},  # phase1 stub
+        }
+        scanner._annotation_changed = lambda file_path, stored_hash: False
+        fake = _FakeRAG()
+        scanner._load_rag = lambda: fake
+        with patch("src.archilles.config.get_mode", return_value=mode), \
+             patch("src.archilles.hardware.detect_hardware", return_value=hw):
+            scanner.scan(dry_run=False, queue_new=False,
+                         index_fulltext_pending=True)
+        return fake
+
+    def test_full_external_marks_drained_stub(self, calibre_library):
+        _add_book(calibre_library, 101, "Stub", authors=["A"], with_file="x.epub")
+        fake = self._run_fulltext(calibre_library, mode="full-external",
+                                  hw=_caps(cuda=True, vram_gb=4))
+        assert fake.indexed == ["101"]
+        assert fake.store.marked == ["101"]
+
+    def test_full_local_does_not_mark_drained_stub(self, calibre_library):
+        _add_book(calibre_library, 101, "Stub", authors=["A"], with_file="x.epub")
+        fake = self._run_fulltext(calibre_library, mode="full-local",
+                                  hw=_caps(cuda=True, vram_gb=24))
+        assert fake.indexed == ["101"]
+        assert fake.store.marked == []

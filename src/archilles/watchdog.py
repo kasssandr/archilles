@@ -498,6 +498,10 @@ class WatchdogScanner:
         # backlog in one session (CTRL+C for graceful stop, checkpoint resumes).
         if index_fulltext_pending and results['fulltext_pending'] and not dry_run:
             rag = self._load_rag()
+            # Hardware-Tiers-V2 §12: under full-external the drained stub becomes
+            # flat (provisional light — _load_rag forced hierarchical off), so mark
+            # it pending_external just like a Phase-3 new title.
+            mark_pending = not self._resolve_plan().embed_local
             ft0 = time.time()
             cp_fulltext = IndexingCheckpoint.load(self.fulltext_checkpoint_file)
             done_ids = {int(b) for b in cp_fulltext.completed_books} if cp_fulltext else set()
@@ -548,6 +552,8 @@ class WatchdogScanner:
                 print(f"\n[{already_done + j}/{total_p4}] {meta.get('author', '')}: {entry['title']}")
                 try:
                     rag.index_book(formats[0]['path'], str(cid), force=False)
+                    if mark_pending:
+                        rag.store.mark_pending_external(str(cid))
                     results['fulltext_indexed'] += 1
                     cp_fulltext.complete_book(cid)
                 except Exception as exc:
