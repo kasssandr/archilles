@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** May 2026 (scheduled routines layer for multi-source synchronisation)
+**Last updated:** June 2026 (engine extraction to `src/archilles/engine`; code-review hardening)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 

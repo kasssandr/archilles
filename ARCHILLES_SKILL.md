@@ -236,5 +236,5 @@ This rule applies to all output formats (synthesis, material list, citation coll
 
 ---
 
-*ARCHILLES_SKILL.md — generic version, valid from v0.9 Beta*
+*ARCHILLES_SKILL.md — generic version, valid from v0.9*
 *User-specific additions → ARCHILLES_USER.md*

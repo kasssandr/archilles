@@ -1,6 +1,6 @@
 # ARCHILLES — Feature Catalog
 
-**Version:** 0.9 Beta (March 2026)
+**Version:** 0.9 (June 2026)
 **Purpose:** Comprehensive reference of all implemented features. Basis for documentation, PR writing, and onboarding.
 
 ---
