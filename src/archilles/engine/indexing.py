@@ -1026,6 +1026,12 @@ class Indexer:
             print("  No JSONL files found.")
             return {'total_books': 0, 'total_chunks': 0}
 
+        # Hardware-Tiers-V2 §12: books indexed provisionally light (full-external)
+        # are marked pending_external. The external embed always replaces them, so
+        # treat them as force even without --force; the freshly added hierarchical
+        # chunks carry no marker, which clears it implicitly.
+        pending_external_ids = self._rag.store.get_pending_external_book_ids()
+
         # Load resume checkpoint (completed + skipped books)
         cp_path = input_dir / '.embed_checkpoint.json'
         cp = IndexingCheckpoint.load_or_create(cp_path, profile="", book_ids=[])
@@ -1053,17 +1059,22 @@ class Indexer:
 
                 # Check LanceDB for existing chunks
                 book_id = header['book_id']
+                # Provisional-light books are always replaced (see above).
+                book_force = force or book_id in pending_external_ids
                 existing = self._rag.store.get_by_book_id(book_id, limit=1)
                 content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
-                if content and not force:
+                if content and not book_force:
                     print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
                     cp.skip_book(file_key)
                     embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
                     skipped += 1
                     continue
-                elif content and force:
+                elif content and book_force:
                     deleted = self._rag.store.delete_by_book_id(book_id)
-                    print(f"  {book_id}: deleted {deleted} old chunks.", end=' ', flush=True)
+                    label = ("replacing %d provisional flat chunks" % deleted
+                             if book_id in pending_external_ids
+                             else "deleted %d old chunks" % deleted)
+                    print(f"  {book_id}: {label}.", end=' ', flush=True)
 
                 # Read chunks
                 chunk_lines = f.readlines()

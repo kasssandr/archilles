@@ -55,6 +55,7 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import sqlite3
@@ -791,6 +792,25 @@ def cleanup_orphans(
 
     print(f"\n   ✅ Cleanup complete: {removed} orphaned book(s) removed from index")
     return {'orphans_found': len(orphan_ids), 'orphans_removed': removed}
+
+
+def discover_pending_external_books(rag, library_path: Path) -> List[Dict[str, Any]]:
+    """Find books marked ``pending_external`` and resolve them to Calibre dicts.
+
+    The discovery half of the full-external trickle lifecycle (Hardware-Tiers-V2
+    §12): the watchdog indexes new titles *provisionally light* (flat, local) and
+    marks them; this collects those books so they can be re-prepared hierarchically
+    and embedded externally, replacing the provisional chunks.
+
+    Non-numeric book_ids (non-Calibre adapters) are skipped — the Calibre path
+    resolves IDs via ``metadata.db``. Returns book dicts ready for batch_prepare;
+    an empty list short-circuits without touching Calibre.
+    """
+    pending = rag.store.get_pending_external_book_ids()
+    numeric_ids = sorted(int(b) for b in pending if str(b).isdigit())
+    if not numeric_ids:
+        return []
+    return get_books_by_ids(library_path, numeric_ids)
 
 
 def _adapter_list_books(
@@ -1594,6 +1614,12 @@ Profiles:
                         help='Remove index entries for books deleted from Calibre. '
                              'Can be used standalone or combined with an indexing run. '
                              'Use --dry-run to preview orphans without deleting.')
+    parser.add_argument('--prepare-pending-external', action='store_true',
+                        help='Discover books indexed provisionally light (full-external '
+                             'mode, marked pending_external) and re-prepare them '
+                             'hierarchically into --output-dir. Standalone operation; '
+                             'follow with `rag_demo.py embed --mode remote` to replace '
+                             'the provisional flat chunks with externally embedded ones.')
     parser.add_argument('--quality-select', action='store_true',
                         help='When a book has multiple formats (e.g. PDF+EPUB), '
                              'prepare both, compare chunk quality, and pick the better one. '
@@ -1626,8 +1652,11 @@ def main():
         sys.exit(0)
 
     # Validate: require --all/--tag/--author/--ids unless --cleanup-orphans is the sole operation
-    if not args.all and not args.tag and not args.author and not args.ids and not args.collection and not args.cleanup_orphans:
-        parser.error("one of the arguments --all --tag --author --collection --cleanup-orphans is required")
+    if (not args.all and not args.tag and not args.author and not args.ids
+            and not args.collection and not args.cleanup_orphans
+            and not args.prepare_pending_external):
+        parser.error("one of the arguments --all --tag --author --collection "
+                     "--cleanup-orphans --prepare-pending-external is required")
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -1682,6 +1711,13 @@ def main():
     # full-external forces prepare-only (prepare locally, embed elsewhere — §8).
     args.prepare_only = resolution.prepare_only
 
+    # --prepare-pending-external re-prepares provisionally-light books (§12): it
+    # needs no embedding model (prepare semantics) and always produces hierarchical
+    # chunks — the upgrade target that replaces the flat provisional ones.
+    if args.prepare_pending_external:
+        args.prepare_only = True
+        resolution = dataclasses.replace(resolution, hierarchical=True)
+
     # Get books based on criteria
     min_rating = args.min_rating or 0
     rating = args.rating
@@ -1705,7 +1741,8 @@ def main():
 
     # Initialize RAG
     # DummyRAG only for pure dry-run without skip-existing and without cleanup-orphans
-    needs_real_rag = args.skip_existing or args.cleanup_orphans or not args.dry_run
+    needs_real_rag = (args.skip_existing or args.cleanup_orphans
+                      or args.prepare_pending_external or not args.dry_run)
     if not needs_real_rag:
         class DummyRAG:
             def __init__(self):
@@ -1735,6 +1772,30 @@ def main():
             print(str(e))
             print(f"\n{'='*60}\n")
             sys.exit(1)
+
+    # --prepare-pending-external: standalone discovery + re-prepare (§12).
+    # Find provisionally-light books, re-prepare them hierarchically; the user
+    # then runs `embed --mode remote` to replace the flat chunks externally.
+    if args.prepare_pending_external:
+        books = discover_pending_external_books(rag, library_path)
+        if not books:
+            print("✅ No books awaiting external embedding (pending_external is empty)")
+            return
+        print(f"🔎 {len(books)} book(s) awaiting external embedding (pending_external)")
+        stats = batch_prepare(
+            books=books,
+            rag=rag,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            prefer_format=args.prefer_format,
+            quality_select=getattr(args, 'quality_select', False),
+        )
+        print("\n  ▶ Next: embed externally to replace the provisional flat chunks:")
+        print(f"      python scripts/rag_demo.py embed --input-dir {args.output_dir} "
+              f"--mode remote")
+        if stats['failed'] > 0:
+            sys.exit(1)
+        return
 
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"
