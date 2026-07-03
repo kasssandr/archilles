@@ -206,7 +206,8 @@ def _score_chunks(chunks: List[dict]) -> dict:
         }
 
     content_chunks = [c for c in chunks
-                      if c.get('chunk_type', ChunkType.CONTENT) == ChunkType.CONTENT]
+                      if c.get('chunk_type', ChunkType.CONTENT)
+                      in (ChunkType.CONTENT, ChunkType.CHILD)]
     total = len(content_chunks) or 1
 
     # 1. Truncation rate: chunks ending mid-sentence
@@ -224,10 +225,15 @@ def _score_chunks(chunks: List[dict]) -> dict:
     truncation_rate = truncated / total
 
     # 2. Misplaced back_matter: back_matter chunks appearing before the last 10% of the book
-    back_matter_chunks = [c for c in chunks if c.get('section_type') in (SectionType.BACK_MATTER,)]
+    # PARENT rows are excluded here: they duplicate their children's text and
+    # chunk_index range, so counting them would double-count the same
+    # back-matter content and skew the threshold.
+    non_parent_chunks = [c for c in chunks
+                         if c.get('chunk_type', ChunkType.CONTENT) != ChunkType.PARENT]
+    back_matter_chunks = [c for c in non_parent_chunks if c.get('section_type') in (SectionType.BACK_MATTER,)]
     early_back_matter = 0
     if back_matter_chunks and content_chunks:
-        max_idx = max(c.get('chunk_index', 0) for c in chunks)
+        max_idx = max(c.get('chunk_index', 0) for c in non_parent_chunks)
         threshold = max_idx * 0.9
         early_back_matter = sum(1 for c in back_matter_chunks
                                 if (c.get('chunk_index', 0)) < threshold)
