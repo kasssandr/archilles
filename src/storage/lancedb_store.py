@@ -718,10 +718,14 @@ class LanceDBStore:
 
         # LanceDB update: set columns where condition matches
         self.table.update(where=f"book_id = '{_sql_quote(book_id)}'", values=safe_updates)
-        # We can't easily count updates, so return total chunks for this book
+        # We can't easily count updates, so return total chunks for this book.
+        # Projected count (pattern: has_parent_chunks) — no row/vector data
+        # materialised, unlike the old search().to_list() (finding 5.6).
         try:
-            results = self.table.search().where(f"book_id = '{_sql_quote(book_id)}'").limit(10000).to_list()
-            return len(results)
+            lance_dataset = self.table.to_lance()
+            return lance_dataset.count_rows(
+                filter=f"book_id = '{_sql_quote(book_id)}'"
+            )
         except Exception:
             return 0
 
