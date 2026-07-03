@@ -58,6 +58,22 @@ class TestDiscovery:
         assert discover_pending_external_books(rag, Path("/lib")) == []
         assert called == []
 
+    def test_non_numeric_ids_resolved_via_adapter(self, monkeypatch):
+        """Finding 4.2: with a non-Calibre adapter, non-numeric pending ids
+        (Zotero keys) are resolved via the adapter instead of being dropped."""
+        rag = SimpleNamespace(
+            store=SimpleNamespace(
+                get_pending_external_book_ids=lambda: {"ZK1", "ZK3"}
+            )
+        )
+        adapter = SimpleNamespace(adapter_type="zotero")
+        fake_books = [{"id": "ZK1"}, {"id": "ZK2"}, {"id": "ZK3"}]
+        monkeypatch.setattr(
+            "scripts.batch_index._adapter_list_books", lambda a: fake_books
+        )
+        books = discover_pending_external_books(rag, Path("/lib"), adapter=adapter)
+        assert sorted(b["id"] for b in books) == ["ZK1", "ZK3"]
+
 
 def _write_jsonl(tmp_path, book_id, calibre_id, n=2, chunk_type="child"):
     header = {"_header": True, "calibre_id": calibre_id, "book_id": book_id,

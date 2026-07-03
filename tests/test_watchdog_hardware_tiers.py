@@ -229,3 +229,102 @@ class TestProvisionalLightMarkingPhase4:
                                   hw=_caps(cuda=True, vram_gb=24))
         assert fake.indexed == ["101"]
         assert fake.store.marked == []
+
+
+# ── Finding 2.5: mark only a fresh index; abort on hash-load failure ──
+
+
+class _StatusRAG(_FakeRAG):
+    """index_book returns a status key → NOT a fresh full index."""
+
+    def index_book(self, path, book_id, force=False, phase='phase2'):
+        self.indexed.append(book_id)
+        return {'book_id': book_id, 'status': 'already_indexed'}
+
+
+class TestMarkPendingOnlyOnFreshIndex:
+    def test_non_fresh_index_is_not_marked_even_full_external(self, calibre_library):
+        """If index_book reports a non-fresh status, the book was not (re)flattened
+        — marking it pending_external would be wrong (2.5)."""
+        _add_book(calibre_library, 1, "T", authors=["A"], with_file="x.epub")
+        scanner = WatchdogScanner(
+            library_path=calibre_library,
+            db_path=str(calibre_library / ".archilles" / "rag_db"),
+            archilles_dir=calibre_library / ".archilles",
+        )
+        scanner._load_indexed_hashes = lambda: {}
+        scanner._annotation_changed = lambda file_path, stored_hash: False
+        fake = _StatusRAG()
+        scanner._load_rag = lambda: fake
+        with patch("src.archilles.config.get_mode", return_value="full-external"), \
+             patch("src.archilles.hardware.detect_hardware",
+                   return_value=_caps(cuda=True, vram_gb=4)):
+            scanner.scan(dry_run=False, queue_new=False, index_new=True)
+        assert fake.indexed == ["1"]
+        assert fake.store.marked == []  # status present → not marked
+
+
+class TestHashLoadFailureAborts:
+    def test_hash_load_error_skips_indexing_and_marking(self, calibre_library):
+        """A transient hash-load failure must abort delta/new phases, not make
+        the whole library look new and mark it all pending_external (2.5)."""
+        _add_book(calibre_library, 1, "T", authors=["A"], with_file="x.epub")
+        scanner = WatchdogScanner(
+            library_path=calibre_library,
+            db_path=str(calibre_library / ".archilles" / "rag_db"),
+            archilles_dir=calibre_library / ".archilles",
+        )
+
+        def boom():
+            raise RuntimeError("lancedb locked")
+
+        scanner._load_indexed_hashes = boom
+        scanner._annotation_changed = lambda file_path, stored_hash: False
+        fake = _FakeRAG()
+        scanner._load_rag = lambda: fake
+        with patch("src.archilles.config.get_mode", return_value="full-external"), \
+             patch("src.archilles.hardware.detect_hardware",
+                   return_value=_caps(cuda=True, vram_gb=4)):
+            results = scanner.scan(dry_run=False, queue_new=False, index_new=True)
+
+        assert results.get("hash_load_failed") is True
+        assert results["errors"]
+        assert fake.indexed == []       # phase 2/3 never ran
+        assert fake.store.marked == []
+
+
+# ── Finding 4.2: the Zotero scanner marks pending_external too ────────
+
+
+class TestZoteroProvisionalMarking:
+    def _run(self, tmp_path, *, mode, hw):
+        from src.archilles.watchdog import ZoteroWatchdogScanner
+        from src.adapters.zotero_adapter import ZoteroAdapter
+        from tests.test_zotero_watchdog import _build_zotero_db
+
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        _build_zotero_db(lib, [{"itemID": 1, "key": "ZK1", "title": "T"}])
+        scanner = ZoteroWatchdogScanner(
+            library_path=lib,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=tmp_path / ".archilles",
+        )
+        scanner._load_indexed_hashes = lambda: {}  # ZK1 is new
+        fake = _FakeRAG()
+        scanner._load_rag = lambda: fake
+        with patch.object(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf")), \
+             patch("src.archilles.config.get_mode", return_value=mode), \
+             patch("src.archilles.hardware.detect_hardware", return_value=hw):
+            scanner.scan(dry_run=False, queue_new=False, index_new=True)
+        return fake
+
+    def test_full_external_marks_new_zotero_item(self, tmp_path):
+        fake = self._run(tmp_path, mode="full-external", hw=_caps(cuda=True, vram_gb=4))
+        assert fake.indexed == ["ZK1"]
+        assert fake.store.marked == ["ZK1"]
+
+    def test_full_local_does_not_mark_new_zotero_item(self, tmp_path):
+        fake = self._run(tmp_path, mode="full-local", hw=_caps(cuda=True, vram_gb=24))
+        assert fake.indexed == ["ZK1"]
+        assert fake.store.marked == []

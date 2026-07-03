@@ -801,20 +801,42 @@ def cleanup_orphans(
     return {'orphans_found': len(orphan_ids), 'orphans_removed': removed}
 
 
-def discover_pending_external_books(rag, library_path: Path) -> List[Dict[str, Any]]:
-    """Find books marked ``pending_external`` and resolve them to Calibre dicts.
+def discover_pending_external_books(rag, library_path: Path, adapter=None) -> List[Dict[str, Any]]:
+    """Find books marked ``pending_external`` and resolve them to book dicts.
 
     The discovery half of the full-external trickle lifecycle (Hardware-Tiers-V2
     §12): the watchdog indexes new titles *provisionally light* (flat, local) and
     marks them; this collects those books so they can be re-prepared hierarchically
     and embedded externally, replacing the provisional chunks.
 
-    Non-numeric book_ids (non-Calibre adapters) are skipped — the Calibre path
-    resolves IDs via ``metadata.db``. Returns book dicts ready for batch_prepare;
-    an empty list short-circuits without touching Calibre.
+    Calibre ids are numeric and resolved via ``metadata.db``. Non-Calibre adapters
+    (finding 4.2) have non-numeric ids (Zotero keys, folder ids) — resolve those
+    via the adapter's ``list_documents`` instead of dropping them. Any pending id
+    that cannot be resolved is logged, never silently discarded (finding 2.7).
+    Returns book dicts ready for batch_prepare; an empty list short-circuits.
     """
     pending = rag.store.get_pending_external_book_ids()
+    if not pending:
+        return []
+
+    use_adapter = adapter is not None and getattr(adapter, "adapter_type", "calibre") != "calibre"
+    if use_adapter:
+        # Resolve by matching the adapter's own ids against the pending set.
+        all_books = _adapter_list_books(adapter)
+        resolved = [b for b in all_books if str(b['id']) in pending]
+        unresolved = pending - {str(b['id']) for b in resolved}
+        if unresolved:
+            print(f"  ⚠️  {len(unresolved)} pending_external id(s) could not be "
+                  f"resolved via the {adapter.adapter_type} adapter (missing file / "
+                  f"deleted item?): {sorted(unresolved)}")
+        return resolved
+
+    # Calibre path: numeric ids only.
     numeric_ids = sorted(int(b) for b in pending if str(b).isdigit())
+    non_numeric = sorted(str(b) for b in pending if not str(b).isdigit())
+    if non_numeric:
+        print(f"  ⚠️  {len(non_numeric)} non-numeric pending_external id(s) skipped "
+              f"(no adapter provided to resolve them): {non_numeric}")
     if not numeric_ids:
         return []
     return get_books_by_ids(library_path, numeric_ids)
@@ -1781,7 +1803,7 @@ def main():
     # Find provisionally-light books, re-prepare them hierarchically; the user
     # then runs `embed --mode remote` to replace the flat chunks externally.
     if args.prepare_pending_external:
-        books = discover_pending_external_books(rag, library_path)
+        books = discover_pending_external_books(rag, library_path, adapter=adapter)
         if not books:
             print("✅ No books awaiting external embedding (pending_external is empty)")
             return

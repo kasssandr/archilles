@@ -318,7 +318,24 @@ class WatchdogScanner:
         calibre_books = _calibre_metadata_for_hash(self.library_path)
         results['scanned'] = len(calibre_books)
 
-        indexed_hashes = self._load_indexed_hashes()
+        try:
+            indexed_hashes = self._load_indexed_hashes()
+        except Exception as exc:
+            # 2.5: a transient hash-load failure must NOT make the whole library
+            # look "new" — under full-external that would mark every book
+            # pending_external and queue a full external re-embed. Abort the
+            # delta/new/backlog phases and re-detect next scan.
+            msg = (f"Could not load indexed hashes — aborting delta/new/fulltext "
+                   f"phases this scan: {exc}")
+            logger.error(msg)
+            results['errors'].append({'error': msg})
+            results['hash_load_failed'] = True
+            results['total_time'] = round(time.time() - t0, 1)
+            results['interrupted'] = self._shutdown_requested
+            if not dry_run:
+                self._save_annotation_cache()
+                self._write_log(results)
+            return results
         # Books in LanceDB that have only non-content chunks (phase1 stubs, annotations)
         phase1_only_ids: set[int] = {
             cid for cid, h in indexed_hashes.items()
@@ -475,8 +492,14 @@ class WatchdogScanner:
                         if index_metadata_only:
                             rag.index_book(formats[0]['path'], str(cid), phase='phase1')
                         else:
-                            rag.index_book(formats[0]['path'], str(cid), force=False)
-                            if mark_pending:
+                            res = rag.index_book(formats[0]['path'], str(cid), force=False)
+                            # Only mark a *fresh* full index pending_external (2.5):
+                            # fresh indexing returns a stats dict with no 'status'
+                            # key, whereas 'already_indexed'/'metadata_updated'/
+                            # 'metadata_extract_failed' carry one. Marking on a
+                            # non-fresh return would flag a book that was never
+                            # (re)flattened.
+                            if mark_pending and res.get('status') is None:
                                 rag.store.mark_pending_external(str(cid))
                         results['new_indexed'] += 1
                         cp_new.complete_book(cid)
@@ -551,8 +574,9 @@ class WatchdogScanner:
                     continue
                 print(f"\n[{already_done + j}/{total_p4}] {meta.get('author', '')}: {entry['title']}")
                 try:
-                    rag.index_book(formats[0]['path'], str(cid), force=False)
-                    if mark_pending:
+                    res = rag.index_book(formats[0]['path'], str(cid), force=False)
+                    # Mark only a fresh full index pending_external (2.5).
+                    if mark_pending and res.get('status') is None:
                         rag.store.mark_pending_external(str(cid))
                     results['fulltext_indexed'] += 1
                     cp_fulltext.complete_book(cid)
@@ -581,15 +605,16 @@ class WatchdogScanner:
     # ------------------------------------------------------------------
 
     def _load_indexed_hashes(self) -> dict[int, dict[str, str]]:
-        """Load stored hashes from LanceDB without loading the embedding model."""
-        try:
-            # Import lazily so the watchdog can be imported without heavy deps
-            from src.archilles.engine import ArchillesRAG
-            rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
-            return rag.store.get_hashes_for_indexed_books()
-        except Exception as exc:
-            logger.warning(f"Could not load indexed hashes: {exc}")
-            return {}
+        """Load stored hashes from LanceDB without loading the embedding model.
+
+        Raises on failure (2.5): the caller must abort delta/new/backlog
+        indexing rather than treat an empty dict as "the whole library is new".
+        An empty but healthy DB returns {} without raising.
+        """
+        # Import lazily so the watchdog can be imported without heavy deps
+        from src.archilles.engine import ArchillesRAG
+        rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
+        return rag.store.get_hashes_for_indexed_books()
 
     def _resolve_plan(self):
         """Resolve this library's ExecutionPlan (mode + detected hardware)."""
@@ -980,7 +1005,21 @@ class ZoteroWatchdogScanner:
         zotero_items = _zotero_metadata_for_scan(self.library_path)
         results['scanned'] = len(zotero_items)
 
-        indexed_hashes = self._load_indexed_hashes()
+        try:
+            indexed_hashes = self._load_indexed_hashes()
+        except Exception as exc:
+            # 2.5 (same guard as the Calibre scanner): don't let a hash-load
+            # failure make every item look new and mark the corpus pending.
+            msg = (f"Could not load indexed hashes — aborting delta/new phases "
+                   f"this scan: {exc}")
+            logger.error(msg)
+            results['errors'].append({'error': msg})
+            results['hash_load_failed'] = True
+            results['total_time'] = round(time.time() - t0, 1)
+            results['interrupted'] = self._shutdown_requested
+            if not dry_run:
+                self._write_log(results)
+            return results
         ann_cache = self._load_annotation_cache()
         # Deferred annotation-cache writes (finding 4.3): a changed att_modified
         # is committed to the cache only after Phase 2 has re-indexed the item,
@@ -1071,6 +1110,13 @@ class ZoteroWatchdogScanner:
                 from src.adapters.zotero_adapter import ZoteroAdapter
                 adapter = ZoteroAdapter(self.library_path)
                 rag = self._load_rag()
+                # Hardware-Tiers-V2 §12 (finding 4.2): mirror the Calibre
+                # scanner — under full-external a new item is indexed
+                # provisionally light (flat, local) and marked pending_external
+                # so a later --prepare-pending-external run upgrades it via
+                # external embedding. Phase 2 needs no marking: delta updates on
+                # existing content never flatten it.
+                mark_pending = not self._resolve_plan().embed_local
                 ni0 = time.time()
                 total_p3 = len(new_keys)
                 for j, entry in enumerate(results['new_books'], 1):
@@ -1083,8 +1129,11 @@ class ZoteroWatchdogScanner:
                         continue
                     print(f"\n[{j}/{total_p3}] {entry['title']}")
                     try:
-                        rag.index_book(str(file_path), key, force=False)
+                        res = rag.index_book(str(file_path), key, force=False)
                         results['new_indexed'] += 1
+                        # Mark only a fresh full index pending_external (2.5 convention).
+                        if mark_pending and res.get('status') is None:
+                            rag.store.mark_pending_external(key)
                         # Seed annotation cache for freshly indexed items
                         att_mod = zotero_items.get(key, {}).get("attachment_modified_at") or ""
                         if att_mod:
@@ -1107,14 +1156,15 @@ class ZoteroWatchdogScanner:
     # ── Internal helpers ──────────────────────────────────────────
 
     def _load_indexed_hashes(self) -> dict[str, dict[str, str]]:
-        """Load stored hashes from LanceDB using string book_id as key."""
-        try:
-            from src.archilles.engine import ArchillesRAG
-            rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
-            return rag.store.get_hashes_by_book_id()
-        except Exception as exc:
-            logger.warning("Could not load indexed hashes: %s", exc)
-            return {}
+        """Load stored hashes from LanceDB using string book_id as key.
+
+        Raises on failure (2.5): a swallowed error that returns {} makes the
+        whole library look new and, under full-external, marks everything
+        pending_external. An empty but healthy DB returns {} without raising.
+        """
+        from src.archilles.engine import ArchillesRAG
+        rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
+        return rag.store.get_hashes_by_book_id()
 
     def _resolve_plan(self):
         """Resolve this library's ExecutionPlan (mode + detected hardware)."""
