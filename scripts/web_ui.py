@@ -13,7 +13,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -157,6 +157,27 @@ def _get_result_field(result: Dict[str, Any], key: str, default: Any = '') -> An
     return value
 
 
+def _resolve_expanded_context(text: str, window_text: str,
+                              parent: Optional[Dict[str, Any]]) -> Optional[tuple]:
+    """Pick parent chunk vs window_text for the expanded-context view.
+
+    Mirrors expand_chunk_context's priority (engine/prompting.py): the
+    parent chunk is preferred when it resolves — the whole structural
+    section (~2048 tokens) is a broader Small-to-Big context than the
+    +-500-char window_text; flat-index chunks have no parent and fall
+    through to window_text (only shown if longer than the original chunk,
+    matching the original len() gate).
+
+    Returns (kind, content) where kind is 'parent' or 'window', or None
+    when neither is available.
+    """
+    if parent and parent.get('text'):
+        return ('parent', parent['text'])
+    if window_text and len(window_text) > len(text):
+        return ('window', window_text)
+    return None
+
+
 def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
                   show_expanded_context: bool = False, service=None, lang: str = "en"):
     """Render a single search result."""
@@ -268,17 +289,18 @@ def render_result(result: Dict[str, Any], index: int, query_terms: List[str],
         with st.expander(t('webui.show_fulltext', lang)):
             st.text(text)
 
-        # Context expansion (window_text or parent chunk)
+        # Context expansion (parent chunk preferred, window_text as fallback)
         if show_expanded_context and (window_text or parent_id):
             with st.expander(t('webui.expanded_context', lang)):
-                if window_text and len(window_text) > len(text):
-                    st.caption(t('webui.surrounding_text', lang))
-                    st.text(window_text)
-                elif parent_id and service:
-                    parent = service.get_chunk_by_id(parent_id)
-                    if parent and parent.get('text'):
+                parent = service.get_chunk_by_id(parent_id) if parent_id and service else None
+                choice = _resolve_expanded_context(text, window_text, parent)
+                if choice:
+                    kind, content = choice
+                    if kind == 'parent':
                         st.caption(t('webui.parent_chunk', lang).format(id=parent_id))
-                        st.text(parent['text'])
+                    else:
+                        st.caption(t('webui.surrounding_text', lang))
+                    st.text(content)
 
         st.divider()
 
