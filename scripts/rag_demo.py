@@ -199,6 +199,16 @@ def _handle_import_annotations(args):
         print(f"  Remove --dry-run to import into the ARCHILLES index.\n")
 
 
+def _should_skip_model(command, mode):
+    """Whether ArchillesRAG should skip loading the local embedding model.
+
+    True for ``prepare`` (extraction/chunking only, no embeddings) and for
+    ``embed`` when the resolved embedder mode is ``remote`` (embeddings are
+    computed over HTTP). ``embed --mode local`` still needs the model.
+    """
+    return command == 'prepare' or (command == 'embed' and mode == 'remote')
+
+
 def main():
     """Main CLI interface."""
     parser = argparse.ArgumentParser(
@@ -312,7 +322,8 @@ Examples:
     embed_parser = subparsers.add_parser('embed', help='Embed prepared chunks and store in LanceDB (Phase 2)')
     embed_parser.add_argument('--input-dir', default='./prepared_chunks', help='Directory with JSONL files from prepare')
     embed_parser.add_argument('--mode', choices=['local', 'remote'], default=None,
-                              help='Embedding mode (default: local, or embedder.mode in config.json)')
+                              help='Embedding mode (default: local, or embedder.mode in config.json). '
+                                   'Remote mode no longer loads the local embedding model.')
     embed_parser.add_argument('--host', help='Remote embedding server host (e.g. http://1.2.3.4:8000)')
     embed_parser.add_argument('--port', type=int, default=None, help='Remote server port (default: 8000)')
     embed_parser.add_argument('--token', help='Bearer token for remote server')
@@ -365,8 +376,29 @@ Examples:
         use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
         hierarchical = getattr(args, 'hierarchical', False)
 
-        # Skip embedding model for prepare command (no GPU needed)
-        skip_model = (args.command == 'prepare')
+        # Resolve embedder settings before constructing ArchillesRAG, so that
+        # skip_model can already reflect a remote mode (avoids loading the
+        # local embedding model for a run that will embed over HTTP).
+        embedder_settings = None
+        if args.command == 'embed':
+            library_path = get_library_path(required=False)
+            cfg = get_embedder_config(library_path)
+            cli = {
+                "mode": args.mode,
+                "host": args.host,
+                "port": args.port,
+                "token": args.token,
+                "batch_size": args.batch_size,
+                "use_gzip": False if getattr(args, 'no_gzip', False) else None,
+            }
+            embedder_settings = resolve_embedder_settings(cli, cfg)
+
+        # Skip embedding model for prepare command (no GPU needed) and for
+        # embed --mode remote (embeddings are computed over HTTP)
+        skip_model = _should_skip_model(
+            args.command,
+            embedder_settings['mode'] if embedder_settings else None,
+        )
 
         rag = ArchillesRAG(
             db_path=args.db_path,
@@ -446,23 +478,13 @@ Examples:
 
         elif args.command == 'embed':
             # Embed prepared chunks. Remote/local settings resolve with
-            # precedence CLI > .archilles/config.json (embedder block) > default.
-            library_path = get_library_path(required=False)
-            cfg = get_embedder_config(library_path)
-            cli = {
-                "mode": args.mode,
-                "host": args.host,
-                "port": args.port,
-                "token": args.token,
-                "batch_size": args.batch_size,
-                "use_gzip": False if getattr(args, 'no_gzip', False) else None,
-            }
-            settings = resolve_embedder_settings(cli, cfg)
+            # precedence CLI > .archilles/config.json (embedder block) > default
+            # (resolved above, before ArchillesRAG construction).
             stats = rag.embed_prepared(
                 input_dir=args.input_dir,
                 profile=profile,
                 force=getattr(args, 'force', False),
-                **settings,
+                **embedder_settings,
             )
 
         elif args.command == 'create-index':
