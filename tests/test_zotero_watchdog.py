@@ -429,3 +429,37 @@ class TestZoteroAnnotationCacheCommit:
         r2 = scanner.scan(dry_run=False, queue_new=False)
         assert "BKEY" in r2["annotations_changed"]
         assert "AKEY" in r2["unchanged"]
+
+
+# ---------------------------------------------------------------------------
+# Constructor default excluded_tags aligned with the Calibre scanner (4.6)
+# ---------------------------------------------------------------------------
+
+
+class TestExcludedTagsDefault:
+    def test_defaults_to_DEFAULT_EXCLUDED_TAGS_not_empty(self, tmp_path):
+        """Calibre's WatchdogScanner falls back to DEFAULT_EXCLUDED_TAGS when
+        excluded_tags isn't passed; the Zotero scanner fell back to [] —
+        any direct/API instantiation without an explicit list silently
+        indexed excluded items. Both scanners must agree by default."""
+        from src.archilles.config import DEFAULT_EXCLUDED_TAGS
+
+        library_path = tmp_path / "zotero_lib"
+        library_path.mkdir()
+        scanner = _make_scanner(library_path, tmp_path)
+
+        assert scanner.excluded_tags_lower == {t.lower() for t in DEFAULT_EXCLUDED_TAGS}
+
+    def test_explicit_empty_list_still_disables_exclusion(self, tmp_path):
+        # Explicit [] (as opposed to omitting the argument) must still mean
+        # "exclude nothing" — the CLI's --include-excluded path relies on this.
+        archilles_dir = tmp_path / ".archilles"
+        archilles_dir.mkdir()
+        scanner = ZoteroWatchdogScanner(
+            library_path=tmp_path / "zotero_lib",
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=archilles_dir,
+            excluded_tags=[],
+        )
+
+        assert scanner.excluded_tags_lower == set()

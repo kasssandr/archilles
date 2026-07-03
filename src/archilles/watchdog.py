@@ -987,7 +987,7 @@ class ZoteroWatchdogScanner:
         self.log_file = archilles_dir / "watchdog.log"
         self.annotation_cache_file = archilles_dir / "zotero_watchdog_cache.json"
         self.excluded_tags_lower: set[str] = {
-            t.lower() for t in (excluded_tags or [])
+            t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
         }
         self._annotation_cache: dict[str, str] | None = None  # {key: att_modified_at}
         self._annotation_cache_dirty = False
