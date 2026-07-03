@@ -71,6 +71,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.engine import ArchillesRAG, LanceDBError
+from src.archilles.engine.indexing import prepared_jsonl_name
 from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
@@ -1129,10 +1130,11 @@ def batch_prepare(
     for i, book in enumerate(books, 1):
         book_id = create_book_id(book)
 
-        # Skip-existing check BEFORE quality comparison (avoid expensive re-prepare)
+        # Skip-existing check BEFORE quality comparison (avoid expensive
+        # re-prepare). Must use the same book_id-based name prepare_book
+        # writes (see prepared_jsonl_name, finding 5.1).
         if not dry_run:
-            calibre_id = book.get('id', 0)
-            existing_jsonl = Path(output_dir) / f"{calibre_id}.jsonl"
+            existing_jsonl = Path(output_dir) / prepared_jsonl_name(book_id)
             if existing_jsonl.exists():
                 print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
                 stats['skipped'] += 1

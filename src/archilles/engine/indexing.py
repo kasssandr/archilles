@@ -1,6 +1,7 @@
 """Indexing component: book indexing (3 paths), phase-1 metadata stubs,
 prepare/embed two-phase pipeline, smart updates, metadata extraction and
 hashing. Extracted from the ArchillesRAG monolith (8.16)."""
+import hashlib
 import json
 import re
 import time
@@ -16,6 +17,31 @@ from src.archilles.constants import ChunkType
 from src.archilles.indexer import IndexingCheckpoint
 from src.calibre_db import CalibreDB
 from src.calibre_mcp.annotations import get_combined_annotations
+
+# Characters that are invalid in Windows filenames (superset of POSIX).
+_UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def prepared_jsonl_name(book_id: str) -> str:
+    """Filename for a book's prepared-chunks JSONL (one file per book).
+
+    Keyed by the adapter-unique ``book_id``, not ``calibre_id`` — non-Calibre
+    sources (Zotero keys, folder ids) have no Calibre id, so every item used
+    to collide on ``0.jsonl`` and only one book per library ever got prepared
+    (review 2026-07-03, finding 5.1). For Calibre books ``book_id`` is the
+    numeric id as a string, so existing ``{calibre_id}.jsonl`` corpora keep
+    matching.
+
+    Filesystem-unsafe characters are replaced; whenever sanitisation changes
+    the name (or empties it), a short hash of the original id is appended so
+    distinct ids ("a/b" vs "a_b") cannot map to the same file.
+    """
+    original = str(book_id)
+    safe = _UNSAFE_FILENAME_CHARS.sub('_', original).strip(' .')
+    if not safe or safe != original:
+        digest = hashlib.md5(original.encode('utf-8')).hexdigest()[:8]
+        safe = f"{safe or 'book'}-{digest}"
+    return f"{safe}.jsonl"
 
 
 class Indexer:
@@ -877,12 +903,10 @@ class Indexer:
 
         print(f"  File: {book_path.name}")
 
-        # Extract metadata
-        book_metadata = self._extract_metadata(book_path)
-        calibre_id = book_metadata.get('calibre_id', 0) or 0
-
-        # Check skip-if-exists
-        out_file = output_dir / f"{calibre_id}.jsonl"
+        # Check skip-if-exists BEFORE metadata extraction (cheap skip, no
+        # SQLite/adapter lookup). The file is named after book_id — see
+        # prepared_jsonl_name for why calibre_id-based names collided (5.1).
+        out_file = output_dir / prepared_jsonl_name(book_id)
         if out_file.exists():
             # Quick check: count lines to compare chunk_count
             with open(out_file, 'r', encoding='utf-8') as f:
@@ -894,6 +918,10 @@ class Indexer:
                         'status': 'already_prepared',
                         'chunk_count': header.get('chunk_count', 0),
                     }
+
+        # Extract metadata
+        book_metadata = self._extract_metadata(book_path)
+        calibre_id = book_metadata.get('calibre_id', 0) or 0
 
         # Step 1: Extract text — apply Phase-1 chunk settings temporarily
         # (groesser als der Live-Default, damit Phase-1-JSONL kompakt bleibt
@@ -1050,7 +1078,13 @@ class Indexer:
                     print(f"  Skipping {jsonl_file.name}: no header")
                     continue
 
-                file_key = str(header.get('calibre_id', jsonl_file.stem))
+                # Checkpoint key per book_id (unique across adapters). The old
+                # calibre_id key was '0' for every non-Calibre book, so all but
+                # the first file were skipped as already embedded (5.1). Old
+                # checkpoints keep matching: for Calibre, book_id == str(calibre_id).
+                file_key = str(header.get('book_id')
+                               or header.get('calibre_id')
+                               or jsonl_file.stem)
 
                 # Skip if already embedded
                 if file_key in embedded_set:
