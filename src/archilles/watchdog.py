@@ -252,6 +252,7 @@ class WatchdogScanner:
         self._annotation_cache: dict[str, dict[str, Any]] | None = None
         self._annotation_cache_dirty = False
         self._shutdown_requested = False
+        self._rag = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -655,17 +656,24 @@ class WatchdogScanner:
         on the watchdog — its new titles are indexed *provisionally light* (flat,
         local) and marked ``pending_external`` for a later external batch embed
         (§12), so hierarchical is forced off whenever embedding is not local.
+
+        Cached on the scanner instance (finding 4.5): Phases 2, 3 and 4 each
+        called this separately, loading the embedding model up to three times
+        per scan (~10-20s and a VRAM spike each). One scan uses one instance.
         """
+        if self._rag is not None:
+            return self._rag
         from src.archilles.engine import ArchillesRAG
         from src.archilles.config import get_languages
         ep = self._resolve_plan()
         hierarchical = ep.hierarchical and ep.embed_local
-        return ArchillesRAG(
+        self._rag = ArchillesRAG(
             db_path=self.db_path,
             languages=get_languages(Path(self.library_path)),
             execution_plan=ep,
             hierarchical=hierarchical,
         )
+        return self._rag
 
     def _annotation_files_signature(self, file_path: Path) -> list[int]:
         """Return a (book_mtime_ns, book_size, viewer_mtime_ns, viewer_size) tuple.
@@ -1000,6 +1008,7 @@ class ZoteroWatchdogScanner:
         self._annotation_cache: dict[str, str] | None = None  # {key: att_modified_at}
         self._annotation_cache_dirty = False
         self._shutdown_requested = False
+        self._rag = None
 
     @property
     def shutdown_requested(self) -> bool:
@@ -1207,7 +1216,12 @@ class ZoteroWatchdogScanner:
         Mirrors :meth:`WatchdogScanner._load_rag`: the resolved ExecutionPlan
         drives batch/device, and new items use the plan's chunk schema instead of
         the old flat default. ``full-external`` is forced flat (provisional light).
+
+        Cached on the scanner instance (finding 4.5) — see
+        :meth:`WatchdogScanner._load_rag` for why.
         """
+        if self._rag is not None:
+            return self._rag
         from src.archilles.engine import ArchillesRAG
         from src.archilles.config import get_languages
         from src.adapters.zotero_adapter import ZoteroAdapter
@@ -1216,13 +1230,14 @@ class ZoteroWatchdogScanner:
         # Pass the adapter (finding 4.1b): without it, delta re-indexing runs
         # _extract_metadata through the Calibre path, finds no metadata.db above
         # the Zotero storage tree, extracts {} and wipes hashes / abstracts.
-        return ArchillesRAG(
+        self._rag = ArchillesRAG(
             db_path=self.db_path,
             languages=get_languages(Path(self.library_path)),
             execution_plan=ep,
             hierarchical=hierarchical,
             adapter=ZoteroAdapter(self.library_path),
         )
+        return self._rag
 
     def _load_annotation_cache(self) -> dict[str, str]:
         """Lazy-load the Zotero annotation cache ({item_key: att_modified_at})."""

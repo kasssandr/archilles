@@ -91,6 +91,41 @@ class TestLoadRagIsPlanAware:
         assert kw["execution_plan"].embed_local is False
 
 
+class TestLoadRagIsCachedPerScan:
+    """Finding 4.5: Phases 2, 3 and 4 each called _load_rag() separately,
+    loading the embedding model up to three times per scan."""
+
+    def test_repeated_calls_return_the_same_instance(self, tmp_path):
+        scanner = _scanner(tmp_path)
+        with patch("src.archilles.config.get_mode", return_value="full-local"), \
+             patch("src.archilles.hardware.detect_hardware",
+                   return_value=_caps(cuda=True, vram_gb=24)), \
+             patch("src.archilles.engine.ArchillesRAG", _RecordingRAG):
+            first = scanner._load_rag()
+            second = scanner._load_rag()
+            third = scanner._load_rag()
+
+        assert first is second is third
+
+    def test_constructor_called_exactly_once_across_three_calls(self, tmp_path):
+        scanner = _scanner(tmp_path)
+        calls = []
+
+        class _CountingRAG:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+        with patch("src.archilles.config.get_mode", return_value="full-local"), \
+             patch("src.archilles.hardware.detect_hardware",
+                   return_value=_caps(cuda=True, vram_gb=24)), \
+             patch("src.archilles.engine.ArchillesRAG", _CountingRAG):
+            scanner._load_rag()
+            scanner._load_rag()
+            scanner._load_rag()
+
+        assert len(calls) == 1
+
+
 class TestZoteroLoadRagIsPlanAware:
     """The Zotero scanner shares the same flat-default gap — align it too."""
 
@@ -113,6 +148,40 @@ class TestZoteroLoadRagIsPlanAware:
             scanner._load_rag()
         assert _RecordingRAG.last_kwargs["hierarchical"] is True
         assert _RecordingRAG.last_kwargs["execution_plan"].mode == "full-local"
+
+
+class TestZoteroLoadRagIsCachedPerScan:
+    """Finding 4.5, Zotero side: same caching as the Calibre scanner."""
+
+    def _zotero_scanner(self, tmp_path):
+        from src.archilles.watchdog import ZoteroWatchdogScanner
+        from tests.test_zotero_watchdog import _build_zotero_db
+
+        _build_zotero_db(tmp_path, [{"itemID": 1, "key": "ZK1", "title": "T"}])
+        return ZoteroWatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / ".archilles" / "rag_db"),
+            archilles_dir=tmp_path / ".archilles",
+        )
+
+    def test_constructor_called_exactly_once_across_three_calls(self, tmp_path):
+        scanner = self._zotero_scanner(tmp_path)
+        calls = []
+
+        class _CountingRAG:
+            def __init__(self, **kwargs):
+                calls.append(kwargs)
+
+        with patch("src.archilles.config.get_mode", return_value="full-local"), \
+             patch("src.archilles.hardware.detect_hardware",
+                   return_value=_caps(cuda=True, vram_gb=24)), \
+             patch("src.archilles.engine.ArchillesRAG", _CountingRAG):
+            first = scanner._load_rag()
+            second = scanner._load_rag()
+            third = scanner._load_rag()
+
+        assert first is second is third
+        assert len(calls) == 1
 
 
 class _FakeStore:
