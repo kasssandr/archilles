@@ -96,13 +96,16 @@ def _build_command(
                 if rating is not None:
                     cmd += ["--rating", str(rating)]
         return cmd
+    # No --profile: it bypasses resolve_indexing_plan's mode/config
+    # resolution entirely, pinning these libraries to flat/minimal forever
+    # regardless of the configured mode. Let mode/config decide instead —
+    # weak hardware still resolves to light automatically via plan().
     return [
         sys.executable,
         str(REPO_ROOT / "scripts" / "batch_index.py"),
         "--all",
         "--skip-existing",
         "--non-interactive",
-        "--profile", "minimal",
     ]
 
 
