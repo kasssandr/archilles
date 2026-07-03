@@ -1004,6 +1004,42 @@ class TestTwoPhaseIndexing:
         assert ('20', 'phase1') in calls
         assert results['delta_updates'] == 1
 
+    def test_phase2_still_refreshes_phase1_stubs_when_rating_filter_set(
+        self, calibre_library: Path,
+    ):
+        """Finding 4.7: with --rating set (no --max-new), Phase 4 only drains
+        the matching-rating subset — Phase 2 must not skip stub refreshes for
+        stubs Phase 4 won't touch this run just because no max_new cap is
+        set."""
+        _add_book(calibre_library, 30, "Changed Stub", authors=["A"],
+                  with_file="x.epub")  # unrated (rating=0) — never matches rating_filter=3
+
+        scanner = self._make_scanner(calibre_library, indexed_hashes={
+            30: {
+                'book_id': '30',
+                'metadata_hash': 'stale',
+                'annotation_hash': '',
+                'has_content': False,
+            }
+        })
+
+        calls: list[tuple[str, str | None]] = []
+
+        class CountingRAG:
+            def index_book(self, path, book_id, force=False, phase=None):
+                calls.append((book_id, phase))
+        scanner._load_rag = lambda: CountingRAG()
+
+        # No max_new cap, but rating_filter=3 means Phase 4 only processes
+        # 3-star books — the unrated stub is left untouched by Phase 4.
+        results = scanner.scan(
+            dry_run=False, queue_new=False, index_fulltext_pending=True,
+            rating_filter=3,
+        )
+
+        assert ('30', 'phase1') in calls
+        assert results['delta_updates'] == 1
+
 
 # ---------------------------------------------------------------------------
 # Default excluded tags constant stays stable (batch_index.py sibling)

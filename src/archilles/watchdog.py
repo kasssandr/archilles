@@ -418,7 +418,15 @@ class WatchdogScanner:
         # without a max_new cap), phase1-only books will be re-indexed with
         # full content anyway — a Phase 2 stub refresh would just waste
         # embedding work that Phase 4 immediately overwrites.
-        phase4_will_process_all_stubs = index_fulltext_pending and max_new is None
+        # rating_filter also restricts Phase 4 to a rating subset (see below) —
+        # without it here, Phase 2 would skip stub refreshes for ALL stubs
+        # (including non-matching ratings Phase 4 won't touch this run), even
+        # though those stubs would then miss this run's metadata/annotation
+        # deltas (finding 4.7; self-heals on the next scan, but defeats the
+        # point of the optimisation for this run).
+        phase4_will_process_all_stubs = (
+            index_fulltext_pending and max_new is None and rating_filter is None
+        )
         books_to_update = (
             set(results['metadata_changed']) | set(results['annotations_changed'])
         )
