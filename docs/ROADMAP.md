@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** May 2026
+**Last updated:** Juni 2026
 
 ---
 
@@ -46,11 +46,11 @@ Die Adapter-Architektur (ADR-021) und die MCP-Schnittstelle machen ARCHILLES zur
 
 ---
 
-## Aktueller Stand: v0.9 (Gamma)
+## Aktueller Stand: v0.9 (Juni 2026)
 
 **Status:** Kernfunktionalität produktionsreif, MCP-Server operativ.
 
-Die Basis steht. Der gesamte Bibliotheksbestand ist indexiert; das System skaliert über die LanceDB-Architektur auf Millionen von Chunks. Der nächste Qualitätssprung ist die produktive Aktivierung von Parent-Child-Abhängigkeiten im Index: Die Mechanik ist end-to-end verdrahtet (`--hierarchical`-Flag, `_create_hierarchical_chunks()`, Parent-Kontext im Retrieval), aber standardmäßig deaktiviert und noch nicht auf dem Korpus reindexiert oder validiert — vorgesehen ist ein koordinierter Reindex auf externer GPU. Buchinhalte und Nutzerdaten (Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte) liegen seit der ChromaDB→LanceDB-Migration (Februar 2026) in **einer** LanceDB-`chunks`-Tabelle; die konzeptionelle Trennung läuft über das `chunk_type`-Feld, nicht über getrennte Datenbanken (siehe ADR-008/ADR-012).
+Die Basis steht. Der gesamte Bibliotheksbestand ist indexiert; das System skaliert über die LanceDB-Architektur auf Millionen von Chunks. Der nächste Qualitätssprung ist die produktive Aktivierung von Parent-Child-Abhängigkeiten im Index: Die Mechanik ist end-to-end verdrahtet und gegen Echtdaten validiert (`--hierarchical`-Flag, Hierarchie aus strukturbewussten Chunks via `_group_chunks_hierarchically()`, Parent-Kontext im Retrieval; siehe ADR-027), bleibt aber standardmäßig deaktiviert — ein koordinierter Reindex über externes Embedding ist in Arbeit. Buchinhalte und Nutzerdaten (Kommentare, Annotationen, NotebookLM-Analysen, eigene Exzerpte) liegen seit der ChromaDB→LanceDB-Migration (Februar 2026) in **einer** LanceDB-`chunks`-Tabelle; die konzeptionelle Trennung läuft über das `chunk_type`-Feld, nicht über getrennte Datenbanken (siehe ADR-008/ADR-012).
 
 **Abgeschlossen:**
 

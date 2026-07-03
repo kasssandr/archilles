@@ -196,6 +196,44 @@ def get_duplicate_tag(library_path: Path | None = None) -> str:
     return val if isinstance(val, str) and val.strip() else DEFAULT_DUPLICATE_TAG
 
 
+# Hardware-Tiers-V2 (§7): the single user-facing variable. ``auto`` lets plan()
+# derive the sensible path from the detected hardware; the explicit modes
+# (light/full-local/full-external) override it. Stored as ``mode`` in
+# ``.archilles/config.json``; the CLI ``--mode`` flag overrides the config.
+DEFAULT_MODE = "auto"
+
+
+def get_mode(library_path: Path | None = None) -> str:
+    """Return the configured indexing mode from ``.archilles/config.json``.
+
+    One of ``auto``/``light``/``full-local``/``full-external`` (the values
+    accepted by :func:`src.archilles.execution.plan`). The reader is lenient:
+    a missing config, missing/blank/non-string ``mode``, an unknown value, or
+    an unparseable file all fall back to :data:`DEFAULT_MODE` (``"auto"``).
+    Guarding here matters because ``plan()`` itself raises ``ValueError`` on an
+    invalid mode — a config typo must not crash an indexing run.
+    """
+    if library_path is None:
+        return DEFAULT_MODE
+
+    config_path = library_path / ".archilles" / "config.json"
+    if not config_path.exists():
+        return DEFAULT_MODE
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return DEFAULT_MODE
+
+    from src.archilles.execution import VALID_MODES
+
+    val = config.get("mode") if isinstance(config, dict) else None
+    if isinstance(val, str) and val in VALID_MODES:
+        return val
+    return DEFAULT_MODE
+
+
 # Built-in defaults for the embed-prepared embedder; mirror the argparse
 # defaults of the ``embed`` CLI command.
 _EMBEDDER_DEFAULTS = {

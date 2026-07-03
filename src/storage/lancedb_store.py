@@ -91,6 +91,11 @@ class LanceDBStore:
         "format": str,
         "indexed_at": str,
         "metadata_hash": str,  # Hash of Calibre metadata for change detection
+
+        # Hardware-Tiers-V2 §12: 1 = provisionally light (mode=full-external,
+        # waiting for an external hierarchical re-embed), 0 = final. Lets the
+        # discovery path tell "provisional light" from "deliberately light".
+        "pending_external": int,
     }
 
     def __init__(self, db_path: str, table_name: str = "chunks"):
@@ -121,6 +126,7 @@ class LanceDBStore:
         "annotation_source": "''",
         "annotation_hash": "''",
         "source_id": "''",
+        "pending_external": "0",
     }
 
     def _ensure_table(self):
@@ -272,6 +278,9 @@ class LanceDBStore:
                 "format": chunk.get("format") or "",
                 "indexed_at": chunk.get("indexed_at") or datetime.now().isoformat(),
                 "metadata_hash": chunk.get("metadata_hash") or "",
+
+                # Hardware-Tiers-V2 §12: provisional-light marker (default: final)
+                "pending_external": chunk.get("pending_external") or 0,
             }
 
             records.append(record)
@@ -699,6 +708,63 @@ class LanceDBStore:
             return len(results)
         except Exception:
             return 0
+
+    def mark_pending_external(self, book_id: str) -> int:
+        """Mark all chunks of a book as provisionally light (Hardware-Tiers-V2 §12).
+
+        Set after a full-external library indexes a new title provisionally light
+        (flat, local) so it is immediately searchable; the marker records that the
+        chunks still await an external hierarchical re-embed. Returns the number
+        of chunks marked.
+        """
+        return self.update_metadata_fields(book_id, {"pending_external": 1})
+
+    def clear_pending_external(self, book_id: str) -> int:
+        """Clear the pending_external marker for a book (Hardware-Tiers-V2 §12).
+
+        Replacing the provisional chunks with externally embedded ones clears the
+        marker implicitly (fresh chunks default to 0); this is the explicit path.
+        """
+        return self.update_metadata_fields(book_id, {"pending_external": 0})
+
+    def get_pending_external_book_ids(self) -> set[str]:
+        """Return the set of book_ids whose chunks are marked pending_external (§12).
+
+        Uses column projection — only reads book_id + pending_external, never the
+        text/vector columns. Books with no marker column yet (old DB before the
+        migration ran) yield an empty set.
+        """
+        if self.table is None:
+            return set()
+
+        columns = ['book_id', 'pending_external']
+        try:
+            lance_dataset = self.table.to_lance()
+            existing = set(lance_dataset.schema.names)
+            if 'pending_external' not in existing:
+                return set()
+            rows = lance_dataset.to_table(
+                columns=[c for c in columns if c in existing]
+            ).to_pylist()
+        except Exception:
+            try:
+                df = self.table.search().select(columns).limit(10_000_000).to_pandas()
+                if 'pending_external' not in df.columns:
+                    return set()
+                rows = df.to_dict(orient='records')
+            except Exception:
+                return set()
+
+        result: set[str] = set()
+        for row in rows:
+            val = row.get('pending_external')
+            if val is None or (isinstance(val, float) and val != val):  # None / NaN
+                continue
+            if int(val) == 1:
+                bid = row.get('book_id')
+                if bid:
+                    result.add(str(bid))
+        return result
 
     def delete_by_calibre_id(self, calibre_id: int) -> int:
         """Delete all chunks for a specific Calibre ID."""

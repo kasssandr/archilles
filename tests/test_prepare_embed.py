@@ -190,6 +190,7 @@ class TestJSONLRoundtrip:
                 get_by_book_id=lambda book_id, limit=1: [],   # not yet in LanceDB
                 add_chunks=lambda chunks, embeddings: len(chunks),
                 delete_by_book_id=lambda book_id: 0,
+                get_pending_external_book_ids=lambda: set(),
             ),
             device='cpu',
             batch_size=16,

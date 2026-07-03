@@ -184,6 +184,24 @@ def _index_priority_key(
     return (0 if is_priority else 1, rating_order, -entry['calibre_id'])
 
 
+def _resolve_execution_plan(library_path: Path):
+    """Resolve the ExecutionPlan for a library (Hardware-Tiers-V2 §10.4).
+
+    Same path as ``scripts/batch_index.resolve_indexing_plan``: ``get_mode()``
+    over ``config.json``, ``detect_hardware()``, and the canonical
+    ``IndexRecipe`` fed to the pure ``plan()``. Centralising it here lets the
+    watchdog index new titles with the same chunk schema as the bulk indexer
+    instead of the old flat default ("neue Titel werden flach indexiert").
+    """
+    from src.archilles.config import get_mode
+    from src.archilles.execution import plan
+    from src.archilles.hardware import detect_hardware
+    from src.archilles.recipe import default_recipe
+
+    mode = get_mode(Path(library_path))
+    return plan(detect_hardware(), default_recipe(), mode)
+
+
 class WatchdogScanner:
     """
     Idempotent scanner: safe to run multiple times; hash comparison skips
@@ -407,6 +425,13 @@ class WatchdogScanner:
                 self._queue_new_books(new_ids)
             if index_new or index_metadata_only:
                 rag = self._load_rag()
+                # Hardware-Tiers-V2 §12: full-external has no local hierarchical
+                # path here, so a new title is indexed *provisionally light* (flat,
+                # local — _load_rag forced hierarchical off) and marked
+                # pending_external; a later --prepare-pending-external run upgrades
+                # it via external embedding. Only full-content indexing is marked —
+                # phase1 metadata stubs are left to the fulltext path.
+                mark_pending = not self._resolve_plan().embed_local
                 ni0 = time.time()
                 cp_new = IndexingCheckpoint.load(self.checkpoint_file)
                 done_ids = {int(b) for b in cp_new.completed_books} if cp_new else set()
@@ -451,6 +476,8 @@ class WatchdogScanner:
                             rag.index_book(formats[0]['path'], str(cid), phase='phase1')
                         else:
                             rag.index_book(formats[0]['path'], str(cid), force=False)
+                            if mark_pending:
+                                rag.store.mark_pending_external(str(cid))
                         results['new_indexed'] += 1
                         cp_new.complete_book(cid)
                     except Exception as exc:
@@ -471,6 +498,10 @@ class WatchdogScanner:
         # backlog in one session (CTRL+C for graceful stop, checkpoint resumes).
         if index_fulltext_pending and results['fulltext_pending'] and not dry_run:
             rag = self._load_rag()
+            # Hardware-Tiers-V2 §12: under full-external the drained stub becomes
+            # flat (provisional light — _load_rag forced hierarchical off), so mark
+            # it pending_external just like a Phase-3 new title.
+            mark_pending = not self._resolve_plan().embed_local
             ft0 = time.time()
             cp_fulltext = IndexingCheckpoint.load(self.fulltext_checkpoint_file)
             done_ids = {int(b) for b in cp_fulltext.completed_books} if cp_fulltext else set()
@@ -521,6 +552,8 @@ class WatchdogScanner:
                 print(f"\n[{already_done + j}/{total_p4}] {meta.get('author', '')}: {entry['title']}")
                 try:
                     rag.index_book(formats[0]['path'], str(cid), force=False)
+                    if mark_pending:
+                        rag.store.mark_pending_external(str(cid))
                     results['fulltext_indexed'] += 1
                     cp_fulltext.complete_book(cid)
                 except Exception as exc:
@@ -558,12 +591,29 @@ class WatchdogScanner:
             logger.warning(f"Could not load indexed hashes: {exc}")
             return {}
 
+    def _resolve_plan(self):
+        """Resolve this library's ExecutionPlan (mode + detected hardware)."""
+        return _resolve_execution_plan(Path(self.library_path))
+
     def _load_rag(self):
-        """Load a full ArchillesRAG instance (with embedding model)."""
+        """Load a full ArchillesRAG instance, wired to the Hardware-Tiers-V2 plan.
+
+        The resolved ExecutionPlan drives batch size + device, and new titles use
+        the plan's chunk schema. ``full-external`` has no local hierarchical path
+        on the watchdog — its new titles are indexed *provisionally light* (flat,
+        local) and marked ``pending_external`` for a later external batch embed
+        (§12), so hierarchical is forced off whenever embedding is not local.
+        """
         from src.archilles.engine import ArchillesRAG
         from src.archilles.config import get_languages
-        return ArchillesRAG(db_path=self.db_path,
-                            languages=get_languages(Path(self.library_path)))
+        ep = self._resolve_plan()
+        hierarchical = ep.hierarchical and ep.embed_local
+        return ArchillesRAG(
+            db_path=self.db_path,
+            languages=get_languages(Path(self.library_path)),
+            execution_plan=ep,
+            hierarchical=hierarchical,
+        )
 
     def _annotation_files_signature(self, file_path: Path) -> list[int]:
         """Return a (book_mtime_ns, book_size, viewer_mtime_ns, viewer_size) tuple.
@@ -1055,11 +1105,27 @@ class ZoteroWatchdogScanner:
             logger.warning("Could not load indexed hashes: %s", exc)
             return {}
 
+    def _resolve_plan(self):
+        """Resolve this library's ExecutionPlan (mode + detected hardware)."""
+        return _resolve_execution_plan(Path(self.library_path))
+
     def _load_rag(self):
+        """Load a full ArchillesRAG instance, wired to the Hardware-Tiers-V2 plan.
+
+        Mirrors :meth:`WatchdogScanner._load_rag`: the resolved ExecutionPlan
+        drives batch/device, and new items use the plan's chunk schema instead of
+        the old flat default. ``full-external`` is forced flat (provisional light).
+        """
         from src.archilles.engine import ArchillesRAG
         from src.archilles.config import get_languages
-        return ArchillesRAG(db_path=self.db_path,
-                            languages=get_languages(Path(self.library_path)))
+        ep = self._resolve_plan()
+        hierarchical = ep.hierarchical and ep.embed_local
+        return ArchillesRAG(
+            db_path=self.db_path,
+            languages=get_languages(Path(self.library_path)),
+            execution_plan=ep,
+            hierarchical=hierarchical,
+        )
 
     def _load_annotation_cache(self) -> dict[str, str]:
         """Lazy-load the Zotero annotation cache ({item_key: att_modified_at})."""

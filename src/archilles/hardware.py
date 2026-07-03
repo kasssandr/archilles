@@ -19,6 +19,18 @@ logger = logging.getLogger(__name__)
 
 ProfileName = Literal["minimal", "balanced", "maximal"]
 
+# Internal hardware classes (Hardware-Tiers-V2 §4). These are detected
+# automatically and drive plan(); they are NOT part of the user-facing
+# vocabulary (which is auto/light/full-local/full-external).
+HardwareClass = Literal["cpu-only", "apple-mps", "gpu-small", "gpu-mid", "gpu-large"]
+
+# VRAM thresholds (GB): BGE-M3 (~2.5 GB) + bge-reranker-v2-m3 (~2.5 GB) +
+# activations peak at ~6–7 GB when run together, so 8 GB is the comfortable
+# floor for local GPU embedding + GPU reranking; ≥16 GB leaves room for large
+# batches.
+_VRAM_GPU_MID_MIN = 8
+_VRAM_GPU_LARGE_MIN = 16
+
 
 @dataclass
 class HardwareProfile:
@@ -119,6 +131,27 @@ def detect_hardware() -> HardwareProfile:
 
     logger.info(f"Detected hardware:\n{profile.summary()}")
     return profile
+
+
+def classify_hardware(profile: HardwareProfile) -> HardwareClass:
+    """Map a detected HardwareProfile to one of the five internal classes (§4).
+
+    CUDA is the primary accelerator: a CUDA GPU classifies by VRAM regardless of
+    MPS. Without CUDA, MPS yields ``apple-mps``; otherwise ``cpu-only``. Unknown
+    VRAM on a CUDA GPU is treated conservatively as ``gpu-small``.
+
+    This is a pure function — testable with synthetic specs, no real GPU needed.
+    """
+    if profile.cuda_available:
+        vram = profile.vram_gb
+        if vram is None or vram < _VRAM_GPU_MID_MIN:
+            return "gpu-small"
+        if vram < _VRAM_GPU_LARGE_MIN:
+            return "gpu-mid"
+        return "gpu-large"
+    if profile.mps_available:
+        return "apple-mps"
+    return "cpu-only"
 
 
 def _get_cpu_cores() -> int:

@@ -55,12 +55,14 @@ Usage:
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import sqlite3
 import statistics
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -78,15 +80,76 @@ from src.archilles.config import (
     get_excluded_tags,
     get_languages,
     get_library_path,
+    get_mode,
 )
 from src.archilles.constants import ChunkType, SectionType
-from src.archilles.hardware import detect_hardware, print_hardware_detection, select_profile_interactive
-from src.archilles.profiles import get_profile, list_profiles, IndexingProfile, create_index_metadata
+from src.archilles.execution import ExecutionPlan, plan
+from src.archilles.hardware import detect_hardware
+from src.archilles.profiles import get_profile, list_profiles
+from src.archilles.recipe import IndexRecipe, default_recipe
 from src.archilles.indexer import IndexingCheckpoint
 from src.archilles.sqlite_ro import connect_readonly
 
 # Preferred book formats in order of priority
 PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
+
+
+@dataclass(frozen=True)
+class IndexingResolution:
+    """Resolved indexing configuration for one batch_index run (Hardware-Tiers-V2).
+
+    Either ``profile_name`` (legacy ``--profile`` override) or ``execution_plan``
+    (the ``mode``-derived path) is set, never both. ``hierarchical`` and
+    ``prepare_only`` are the *effective* values after applying the advanced
+    ``--hierarchical`` force-on and the ``full-external`` → prepare-only rule.
+    """
+
+    profile_name: Optional[str]
+    execution_plan: Optional[ExecutionPlan]
+    hierarchical: bool
+    prepare_only: bool
+    resolved_mode: Optional[str]
+
+
+def resolve_indexing_plan(
+    *,
+    mode_cli: Optional[str],
+    mode_config: str,
+    profile_override: Optional[str],
+    hierarchical_flag: bool,
+    prepare_only_flag: bool,
+    hw,
+    recipe: IndexRecipe,
+) -> IndexingResolution:
+    """Decide how this run indexes — pure (hardware + recipe injected, no I/O).
+
+    Precedence:
+    - ``--profile`` (legacy/advanced) bypasses the plan entirely; the profile
+      drives batch/device as before, and ``hierarchical`` follows the flag only.
+    - Otherwise the mode (CLI over config) feeds :func:`plan` to build the
+      ExecutionPlan. ``--hierarchical`` is an advanced force-on (it can turn a
+      flat mode hierarchical, never the reverse — use ``--mode light`` for flat).
+      ``full-external`` has no local-embedding index path, so it forces
+      prepare-only (prepare locally → ``embed`` externally, §8).
+    """
+    if profile_override:
+        return IndexingResolution(
+            profile_name=profile_override,
+            execution_plan=None,
+            hierarchical=hierarchical_flag,
+            prepare_only=prepare_only_flag,
+            resolved_mode=None,
+        )
+
+    resolved_mode = mode_cli or mode_config
+    execution_plan = plan(hw, recipe, resolved_mode)
+    return IndexingResolution(
+        profile_name=None,
+        execution_plan=execution_plan,
+        hierarchical=hierarchical_flag or execution_plan.hierarchical,
+        prepare_only=prepare_only_flag or (not execution_plan.embed_local),
+        resolved_mode=resolved_mode,
+    )
 
 
 
@@ -731,6 +794,25 @@ def cleanup_orphans(
     return {'orphans_found': len(orphan_ids), 'orphans_removed': removed}
 
 
+def discover_pending_external_books(rag, library_path: Path) -> List[Dict[str, Any]]:
+    """Find books marked ``pending_external`` and resolve them to Calibre dicts.
+
+    The discovery half of the full-external trickle lifecycle (Hardware-Tiers-V2
+    §12): the watchdog indexes new titles *provisionally light* (flat, local) and
+    marks them; this collects those books so they can be re-prepared hierarchically
+    and embedded externally, replacing the provisional chunks.
+
+    Non-numeric book_ids (non-Calibre adapters) are skipped — the Calibre path
+    resolves IDs via ``metadata.db``. Returns book dicts ready for batch_prepare;
+    an empty list short-circuits without touching Calibre.
+    """
+    pending = rag.store.get_pending_external_book_ids()
+    numeric_ids = sorted(int(b) for b in pending if str(b).isdigit())
+    if not numeric_ids:
+        return []
+    return get_books_by_ids(library_path, numeric_ids)
+
+
 def _adapter_list_books(
     adapter,
     tag_filter: Optional[str] = None,
@@ -1365,7 +1447,11 @@ def batch_index(
     return stats
 
 
-def main():
+def build_parser() -> argparse.ArgumentParser:
+    """Build the batch_index argument parser.
+
+    Extracted from main() so the CLI defaults are unit-testable.
+    """
     parser = argparse.ArgumentParser(
         description="Batch index books from Calibre library into ARCHILLES RAG",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1503,8 +1589,16 @@ Profiles:
                         help='Enable OCR for scanned PDFs (auto-detect)')
     parser.add_argument('--force-ocr', action='store_true',
                         help='Force OCR even for digital PDFs')
+    parser.add_argument('--mode', choices=['auto', 'light', 'full-local', 'full-external'],
+                        default=None,
+                        help='Hardware-Tiers-V2 mode (overrides .archilles/config.json "mode"; '
+                             'default: auto). auto picks the path from detected hardware: '
+                             'capable GPU/Apple Silicon -> full-local (hierarchical, local), '
+                             'weak hardware -> light (flat, local, free). full-external prepares '
+                             'locally and embeds via the separate two-phase flow.')
     parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
-                        help='Hardware profile to use (auto-detects if not specified)')
+                        help='Advanced override: pin a legacy hardware profile '
+                             '(minimal/balanced/maximal), bypassing --mode/auto detection.')
     parser.add_argument('--show-profiles', action='store_true',
                         help='Show available profiles and exit')
     parser.add_argument('--hierarchical', action='store_true',
@@ -1520,6 +1614,12 @@ Profiles:
                         help='Remove index entries for books deleted from Calibre. '
                              'Can be used standalone or combined with an indexing run. '
                              'Use --dry-run to preview orphans without deleting.')
+    parser.add_argument('--prepare-pending-external', action='store_true',
+                        help='Discover books indexed provisionally light (full-external '
+                             'mode, marked pending_external) and re-prepare them '
+                             'hierarchically into --output-dir. Standalone operation; '
+                             'follow with `rag_demo.py embed --mode remote` to replace '
+                             'the provisional flat chunks with externally embedded ones.')
     parser.add_argument('--quality-select', action='store_true',
                         help='When a book has multiple formats (e.g. PDF+EPUB), '
                              'prepare both, compare chunk quality, and pick the better one. '
@@ -1529,14 +1629,21 @@ Profiles:
                              'Writes JSONL files to --output-dir. No GPU required.')
     parser.add_argument('--output-dir', default='./prepared_chunks',
                         help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks)')
-    parser.add_argument('--prepare-chunk-size', type=int, default=1024, metavar='TOKENS',
-                        help='Chunk size in tokens for --prepare-only (default: 1024). '
+    parser.add_argument('--prepare-chunk-size', type=int, default=None, metavar='TOKENS',
+                        help='Chunk size in tokens for --prepare-only '
+                             '(default: from the index recipe, 512). '
                              'Larger values = fewer chunks, less DB volume, slightly broader retrieval. '
                              'Has no effect on the live --skip-existing path.')
-    parser.add_argument('--prepare-overlap', type=int, default=128, metavar='TOKENS',
-                        help='Chunk overlap in tokens for --prepare-only (default: 128). '
+    parser.add_argument('--prepare-overlap', type=int, default=None, metavar='TOKENS',
+                        help='Chunk overlap in tokens for --prepare-only '
+                             '(default: from the index recipe, 64). '
                              'Has no effect on the live --skip-existing path.')
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Handle --show-profiles
@@ -1545,8 +1652,11 @@ Profiles:
         sys.exit(0)
 
     # Validate: require --all/--tag/--author/--ids unless --cleanup-orphans is the sole operation
-    if not args.all and not args.tag and not args.author and not args.ids and not args.collection and not args.cleanup_orphans:
-        parser.error("one of the arguments --all --tag --author --collection --cleanup-orphans is required")
+    if (not args.all and not args.tag and not args.author and not args.ids
+            and not args.collection and not args.cleanup_orphans
+            and not args.prepare_pending_external):
+        parser.error("one of the arguments --all --tag --author --collection "
+                     "--cleanup-orphans --prepare-pending-external is required")
 
     # Parse reindex-before date if specified
     reindex_before = None
@@ -1568,26 +1678,45 @@ Profiles:
     except Exception:
         print(f"📚 Library: {library_path} (no adapter — legacy mode)")
 
-    # Determine hardware profile
-    if args.profile:
-        # User specified profile explicitly
-        profile_name = args.profile
-        profile = get_profile(profile_name)
-        print(f"⚙️  Using profile: {profile_name.upper()} (user-specified)")
-    elif args.non_interactive:
-        # Non-interactive mode: auto-detect and use recommended
-        hw = detect_hardware()
-        profile_name = hw.recommend_profile()
-        profile = get_profile(profile_name)
-        print(f"⚙️  Using profile: {profile_name.upper()} (auto-detected)")
-    else:
-        # Interactive mode: show hardware detection and let user choose
-        profile_name = select_profile_interactive()
-        profile = get_profile(profile_name)
+    # Determine the execution plan (Hardware-Tiers-V2 §7/§10.3): a single `mode`
+    # variable (CLI over config.json, default auto) feeds plan() with the detected
+    # hardware. auto picks the path from the hardware class; `--profile` stays as a
+    # legacy advanced override. No interactive profile prompt anymore — the normal
+    # user makes zero-to-one decision and the machine does the rest.
+    resolution = resolve_indexing_plan(
+        mode_cli=args.mode,
+        mode_config=get_mode(get_library_path(required=False)),
+        profile_override=args.profile,
+        hierarchical_flag=args.hierarchical,
+        prepare_only_flag=getattr(args, 'prepare_only', False),
+        hw=detect_hardware(),
+        recipe=default_recipe(),
+    )
 
-    print(f"    Model: {profile.embedding_model}")
-    print(f"    Device: {profile.embedding_device}")
-    print(f"    Chunk size: {profile.chunk_size} tokens")
+    if resolution.profile_name:
+        profile = get_profile(resolution.profile_name)
+        print(f"⚙️  Profile (advanced override): {resolution.profile_name.upper()}")
+        print(f"    Model: {profile.embedding_model}    Device: {profile.embedding_device}")
+    else:
+        ep = resolution.execution_plan
+        print(f"⚙️  Mode: {resolution.resolved_mode}  →  hardware class: {ep.hardware_class}, "
+              f"resolved: {ep.mode}")
+        print(f"    Embedding device: {ep.embedding_device}    Batch: {ep.batch_size}    "
+              f"Hierarchical: {resolution.hierarchical}    Reranker: {ep.rerank_device}")
+        if resolution.prepare_only and not getattr(args, 'prepare_only', False):
+            print("    ℹ️  full-external has no local-embedding index path — switching to "
+                  "prepare-only.\n        Prepared chunks go to --output-dir; run the separate "
+                  "`embed` step to embed them externally.")
+
+    # full-external forces prepare-only (prepare locally, embed elsewhere — §8).
+    args.prepare_only = resolution.prepare_only
+
+    # --prepare-pending-external re-prepares provisionally-light books (§12): it
+    # needs no embedding model (prepare semantics) and always produces hierarchical
+    # chunks — the upgrade target that replaces the flat provisional ones.
+    if args.prepare_pending_external:
+        args.prepare_only = True
+        resolution = dataclasses.replace(resolution, hierarchical=True)
 
     # Get books based on criteria
     min_rating = args.min_rating or 0
@@ -1612,7 +1741,8 @@ Profiles:
 
     # Initialize RAG
     # DummyRAG only for pure dry-run without skip-existing and without cleanup-orphans
-    needs_real_rag = args.skip_existing or args.cleanup_orphans or not args.dry_run
+    needs_real_rag = (args.skip_existing or args.cleanup_orphans
+                      or args.prepare_pending_external or not args.dry_run)
     if not needs_real_rag:
         class DummyRAG:
             def __init__(self):
@@ -1626,8 +1756,9 @@ Profiles:
                 enable_ocr=args.enable_ocr,
                 force_ocr=args.force_ocr,
                 languages=get_languages(get_library_path(required=False)),
-                profile=profile_name,
-                hierarchical=args.hierarchical,
+                profile=resolution.profile_name,
+                execution_plan=resolution.execution_plan,
+                hierarchical=resolution.hierarchical,
                 use_modular_pipeline=args.use_modular_pipeline,
                 adapter=adapter,
                 skip_model=getattr(args, 'prepare_only', False),
@@ -1641,6 +1772,30 @@ Profiles:
             print(str(e))
             print(f"\n{'='*60}\n")
             sys.exit(1)
+
+    # --prepare-pending-external: standalone discovery + re-prepare (§12).
+    # Find provisionally-light books, re-prepare them hierarchically; the user
+    # then runs `embed --mode remote` to replace the flat chunks externally.
+    if args.prepare_pending_external:
+        books = discover_pending_external_books(rag, library_path)
+        if not books:
+            print("✅ No books awaiting external embedding (pending_external is empty)")
+            return
+        print(f"🔎 {len(books)} book(s) awaiting external embedding (pending_external)")
+        stats = batch_prepare(
+            books=books,
+            rag=rag,
+            output_dir=args.output_dir,
+            dry_run=args.dry_run,
+            prefer_format=args.prefer_format,
+            quality_select=getattr(args, 'quality_select', False),
+        )
+        print("\n  ▶ Next: embed externally to replace the provisional flat chunks:")
+        print(f"      python scripts/rag_demo.py embed --input-dir {args.output_dir} "
+              f"--mode remote")
+        if stats['failed'] > 0:
+            sys.exit(1)
+        return
 
     # Book selection + indexing (skipped when --cleanup-orphans is used standalone)
     use_adapter = adapter is not None and adapter.adapter_type != "calibre"

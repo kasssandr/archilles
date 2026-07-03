@@ -132,17 +132,88 @@ If the preferred format is not available, the next available format is used auto
 python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub --reindex-before 2099-01-01
 ```
 
-#### Hardware profiles
+#### Indexing mode (hardware-adaptive)
+
+Archilles detects your hardware automatically and picks a sensible indexing path —
+by default you configure nothing. If you want control, there is a single variable,
+`mode`, set in `.archilles/config.json` or overridden per run with `--mode`:
 
 ```bash
-# Let Archilles detect hardware automatically (default)
+# Auto-detect hardware and pick the path (default — nothing to set)
 python scripts/batch_index.py --tag "Key-Literature"
 
-# Explicitly set a profile
+# Pin a mode explicitly (overrides config.json)
+python scripts/batch_index.py --tag "Key-Literature" --mode light
+python scripts/batch_index.py --tag "Key-Literature" --mode full-local
+python scripts/batch_index.py --tag "Key-Literature" --mode full-external
+```
+
+```jsonc
+// .archilles/config.json
+{ "mode": "auto" }   // auto | light | full-local | full-external
+```
+
+The internal hardware classes collapse onto three understandable ways:
+
+| Mode | For | What it does |
+|---|---|---|
+| **light** | weak hardware, trying it out | flat chunks, local embedding, free — searchable immediately, no Small-to-Big |
+| **full-local** | capable GPU / Apple Silicon | hierarchical (Small-to-Big) chunks, local embedding — the quality default |
+| **full-external** | weak hardware that wants full quality | hierarchical chunks prepared locally, embedded on a stronger machine |
+
+Under `auto` (the default), capable hardware → `full-local`, weak hardware → `light`.
+Auto never silently requires external embedding, so there is no surprise cost or setup.
+
+The embedding model and vector dimension (BGE-M3, 1024) never change between modes,
+so databases stay compatible across machines — only throughput and chunk layout
+differ. A flat (`light`) database still works; at retrieval time its chunks fall
+back to the surrounding `window_text` instead of a parent chunk.
+
+##### Advanced
+
+**Legacy profile override.** The old `minimal`/`balanced`/`maximal` profiles still
+exist as a power-user override that bypasses `--mode`/auto detection (they differ
+only in batch size):
+
+```bash
 python scripts/batch_index.py --tag "Key-Literature" --profile minimal    # 4–6 GB VRAM
 python scripts/batch_index.py --tag "Key-Literature" --profile balanced   # 8–12 GB VRAM
 python scripts/batch_index.py --tag "Key-Literature" --profile maximal    # 16+ GB VRAM
 ```
+
+**Internal hardware classes.** `auto` classifies your machine into one of five
+classes — `cpu-only`, `apple-mps`, `gpu-small` (<8 GB VRAM), `gpu-mid` (8–16 GB),
+`gpu-large` (≥16 GB) — which drive batch size, the embedding device, and the
+reranker device (CPU on weak hardware, GPU from `gpu-mid` up). You never name these
+directly; they exist only so `auto` can choose well.
+
+**full-external workflow.** In `full-external`, bulk indexing is automatically
+prepare-only: it writes JSONL chunks to `--output-dir`, which you embed on a
+stronger machine (`local-first`: only text chunks leave your machine, never the
+books or the library DB):
+
+```bash
+# 1. Prepare locally (no GPU needed)
+python scripts/batch_index.py --tag "Key-Literature" --mode full-external
+# 2. Embed the prepared chunks (here against a remote embedding server)
+python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode remote --host http://…
+```
+
+For the ongoing trickle of new titles, the watchdog indexes them *provisionally
+light* (flat, local — searchable at once) and marks them. Drain that backlog later
+and replace the flat chunks with externally embedded hierarchical ones:
+
+```bash
+# Re-prepare the provisionally-light books hierarchically …
+python scripts/batch_index.py --prepare-pending-external
+# … then embed externally; marked books are replaced automatically (no --force)
+python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode remote --host http://…
+```
+
+**Full offload (LAN).** Embedding-only offload (above) is the data-sparse default.
+For a fully offloaded run, run all of Archilles on a strong machine in your LAN
+against a copy/share of the library and copy the finished `rag_db` back — a
+documented operational scenario, not a cloud feature.
 
 #### Logging and automation
 

@@ -36,13 +36,13 @@ class IndexingProfile:
     batch_size: int
     chunk_size: int  # in tokens
     chunk_overlap: int
-    max_parallel_docs: int
     description: str
 
-    # These defaults are overridden by every profile definition below,
-    # but kept as sensible fallbacks for ad-hoc construction.
-    embedding_dimension: int = 384
-    max_tokens_per_chunk: int = 512
+    # Note: model/dimension and the chunk schema (child/parent sizes,
+    # hierarchical) are owned by IndexRecipe (src/archilles/recipe.py), the
+    # single source of truth for the main path. chunk_size/chunk_overlap stay
+    # here only for the deferred modular pipeline (pipeline.py), which still
+    # reads them; they are removed together with that path in a later stage.
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -71,28 +71,23 @@ def _build_profiles() -> Dict[ProfileName, IndexingProfile]:
         embedding_device=get_best_device(),
         chunk_size=512,
         chunk_overlap=128,
-        embedding_dimension=1024,
-        max_tokens_per_chunk=8192,
     )
     return {
         "minimal": IndexingProfile(
             name="minimal",
             batch_size=8,
-            max_parallel_docs=2,
             description="For 4-6 GB GPUs, Apple Silicon (MPS), or CPU-only. Full quality, ~2–15 min/book.",
             **common,
         ),
         "balanced": IndexingProfile(
             name="balanced",
             batch_size=32,
-            max_parallel_docs=4,
             description="For 8-12GB GPUs (RTX 3060, RTX 2070). Full quality, ~30s/book.",
             **common,
         ),
         "maximal": IndexingProfile(
             name="maximal",
             batch_size=64,
-            max_parallel_docs=8,
             description="For 16GB+ GPUs (RTX 3090, RTX 4080). Full quality, ~15s/book.",
             **common,
         ),

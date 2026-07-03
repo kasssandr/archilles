@@ -303,7 +303,7 @@ Search through your collection of primary sources and secondary literature simul
 
 ## Product Roadmap
 
-### Current Release: v0.9 Beta (March 2026)
+### Current Release: v0.9 (June 2026)
 
 ✅ **Core functionality complete:**
 - Full-text indexing (30+ formats, PyMuPDF primary for PDFs)
@@ -314,7 +314,7 @@ Search through your collection of primary sources and secondary literature simul
 - Multi-language support (75+ languages, stop-word removal for 12 languages)
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
-- Hardware-adaptive indexing profiles (minimal/balanced/maximal; CUDA, Apple Silicon MPS, CPU)
+- Hardware-adaptive indexing: auto-detects your machine and picks the path; one optional `mode` knob (light / full-local / full-external). CUDA, Apple Silicon MPS, CPU
 - Streamlit Web UI *(experimental)*
 - Section-type filtering (exclude bibliography/index noise)
 - Context expansion (Small-to-Big retrieval with `window_text`)
@@ -324,6 +324,7 @@ Search through your collection of primary sources and secondary literature simul
 - `list_books_by_author` — direct Calibre metadata query, reliable for articles and short texts
 - Bibliography export: BibTeX, RIS, EndNote, JSON, CSV
 - Crash-safe batch indexing with `progress.db` checkpoint system and backup rotation
+- Incremental sync: a watchdog detects new/changed books and indexes them without a full re-index (two-phase metadata → fulltext, scheduler-driven)
 - Duplicate detection and `calibre://` URI links for direct book access
 - **Source adapters**: Calibre, Zotero, Obsidian vaults, plain folders — not just Calibre anymore
 - **Structure-aware PDF chunking**: chapter/section metadata from TOC, running footer removal
@@ -332,7 +333,6 @@ Search through your collection of primary sources and secondary literature simul
 ### Coming in v1.0
 
 🚧 **Planned improvements:**
-- Incremental indexing (index new books without full re-index of the collection)
 - Docling-based Markdown extraction (structured output from complex academic PDFs)
 - VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)
 

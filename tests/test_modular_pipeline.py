@@ -181,10 +181,7 @@ def _profile(chunk_size=512, chunk_overlap=128):
         batch_size=8,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        max_parallel_docs=2,
         description="test profile",
-        embedding_dimension=1024,
-        max_tokens_per_chunk=8192,
     )
 
 
