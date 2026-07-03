@@ -21,6 +21,7 @@ from src.archilles.watchdog import (
     _compute_zotero_metadata_hash,
     _zotero_metadata_for_scan,
 )
+from src.adapters.zotero_adapter import ZoteroAdapter
 
 
 # ── Fixture helpers ──────────────────────────────────────────────
@@ -331,3 +332,100 @@ class TestZoteroWatchdogScan:
                              ann_cache={})
         assert "SEED1" not in results['annotations_changed']
         assert "SEED1" in results['unchanged']
+
+
+# ── Finding 4.3: annotation cache commits per successful Phase-2 update ──
+
+
+class TestZoteroAnnotationCacheCommit:
+    """The att_modified cache must advance only AFTER a successful re-index, so
+    a failed or interrupted delta re-detects the item on the next scan instead
+    of silently swallowing the annotation update (the Calibre scanner is immune
+    because it compares against the hash stored in LanceDB)."""
+
+    OLD = "2025-06-01T00:00:00"
+    NEW = "2025-06-02T00:00:00"
+
+    def _prep(self, tmp_path, keys):
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        items = [{"itemID": i + 1, "key": k, "title": "T", "att_modified": self.NEW}
+                 for i, k in enumerate(keys)]
+        _build_zotero_db(lib, items)
+        scanner = _make_scanner(lib, tmp_path)
+        scan_items = _zotero_metadata_for_scan(lib)
+        stored = {
+            k: {"metadata_hash": _compute_zotero_metadata_hash(v), "annotation_hash": ""}
+            for k, v in scan_items.items()
+        }
+        scanner._load_indexed_hashes = lambda: stored
+        # Older cached att_mod → each item is an annotation change.
+        scanner._annotation_cache = {k: self.OLD for k in keys}
+        return scanner
+
+    def test_failed_delta_is_redetected_next_scan(self, tmp_path, monkeypatch):
+        scanner = self._prep(tmp_path, ["AKEY"])
+        monkeypatch.setattr(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf"))
+
+        class RaisingRAG:
+            def index_book(self, path, key, force=False):
+                raise RuntimeError("boom")
+
+        scanner._load_rag = lambda: RaisingRAG()
+
+        r1 = scanner.scan(dry_run=False, queue_new=False)
+        assert "AKEY" in r1["annotations_changed"]
+        assert r1["errors"]
+        # Cache must NOT have advanced past the failure.
+        assert scanner._annotation_cache["AKEY"] == self.OLD
+
+        r2 = scanner.scan(dry_run=False, queue_new=False)
+        assert "AKEY" in r2["annotations_changed"]
+
+    def test_successful_update_is_unchanged_next_scan(self, tmp_path, monkeypatch):
+        scanner = self._prep(tmp_path, ["AKEY"])
+        monkeypatch.setattr(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf"))
+
+        class OkRAG:
+            def index_book(self, path, key, force=False):
+                return {"status": None}
+
+        scanner._load_rag = lambda: OkRAG()
+
+        r1 = scanner.scan(dry_run=False, queue_new=False)
+        assert "AKEY" in r1["annotations_changed"]
+        assert scanner._annotation_cache["AKEY"] == self.NEW  # committed
+
+        r2 = scanner.scan(dry_run=False, queue_new=False)
+        assert "AKEY" in r2["unchanged"]
+        assert "AKEY" not in r2["annotations_changed"]
+
+    def test_shutdown_after_first_item_redetects_second(self, tmp_path, monkeypatch):
+        scanner = self._prep(tmp_path, ["AKEY", "BKEY"])
+        monkeypatch.setattr(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf"))
+
+        class ShutdownAfterFirst:
+            def __init__(self, sc):
+                self._sc = sc
+
+            def index_book(self, path, key, force=False):
+                # Processed one item, then request shutdown so the loop breaks
+                # before the second (checked at the top of the next iteration).
+                self._sc._shutdown_requested = True
+                return {"status": None}
+
+        scanner._load_rag = lambda: ShutdownAfterFirst(scanner)
+
+        r1 = scanner.scan(dry_run=False, queue_new=False)
+        assert r1["delta_updates"] == 1                       # only AKEY processed
+        assert scanner._annotation_cache["AKEY"] == self.NEW  # committed
+        assert scanner._annotation_cache["BKEY"] == self.OLD  # not reached
+
+        # Next scan runs cleanly and must re-detect the un-committed BKEY.
+        scanner._shutdown_requested = False
+        scanner._load_rag = lambda: type("OK", (), {
+            "index_book": lambda self, path, key, force=False: {"status": None}
+        })()
+        r2 = scanner.scan(dry_run=False, queue_new=False)
+        assert "BKEY" in r2["annotations_changed"]
+        assert "AKEY" in r2["unchanged"]

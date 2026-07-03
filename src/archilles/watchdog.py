@@ -982,6 +982,11 @@ class ZoteroWatchdogScanner:
 
         indexed_hashes = self._load_indexed_hashes()
         ann_cache = self._load_annotation_cache()
+        # Deferred annotation-cache writes (finding 4.3): a changed att_modified
+        # is committed to the cache only after Phase 2 has re-indexed the item,
+        # so a failed or interrupted delta re-detects it next scan instead of
+        # silently swallowing the update.
+        pending_cache: dict[str, str] = {}
 
         for key, data in zotero_items.items():
             if self.excluded_tags_lower:
@@ -1008,12 +1013,11 @@ class ZoteroWatchdogScanner:
             cached_att_mod = ann_cache.get(key, "")
             annot_changed = bool(cached_att_mod) and current_att_mod != cached_att_mod
 
-            # Update cache regardless of dry_run (it's a local file, not LanceDB)
-            if current_att_mod and current_att_mod != cached_att_mod:
-                ann_cache[key] = current_att_mod
-                self._annotation_cache_dirty = True
+            # First-seen seeding is not a change signal — cache it immediately.
+            # A genuine change (annot_changed) is deferred to Phase 2 (4.3).
+            if annot_changed:
+                pending_cache[key] = current_att_mod
             elif not cached_att_mod and current_att_mod:
-                # First time seeing this item — seed the cache, no change triggered
                 ann_cache[key] = current_att_mod
                 self._annotation_cache_dirty = True
 
@@ -1046,6 +1050,13 @@ class ZoteroWatchdogScanner:
                 try:
                     rag.index_book(str(file_path), key, force=False)
                     results['delta_updates'] += 1
+                    # Commit the deferred annotation-cache value now that the
+                    # re-index succeeded (4.3). Metadata-only changes have no
+                    # pending entry; failed/shutdown-skipped items keep their
+                    # old cached value and are re-detected next scan.
+                    if key in pending_cache:
+                        ann_cache[key] = pending_cache[key]
+                        self._annotation_cache_dirty = True
                 except Exception as exc:
                     logger.error("Delta update failed for key=%s: %s", key, exc)
                     results['errors'].append({'doc_id': key, 'error': str(exc)})
