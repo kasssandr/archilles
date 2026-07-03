@@ -1118,13 +1118,18 @@ class ZoteroWatchdogScanner:
         """
         from src.archilles.engine import ArchillesRAG
         from src.archilles.config import get_languages
+        from src.adapters.zotero_adapter import ZoteroAdapter
         ep = self._resolve_plan()
         hierarchical = ep.hierarchical and ep.embed_local
+        # Pass the adapter (finding 4.1b): without it, delta re-indexing runs
+        # _extract_metadata through the Calibre path, finds no metadata.db above
+        # the Zotero storage tree, extracts {} and wipes hashes / abstracts.
         return ArchillesRAG(
             db_path=self.db_path,
             languages=get_languages(Path(self.library_path)),
             execution_plan=ep,
             hierarchical=hierarchical,
+            adapter=ZoteroAdapter(self.library_path),
         )
 
     def _load_annotation_cache(self) -> dict[str, str]:

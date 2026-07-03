@@ -96,7 +96,11 @@ class TestZoteroLoadRagIsPlanAware:
 
     def test_zotero_full_local_passes_hierarchical_plan(self, tmp_path):
         from src.archilles.watchdog import ZoteroWatchdogScanner
+        from tests.test_zotero_watchdog import _build_zotero_db
 
+        # _load_rag now constructs a ZoteroAdapter (finding 4.1b), which needs a
+        # real zotero.sqlite in the library path.
+        _build_zotero_db(tmp_path, [{"itemID": 1, "key": "ZK1", "title": "T"}])
         scanner = ZoteroWatchdogScanner(
             library_path=tmp_path,
             db_path=str(tmp_path / ".archilles" / "rag_db"),

@@ -247,6 +247,35 @@ class Indexer:
         from src.archilles.hashing import compute_annotation_hash
         return compute_annotation_hash(annotations)
 
+    def _resolve_metadata_hash(self, book_id: Optional[str],
+                               book_metadata: Dict[str, Any]) -> str:
+        """Canonical metadata hash for change detection (finding 4.1a).
+
+        Adapter-backed sources own their hash: Zotero hashes a different field
+        set (title/authors/tags/abstract/date) than the Calibre-style
+        comments/tags/title/author/publisher. The value stored at index time
+        must match what the watchdog scanner later computes, so prefer the
+        adapter's source-specific hash. Fall back to the Calibre-style hash over
+        the extracted metadata when there is no adapter or the adapter does not
+        implement hashing (SourceAdapter base returns "").
+
+        Reindex-storm invariant: for Calibre this must stay byte-identical to
+        the old ``_compute_metadata_hash(extracted_metadata)`` — CalibreAdapter
+        delegates to the same canonical function (guarded by
+        tests/test_zotero_hash_change_detection.py + test_p0_regressions.py).
+        """
+        adapter = self._rag._adapter
+        if adapter is not None and book_id:
+            try:
+                adapter_hash = adapter.compute_metadata_hash(str(book_id))
+            except Exception as exc:
+                print(f"  ⚠️  adapter metadata hash failed for {book_id}: {exc} — "
+                      f"falling back to extracted-metadata hash.")
+                adapter_hash = ""
+            if adapter_hash:
+                return adapter_hash
+        return self._compute_metadata_hash(book_metadata) if book_metadata else ''
+
     def _extract_pdf_metadata(self, file_path: Path) -> Dict[str, Any]:
         """Extract metadata from PDF files."""
         metadata = {}
@@ -671,7 +700,7 @@ class Indexer:
             else:
                 # Check if metadata or annotations have changed (smart update without full re-index)
                 book_metadata = self._extract_metadata(book_path)
-                current_meta_hash = self._compute_metadata_hash(book_metadata)
+                current_meta_hash = self._resolve_metadata_hash(book_id, book_metadata)
 
                 # Check annotation changes
                 try:
@@ -781,7 +810,7 @@ class Indexer:
 
         # Prepare chunks with metadata
         indexed_at = datetime.now().isoformat()
-        meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
+        meta_hash = self._resolve_metadata_hash(book_id, book_metadata)
         chunks = self._build_chunk_dicts(extracted, book_id, book_metadata, indexed_at, meta_hash)
 
         # Collect extra embedding arrays for comments/annotations
@@ -991,7 +1020,7 @@ class Indexer:
 
         # Step 2: Build chunk dicts (shared with index_book)
         indexed_at = datetime.now().isoformat()
-        meta_hash = self._compute_metadata_hash(book_metadata) if book_metadata else ''
+        meta_hash = self._resolve_metadata_hash(book_id, book_metadata)
         chunks = self._build_chunk_dicts(extracted, book_id, book_metadata, indexed_at, meta_hash)
 
         # Step 2b: Add Calibre comments as structured chunk(s) (if available)
@@ -1380,6 +1409,19 @@ class Indexer:
             state: Book state from store.get_book_state() (finding 8.7 —
                 replaces the old row-window view of existing chunks).
         """
+        # Refuse destructive empty updates (finding 4.1c): empty book_metadata
+        # against a non-empty stored hash means extraction returned nothing
+        # (e.g. an adapterless Zotero delta, a missing/renamed file). Writing
+        # here would set metadata_hash='' — disabling all future change
+        # detection for this book (bool('') is False) — and delete the comment/
+        # abstract chunk with nothing to re-add. Skip and re-detect next scan.
+        if not book_metadata and state.get('metadata_hash'):
+            print(f"  ⚠️  {book_id}: metadata extraction returned empty but a stored "
+                  f"hash exists — skipping update to avoid wiping the hash / "
+                  f"deleting the comment chunk.")
+            return {'book_id': book_id, 'status': 'metadata_extract_failed',
+                    'chunks_indexed': 0}
+
         start_time = time.time()
         meta_changed = new_hash != state.get('metadata_hash', '')
         annot_changed = annotations is not None
