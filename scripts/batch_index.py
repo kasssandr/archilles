@@ -1658,7 +1658,10 @@ Profiles:
                         help='Extract and chunk books without embedding (Phase 1 of two-phase indexing). '
                              'Writes JSONL files to --output-dir. No GPU required.')
     parser.add_argument('--output-dir', default='./prepared_chunks',
-                        help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks)')
+                        help='Output directory for --prepare-only JSONL files (default: ./prepared_chunks). '
+                             'For --prepare-pending-external, use a dedicated (smaller) directory rather than '
+                             "sharing it with a large corpus prepare run — the trickle's embed checkpoint "
+                             're-scans every file in --input-dir on each run.')
     parser.add_argument('--prepare-chunk-size', type=int, default=None, metavar='TOKENS',
                         help='Chunk size in tokens for --prepare-only '
                              '(default: from the index recipe, 512). '
@@ -1817,6 +1820,10 @@ def main():
             print("✅ No books awaiting external embedding (pending_external is empty)")
             return
         print(f"🔎 {len(books)} book(s) awaiting external embedding (pending_external)")
+        if args.output_dir == './prepared_chunks':
+            print("  ℹ️  Using the default --output-dir. If this is shared with a large "
+                  "corpus prepare run, consider a dedicated (smaller) directory for the "
+                  "trickle — embed re-scans every file in --input-dir on each run.")
         stats = batch_prepare(
             books=books,
             rag=rag,

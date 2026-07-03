@@ -215,10 +215,13 @@ light* (flat, local — searchable at once) and marks them. Drain that backlog l
 and replace the flat chunks with externally embedded hierarchical ones:
 
 ```bash
-# Re-prepare the provisionally-light books hierarchically …
-python scripts/batch_index.py --prepare-pending-external
+# Re-prepare the provisionally-light books hierarchically, into a dedicated
+# (small) directory — not the big corpus prepare's --output-dir. embed
+# re-scans every file in --input-dir on each run, so sharing a directory
+# with thousands of already-embedded files makes every trickle run slower.
+python scripts/batch_index.py --prepare-pending-external --output-dir ./trickle_chunks
 # … then embed externally; marked books are replaced automatically (no --force)
-python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode remote --host http://…
+python scripts/rag_demo.py embed --input-dir ./trickle_chunks --mode remote --host http://…
 ```
 
 > ⚠️ **Switching a library back to `full-local`/`light` strands `pending_external`
