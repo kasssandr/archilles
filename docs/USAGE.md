@@ -221,6 +221,13 @@ python scripts/batch_index.py --prepare-pending-external
 python scripts/rag_demo.py embed --input-dir ./prepared_chunks --mode remote --host http://…
 ```
 
+> ⚠️ **Switching a library back to `full-local`/`light` strands `pending_external`
+> markers.** If you switch `mode` away from `full-external` after some books were
+> marked for the trickle upgrade, nothing clears or upgrades them: a local
+> `--skip-existing` run skips them (they already have content chunks), and only
+> `--prepare-pending-external` + `embed` consumes the marker. Run that pair once
+> before switching modes, or accept that those titles stay on their old chunks.
+
 **Full offload (LAN).** Embedding-only offload (above) is the data-sparse default.
 For a fully offloaded run, run all of Archilles on a strong machine in your LAN
 against a copy/share of the library and copy the finished `rag_db` back — a
