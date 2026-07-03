@@ -1122,13 +1122,14 @@ class Indexer:
                 skipped += 1
                 continue
 
-            # Check LanceDB for existing chunks.
-            # Provisional-light books are always replaced (see above).
+            # Check LanceDB for existing chunks (2.4): read full book state
+            # instead of sampling one arbitrary row — get_by_book_id(limit=1)
+            # could return a metadata/annotation row and misjudge whether real
+            # content exists. Provisional-light books are always replaced.
             book_force = force or book_id in pending_external_ids
-            existing = self._rag.store.get_by_book_id(book_id, limit=1)
-            content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
-            if content and not book_force:
-                print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
+            state = self._rag.store.get_book_state(book_id)
+            if state['has_content'] and not book_force:
+                print(f"  {book_id}: already in LanceDB ({state['content_count']} content chunks). Skipping.")
                 cp.skip_book(file_key)
                 embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
                 skipped += 1
@@ -1158,16 +1159,30 @@ class Indexer:
 
             embed_time = time.time() - start
 
-            # Replace only now that the embeddings exist (2.1).
+            # Replace only now that the embeddings exist (2.1). Delete every
+            # existing chunk EXCEPT annotations (2.2): the prepared file never
+            # carries user highlights, so a blanket delete would drop them.
+            # Guarded on total>0 (2.4) so a stub-only book (e.g. a leftover
+            # phase1_metadata row) has its stub cleaned up when the real
+            # content arrives, not just force/pending replacements.
             replaced = ''
-            if content and book_force:
-                deleted = self._rag.store.delete_by_book_id(book_id)
+            if state['total'] > 0:
+                deleted = self._rag.store.delete_by_book_id_except_annotations(book_id)
                 replaced = (f" (replaced {deleted} provisional flat chunks)"
                             if book_id in pending_external_ids
                             else f" (deleted {deleted} old chunks)")
 
             # Store in LanceDB
             num_added = self._rag.store.add_chunks(chunks, embeddings_array)
+
+            # Preserving annotations means the replace can no longer rely on
+            # "delete everything → marker gone" to de-flag a pending_external
+            # book: mark_pending_external stamps the marker on every chunk, so a
+            # surviving annotation would keep the book pending forever. Clear it
+            # explicitly now that fresh (external/local) content is in place.
+            if book_id in pending_external_ids:
+                self._rag.store.clear_pending_external(book_id)
+
             print(f"{num_added} indexed ({embed_time:.1f}s){replaced}")
 
             total_books += 1

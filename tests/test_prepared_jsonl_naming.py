@@ -129,9 +129,13 @@ def _embed_rag():
     return SimpleNamespace(
         embedding_model=SimpleNamespace(encode=_fake_encode),
         store=SimpleNamespace(
-            get_by_book_id=lambda book_id, limit=1: [],
+            get_book_state=lambda book_id: {
+                "total": 0, "has_content": False, "content_count": 0,
+                "metadata_hash": "", "annotation_hash": "", "format": "",
+            },
             add_chunks=lambda chunks, embeddings: len(chunks),
-            delete_by_book_id=lambda book_id: 0,
+            delete_by_book_id_except_annotations=lambda book_id: 0,
+            clear_pending_external=lambda book_id: 0,
             get_pending_external_book_ids=lambda: set(),
         ),
         device="cpu",

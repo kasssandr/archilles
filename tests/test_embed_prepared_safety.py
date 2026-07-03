@@ -44,21 +44,25 @@ def _make_rag(events, *, content_books=(), pending=(), encode=None):
         events.append(("embed", len(texts)))
         return np.zeros((len(texts), 1024), dtype=np.float32)
 
-    def get_by_book_id(book_id, limit=1):
-        return [{"chunk_type": "content"}] if book_id in content_books else []
+    def get_book_state(book_id):
+        has = book_id in content_books
+        return {"total": 1 if has else 0, "has_content": has,
+                "content_count": 1 if has else 0,
+                "metadata_hash": "", "annotation_hash": "", "format": ""}
 
     def add_chunks(chunks, embeddings):
         events.append(("add", len(chunks)))
         return len(chunks)
 
-    def delete_by_book_id(book_id):
+    def delete_by_book_id_except_annotations(book_id):
         events.append(("delete", book_id))
         return 2
 
     store = SimpleNamespace(
-        get_by_book_id=get_by_book_id,
+        get_book_state=get_book_state,
         add_chunks=add_chunks,
-        delete_by_book_id=delete_by_book_id,
+        delete_by_book_id_except_annotations=delete_by_book_id_except_annotations,
+        clear_pending_external=lambda book_id: 0,
         get_pending_external_book_ids=lambda: set(pending),
     )
     return SimpleNamespace(

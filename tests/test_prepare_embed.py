@@ -187,9 +187,14 @@ class TestJSONLRoundtrip:
         mock_rag = types.SimpleNamespace(
             embedding_model=types.SimpleNamespace(encode=fake_encode),
             store=types.SimpleNamespace(
-                get_by_book_id=lambda book_id, limit=1: [],   # not yet in LanceDB
+                # not yet in LanceDB
+                get_book_state=lambda book_id: {
+                    "total": 0, "has_content": False, "content_count": 0,
+                    "metadata_hash": "", "annotation_hash": "", "format": "",
+                },
                 add_chunks=lambda chunks, embeddings: len(chunks),
-                delete_by_book_id=lambda book_id: 0,
+                delete_by_book_id_except_annotations=lambda book_id: 0,
+                clear_pending_external=lambda book_id: 0,
                 get_pending_external_book_ids=lambda: set(),
             ),
             device='cpu',
@@ -235,9 +240,13 @@ class TestJSONLRoundtrip:
         mock_rag = types.SimpleNamespace(
             embedding_model=types.SimpleNamespace(encode=fake_encode),
             store=types.SimpleNamespace(
-                get_by_book_id=lambda book_id, limit=1: [],
+                get_book_state=lambda book_id: {
+                    "total": 0, "has_content": False, "content_count": 0,
+                    "metadata_hash": "", "annotation_hash": "", "format": "",
+                },
                 add_chunks=lambda chunks, embeddings: len(chunks),
-                delete_by_book_id=lambda book_id: 0,
+                delete_by_book_id_except_annotations=lambda book_id: 0,
+                clear_pending_external=lambda book_id: 0,
             ),
             device='cpu',
             batch_size=16,

@@ -90,16 +90,22 @@ class _RecordingStore:
     def get_pending_external_book_ids(self):
         return set(self._pending)
 
-    def get_by_book_id(self, book_id, limit=1):
-        return [{"chunk_type": "content"}] if self._has_content else []
+    def get_book_state(self, book_id):
+        return {"total": 1 if self._has_content else 0,
+                "has_content": self._has_content,
+                "content_count": 1 if self._has_content else 0,
+                "metadata_hash": "", "annotation_hash": "", "format": ""}
 
     def add_chunks(self, chunks, embeddings):
         self.added.append(len(chunks))
         return len(chunks)
 
-    def delete_by_book_id(self, book_id):
+    def delete_by_book_id_except_annotations(self, book_id):
         self.deleted.append(book_id)
         return 2
+
+    def clear_pending_external(self, book_id):
+        return 0
 
 
 def _embed(tmp_path, store):

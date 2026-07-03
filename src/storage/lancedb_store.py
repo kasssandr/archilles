@@ -671,6 +671,22 @@ class LanceDBStore:
             f"book_id = '{_sql_quote(book_id)}' AND chunk_type = '{_sql_quote(chunk_type)}'"
         )
 
+    def delete_by_book_id_except_annotations(self, book_id: str) -> int:
+        """Delete all chunks for a book except annotation chunks.
+
+        Used by embed_prepared's replace path (finding 2.2): the prepared JSONL
+        carries only freshly parsed content/comment chunks, never user
+        annotations (highlights are imported separately and may be weeks newer
+        than the prepare files). Deleting everything would silently drop those
+        annotations, so the replace keeps ChunkType.ANNOTATION rows intact.
+        Every stored row has a concrete chunk_type (add_chunks defaults it to
+        CONTENT), so the ``!=`` filter never leaves NULL-typed rows behind.
+        """
+        return self._delete_where(
+            f"book_id = '{_sql_quote(book_id)}' "
+            f"AND chunk_type != '{_sql_quote(ChunkType.ANNOTATION)}'"
+        )
+
     def update_metadata_fields(self, book_id: str, updates: dict) -> int:
         """
         Update metadata fields in all chunks of a book WITHOUT re-computing embeddings.
