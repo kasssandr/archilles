@@ -1019,8 +1019,12 @@ class LanceDBStore:
                 content_seen.add(cid)
 
             if cid in result:
-                # Prefer content chunks over annotation chunks for metadata_hash
-                if chunk_type in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT) and new_meta:
+                # Prefer content chunks (flat or hierarchical) over annotation
+                # chunks for metadata_hash — CHILD/PARENT never won here, which
+                # worked only because update_metadata_fields syncs all rows of
+                # a book; any per-type write path could quietly break it.
+                if (chunk_type in ChunkType.HIERARCHICAL_TYPES
+                        or chunk_type == ChunkType.CALIBRE_COMMENT) and new_meta:
                     result[cid]['metadata_hash'] = new_meta
             else:
                 result[cid] = {
@@ -1083,7 +1087,8 @@ class LanceDBStore:
             new_annot = _clean(row.get('annotation_hash'))
 
             if bid in result:
-                if chunk_type in (ChunkType.CONTENT, ChunkType.CALIBRE_COMMENT) and new_meta:
+                if (chunk_type in ChunkType.HIERARCHICAL_TYPES
+                        or chunk_type == ChunkType.CALIBRE_COMMENT) and new_meta:
                     result[bid]['metadata_hash'] = new_meta
             else:
                 result[bid] = {'metadata_hash': new_meta, 'annotation_hash': new_annot}
