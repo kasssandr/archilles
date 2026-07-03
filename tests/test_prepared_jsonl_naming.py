@@ -137,6 +137,7 @@ def _embed_rag():
             delete_by_book_id_except_annotations=lambda book_id: 0,
             clear_pending_external=lambda book_id: 0,
             get_pending_external_book_ids=lambda: set(),
+            create_fts_index=lambda: None,
         ),
         device="cpu",
         batch_size=16,

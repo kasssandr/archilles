@@ -86,6 +86,7 @@ class _RecordingStore:
         self._has_content = has_content
         self.deleted: list[str] = []
         self.added: list[int] = []
+        self.fts_refreshed = 0
 
     def get_pending_external_book_ids(self):
         return set(self._pending)
@@ -106,6 +107,9 @@ class _RecordingStore:
 
     def clear_pending_external(self, book_id):
         return 0
+
+    def create_fts_index(self):
+        self.fts_refreshed += 1
 
 
 def _embed(tmp_path, store):

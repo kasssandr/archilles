@@ -1801,6 +1801,8 @@ def main():
         print("\n  ▶ Next: embed externally to replace the provisional flat chunks:")
         print(f"      python scripts/rag_demo.py embed --input-dir {args.output_dir} "
               f"--mode remote")
+        print("      (embed refreshes the FTS index itself — no separate "
+              "create-index run needed)")
         if stats['failed'] > 0:
             sys.exit(1)
         return

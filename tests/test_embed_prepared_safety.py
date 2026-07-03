@@ -64,6 +64,7 @@ def _make_rag(events, *, content_books=(), pending=(), encode=None):
         delete_by_book_id_except_annotations=delete_by_book_id_except_annotations,
         clear_pending_external=lambda book_id: 0,
         get_pending_external_book_ids=lambda: set(pending),
+        create_fts_index=lambda: None,
     )
     return SimpleNamespace(
         embedding_model=SimpleNamespace(encode=encode or default_encode),

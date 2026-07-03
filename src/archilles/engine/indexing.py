@@ -1194,6 +1194,17 @@ class Indexer:
 
         print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. "
               f"{skipped} skipped." + (f" {failed} FAILED (see warnings above)." if failed else ""))
+
+        # Refresh the FTS index so keyword/hybrid search sees the freshly
+        # embedded chunks immediately, matching batch_index's post-index
+        # refresh. Never let an index-creation failure fail the run itself.
+        if total_books > 0:
+            try:
+                self._rag.store.create_fts_index()
+            except Exception as exc:
+                print(f"  ⚠️  FTS index refresh failed: {exc}")
+                print("     Keyword search may be stale. Run: python scripts/rag_demo.py create-index")
+
         cp.delete()
         return {
             'total_books': total_books,
