@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.archilles.config import (
     get_library_path,
     get_languages,
+    get_mode,
     get_rag_db_path,
     get_embedder_config,
     resolve_embedder_settings,
@@ -197,6 +198,32 @@ def _handle_import_annotations(args):
     if args.dry_run:
         print(f"\n  DRY RUN — no changes written to index.")
         print(f"  Remove --dry-run to import into the ARCHILLES index.\n")
+
+
+def _resolve_index_plan(profile, hierarchical_flag, library_path):
+    """Resolve execution_plan/hierarchical for `rag_demo.py index`.
+
+    Without this, single-book indexing ignored the mode system entirely: a
+    user on a full-local machine indexing one book got a flat book in an
+    otherwise hierarchical DB, since batch_index and the watchdog would have
+    chosen hierarchical via the same config. No CLI --mode flag exists for
+    `index` (that's `embed`'s embedder mode, a different concept) — mode
+    always comes from config here, matching batch_index.main().
+    """
+    from scripts.batch_index import resolve_indexing_plan
+    from src.archilles.hardware import detect_hardware
+    from src.archilles.recipe import default_recipe
+
+    resolution = resolve_indexing_plan(
+        mode_cli=None,
+        mode_config=get_mode(library_path),
+        profile_override=profile,
+        hierarchical_flag=hierarchical_flag,
+        prepare_only_flag=False,
+        hw=detect_hardware(),
+        recipe=default_recipe(),
+    )
+    return resolution.execution_plan, resolution.hierarchical
 
 
 def _should_skip_model(command, mode):
@@ -376,6 +403,14 @@ Examples:
         use_modular_pipeline = getattr(args, 'use_modular_pipeline', False)
         hierarchical = getattr(args, 'hierarchical', False)
 
+        # Resolve mode/plan like batch_index.main() so single-book indexing
+        # doesn't silently diverge from batch/watchdog indexing (review 1.3).
+        execution_plan = None
+        if args.command == 'index':
+            execution_plan, hierarchical = _resolve_index_plan(
+                profile, hierarchical, get_library_path(required=False)
+            )
+
         # Resolve embedder settings before constructing ArchillesRAG, so that
         # skip_model can already reflect a remote mode (avoids loading the
         # local embedding model for a run that will embed over HTTP).
@@ -411,6 +446,7 @@ Examples:
             use_modular_pipeline=use_modular_pipeline,
             profile=profile,
             hierarchical=hierarchical,
+            execution_plan=execution_plan,
             skip_model=skip_model,
         )
 
