@@ -169,6 +169,17 @@ so databases stay compatible across machines — only throughput and chunk layou
 differ. A flat (`light`) database still works; at retrieval time its chunks fall
 back to the surrounding `window_text` instead of a parent chunk.
 
+> ⚠️ **After an external corpus embed, set `full-external` explicitly.** `auto`
+> never resolves to `full-external` (by design — it never imposes surprise setup).
+> If you embedded your library externally (hierarchical chunks on a stronger
+> machine) but leave `mode` on `auto`, then on weak hardware the daily watchdog
+> resolves to `light` and indexes every **new** title flat *and unmarked* — it is
+> searchable, but silently lower quality, and nothing ever queues it for the
+> external upgrade. Set `"mode": "full-external"` in each library's
+> `.archilles/config.json` (Calibre **and** Zotero) once the externally embedded
+> corpus is live, so new titles are indexed provisionally light **and marked** for
+> the `--prepare-pending-external` trickle upgrade.
+
 ##### Advanced
 
 **Legacy profile override.** The old `minimal`/`balanced`/`maximal` profiles still
