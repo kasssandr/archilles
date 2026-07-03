@@ -77,6 +77,26 @@ class HTMLExtractor(BaseExtractor):
                 if text:
                     text_parts.append(text)
 
+            # Fallback: bare text living directly in <div>s (no wrapping <p>/
+            # <h1-6>/<li>) is otherwise silently dropped whenever at least one
+            # block tag exists elsewhere in the document — the "no block tags
+            # at all" fallback below only triggers when text_parts is still
+            # empty. Append text from "leaf" divs (no block-tag descendant,
+            # not already covered by an ancestor block tag or by a qualifying
+            # ancestor div) so nested stray divs are captured exactly once —
+            # keeps the nested-block dedup above intact.
+            if text_parts:
+                for div in soup.find_all('div'):
+                    if div.find_parent(block_tags):
+                        continue
+                    if div.find(block_tags):
+                        continue
+                    if div.find_parent(lambda tag: tag.name == 'div' and not tag.find(block_tags)):
+                        continue
+                    text = div.get_text(strip=True)
+                    if text:
+                        text_parts.append(text)
+
             # If no paragraphs found, get all text
             if not text_parts:
                 text_parts = [soup.get_text(separator='\n\n')]
