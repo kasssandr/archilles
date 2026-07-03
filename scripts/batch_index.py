@@ -1634,7 +1634,10 @@ Profiles:
     parser.add_argument('--hierarchical', action='store_true',
                         help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
     parser.add_argument('--use-modular-pipeline', action='store_true',
-                        help='Use ModularPipeline architecture (parser -> chunker -> embedder)')
+                        help='EXPERIMENTAL - not integrated with ExecutionPlan/hierarchical/languages, '
+                             'loads a second embedder, and skips metadata_hash/annotation chunks (invisible '
+                             'to watchdog change detection). Use ModularPipeline architecture '
+                             '(parser -> chunker -> embedder).')
     parser.add_argument('--prefer-format', choices=['pdf', 'epub', 'mobi', 'azw3'],
                         default='pdf',
                         help='Preferred file format when a book has multiple formats '

@@ -462,7 +462,7 @@ if __name__ == "__main__":
     print(f"Processing {file_path} with {profile} profile...")
 
     try:
-        result = process_document(file_path, profile)
+        result = ModularPipeline.from_profile(profile).process(file_path)
         print(f"\nResult: {result}")
         print(f"  Chunks: {result.chunk_count}")
         print(f"  Parse time: {result.parse_time:.2f}s")

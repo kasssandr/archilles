@@ -297,7 +297,10 @@ Examples:
     index_parser.add_argument('--profile', choices=['minimal', 'balanced', 'maximal'],
                               help='Hardware profile: minimal (CPU), balanced (GPU 6-12GB), maximal (GPU 12GB+)')
     index_parser.add_argument('--use-modular-pipeline', action='store_true',
-                              help='Use new ModularPipeline architecture (parser→chunker→embedder)')
+                              help='EXPERIMENTAL — not integrated with ExecutionPlan/hierarchical/languages, '
+                                   'loads a second embedder, and skips metadata_hash/annotation chunks (invisible '
+                                   'to watchdog change detection). Use new ModularPipeline architecture '
+                                   '(parser→chunker→embedder).')
     index_parser.add_argument('--hierarchical', action='store_true',
                               help='Enable parent-child chunking (parents ~2048, children ~512 tokens)')
 
