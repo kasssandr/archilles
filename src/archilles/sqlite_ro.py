@@ -24,13 +24,19 @@ def connect_readonly(
     db_path: Union[str, Path],
     *,
     immutable: bool = False,
+    busy_timeout_ms: int = 5000,
     row_factory: Optional[Callable] = None,
 ) -> sqlite3.Connection:
     """Oeffnet ``db_path`` schreibgeschuetzt (``mode=ro``).
 
     Args:
         db_path: Pfad zur SQLite-Datei.
-        immutable: zusaetzlich ``immutable=1`` (nur fuer unveraenderliche DBs).
+        immutable: zusaetzlich ``immutable=1`` (nur fuer unveraenderliche DBs;
+            bei Live-DBs weglassen -- sonst ignoriert SQLite das WAL und liest
+            veraltete oder halb-geschriebene Seiten, Befund 4.4).
+        busy_timeout_ms: Wartezeit auf einen kurzzeitigen Lock (z. B. waehrend
+            ein paralleler Zotero/Calibre-Prozess schreibt), bevor
+            ``SQLITE_BUSY`` geworfen wird. 0 schaltet das Warten ab.
         row_factory: optionale ``row_factory`` (z. B. ``sqlite3.Row``).
 
     Returns:
@@ -43,6 +49,9 @@ def connect_readonly(
     if immutable:
         uri += "&immutable=1"
     conn = sqlite3.connect(uri, uri=True)
+    # Set explicitly (even 0) — Python's sqlite3.connect already defaults
+    # timeout=5.0s, so 0 must override that to genuinely disable waiting.
+    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
     if row_factory is not None:
         conn.row_factory = row_factory
     return conn

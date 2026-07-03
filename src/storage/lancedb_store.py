@@ -782,6 +782,26 @@ class LanceDBStore:
                     result.add(str(bid))
         return result
 
+    def has_parent_chunks(self) -> bool:
+        """True if the index holds any hierarchical PARENT chunk (finding 1.1).
+
+        A parent chunk only exists in a hierarchical (full-local / externally
+        embedded) index, so this distinguishes such a database from a flat one.
+        Column-projected count — reads only ``chunk_type``. Empty/missing table
+        or no ``chunk_type`` column → False.
+        """
+        if self.table is None:
+            return False
+        try:
+            lance_dataset = self.table.to_lance()
+            if 'chunk_type' not in lance_dataset.schema.names:
+                return False
+            return lance_dataset.count_rows(
+                filter=f"chunk_type = '{_sql_quote(ChunkType.PARENT)}'"
+            ) > 0
+        except Exception:
+            return False
+
     def delete_by_calibre_id(self, calibre_id: int) -> int:
         """Delete all chunks for a specific Calibre ID."""
         return self._delete_where(f"calibre_id = {calibre_id}")

@@ -126,11 +126,14 @@ class ZoteroAdapter(SourceAdapter):
         return self._library_path
 
     def _connect(self) -> sqlite3.Connection:
-        """Open a read-only connection. NEVER write to Zotero's database."""
-        conn = connect_readonly(
-            self._db_path, immutable=True, row_factory=sqlite3.Row
-        )
-        return conn
+        """Open a read-only connection. NEVER write to Zotero's database.
+
+        No ``immutable`` (4.4): Zotero may be writing concurrently, so a
+        consistent WAL snapshot via ``mode=ro`` is required — ``immutable=1``
+        would ignore the WAL and read stale or torn pages. ``busy_timeout``
+        (helper default) absorbs a brief writer lock.
+        """
+        return connect_readonly(self._db_path, row_factory=sqlite3.Row)
 
     # ── EAV helpers ──────────────────────────────────────────────
 

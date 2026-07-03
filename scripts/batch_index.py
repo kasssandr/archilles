@@ -84,7 +84,11 @@ from src.archilles.config import (
     get_mode,
 )
 from src.archilles.constants import ChunkType, SectionType
-from src.archilles.execution import ExecutionPlan, plan
+from src.archilles.execution import (
+    ExecutionPlan,
+    plan,
+    warn_if_light_plan_hides_hierarchy,
+)
 from src.archilles.hardware import detect_hardware
 from src.archilles.profiles import get_profile, list_profiles
 from src.archilles.recipe import IndexRecipe, default_recipe
@@ -1798,6 +1802,11 @@ def main():
             print(str(e))
             print(f"\n{'='*60}\n")
             sys.exit(1)
+
+    # Operational hint (finding 1.1): the resolved plan is `light` but the index
+    # already holds hierarchical chunks → new titles would be flat and unmarked.
+    if resolution.execution_plan is not None and getattr(rag, 'store', None) is not None:
+        warn_if_light_plan_hides_hierarchy(resolution.execution_plan, rag.store)
 
     # --prepare-pending-external: standalone discovery + re-prepare (§12).
     # Find provisionally-light books, re-prepare them hierarchically; the user

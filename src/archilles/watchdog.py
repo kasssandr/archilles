@@ -202,6 +202,23 @@ def _resolve_execution_plan(library_path: Path):
     return plan(detect_hardware(), default_recipe(), mode)
 
 
+def _warn_light_plan_if_hierarchical(db_path: str, resolved_plan) -> None:
+    """Finding 1.1: warn at scan start when the plan is ``light`` over an index
+    that already holds hierarchical chunks (new titles would be flat/unmarked).
+
+    Opens a model-free store only in the rare light case; never raises.
+    """
+    if resolved_plan is None or resolved_plan.mode != "light":
+        return
+    try:
+        from src.archilles.engine import ArchillesRAG
+        from src.archilles.execution import warn_if_light_plan_hides_hierarchy
+        rag = ArchillesRAG(db_path=db_path, skip_model=True)
+        warn_if_light_plan_hides_hierarchy(resolved_plan, rag.store)
+    except Exception:
+        pass
+
+
 class WatchdogScanner:
     """
     Idempotent scanner: safe to run multiple times; hash comparison skips
@@ -310,6 +327,8 @@ class WatchdogScanner:
             'scanned':             0,
             'interrupted':         False,
         }
+
+        _warn_light_plan_if_hierarchical(self.db_path, self._resolve_plan())
 
         # ── Phase 1: fast scan ─────────────────────────────────────────
         # Metadata path opens no files. Annotation path is cached by
@@ -813,7 +832,9 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
         raise FileNotFoundError(f"zotero.sqlite not found in {library_path}")
 
     excluded = ",".join(str(t) for t in _ZOTERO_EXCLUDED_TYPE_IDS)
-    conn = connect_readonly(db_path, immutable=True, row_factory=sqlite3.Row)
+    # Live DB: no immutable (Zotero may be writing concurrently) — mode=ro reads
+    # a consistent WAL snapshot; busy_timeout absorbs a brief writer lock (4.4).
+    conn = connect_readonly(db_path, row_factory=sqlite3.Row)
     try:
         items = conn.execute(f"""
             SELECT itemID, key, dateModified
@@ -1000,6 +1021,8 @@ class ZoteroWatchdogScanner:
             'scanned':             0,
             'interrupted':         False,
         }
+
+        _warn_light_plan_if_hierarchical(self.db_path, self._resolve_plan())
 
         # ── Phase 1: fast scan ────────────────────────────────────
         zotero_items = _zotero_metadata_for_scan(self.library_path)

@@ -122,3 +122,34 @@ def plan(
         rerank_enabled=True,
         rerank_device="cuda" if hw_class in _RERANK_GPU_CLASSES else "cpu",
     )
+
+
+def warn_if_light_plan_hides_hierarchy(execution_plan: "ExecutionPlan", store) -> bool:
+    """Operational hint (finding 1.1): warn when the resolved plan is ``light``
+    but the existing index already holds hierarchical (parent) chunks.
+
+    That combination means the index was embedded hierarchically (full-local or
+    externally) elsewhere, yet on this machine ``auto`` resolved to ``light`` —
+    so new titles will be indexed FLAT and unmarked, silently diverging in
+    quality with no ``pending_external`` upgrade queue. Setting
+    ``"mode": "full-external"`` restores the marked-and-upgradable path.
+
+    Returns True if it warned. Never raises — a store hiccup just skips the hint.
+    """
+    if execution_plan is None or execution_plan.mode != "light":
+        return False
+    try:
+        if not store.has_parent_chunks():
+            return False
+    except Exception:
+        return False
+    print(
+        "⚠️  This index already contains hierarchical (parent) chunks, but the "
+        "resolved mode is 'light'.\n"
+        "    New titles will be indexed FLAT and unmarked — searchable, but "
+        "silently lower quality,\n"
+        "    with no pending_external upgrade queue. If your corpus was embedded "
+        "externally, set\n"
+        '    "mode": "full-external" in this library\'s .archilles/config.json.'
+    )
+    return True

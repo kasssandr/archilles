@@ -105,7 +105,9 @@ class ZoteroAnnotationProvider(AnnotationProvider):
             logger.error("zotero.sqlite not found: %s", db_path)
             return []
 
-        conn = connect_readonly(db_path, immutable=True, row_factory=sqlite3.Row)
+        # Live DB: no immutable (Zotero may be writing) — mode=ro reads a
+        # consistent WAL snapshot, busy_timeout absorbs a brief lock (4.4).
+        conn = connect_readonly(db_path, row_factory=sqlite3.Row)
         try:
             return self._extract_all(conn)
         finally:
