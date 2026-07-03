@@ -1052,7 +1052,7 @@ class Indexer:
         jsonl_files = sorted(input_dir.glob('*.jsonl'))
         if not jsonl_files:
             print("  No JSONL files found.")
-            return {'total_books': 0, 'total_chunks': 0}
+            return {'total_books': 0, 'total_chunks': 0, 'skipped': 0, 'failed': 0}
 
         # Hardware-Tiers-V2 §12: books indexed provisionally light (full-external)
         # are marked pending_external. The external embed always replaces them, so
@@ -1068,58 +1068,77 @@ class Indexer:
         total_books = 0
         total_chunks = 0
         skipped = 0
+        failed = 0
 
         for jsonl_file in jsonl_files:
-            # Parse header
-            with open(jsonl_file, 'r', encoding='utf-8') as f:
-                first_line = f.readline()
-                header = json.loads(first_line)
-                if not header.get('_header'):
-                    print(f"  Skipping {jsonl_file.name}: no header")
-                    continue
+            # Read and parse the WHOLE file before touching LanceDB (2.1): the
+            # old flow deleted a book's chunks first and read/embedded after,
+            # so a truncated file or a mid-run embedder failure lost the book.
+            # Unreadable files are a per-book failure — skip, keep going.
+            try:
+                with open(jsonl_file, 'r', encoding='utf-8') as f:
+                    header = json.loads(f.readline())
+                    if not header.get('_header'):
+                        print(f"  Skipping {jsonl_file.name}: no header")
+                        continue
+                    chunk_lines = f.readlines()
+                chunks = [json.loads(line) for line in chunk_lines if line.strip()]
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"  ⚠️  {jsonl_file.name}: unreadable ({exc}) — skipped, "
+                      f"nothing deleted. Re-prepare this book.")
+                failed += 1
+                continue
 
-                # Checkpoint key per book_id (unique across adapters). The old
-                # calibre_id key was '0' for every non-Calibre book, so all but
-                # the first file were skipped as already embedded (5.1). Old
-                # checkpoints keep matching: for Calibre, book_id == str(calibre_id).
-                file_key = str(header.get('book_id')
-                               or header.get('calibre_id')
-                               or jsonl_file.stem)
+            # Checkpoint key per book_id (unique across adapters). The old
+            # calibre_id key was '0' for every non-Calibre book, so all but
+            # the first file were skipped as already embedded (5.1). Old
+            # checkpoints keep matching: for Calibre, book_id == str(calibre_id).
+            file_key = str(header.get('book_id')
+                           or header.get('calibre_id')
+                           or jsonl_file.stem)
 
-                # Skip if already embedded
-                if file_key in embedded_set:
-                    skipped += 1
-                    continue
+            # Skip if already embedded
+            if file_key in embedded_set:
+                skipped += 1
+                continue
 
-                # Check LanceDB for existing chunks
-                book_id = header['book_id']
-                # Provisional-light books are always replaced (see above).
-                book_force = force or book_id in pending_external_ids
-                existing = self._rag.store.get_by_book_id(book_id, limit=1)
-                content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
-                if content and not book_force:
-                    print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
-                    cp.skip_book(file_key)
-                    embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
-                    skipped += 1
-                    continue
-                elif content and book_force:
-                    deleted = self._rag.store.delete_by_book_id(book_id)
-                    label = ("replacing %d provisional flat chunks" % deleted
-                             if book_id in pending_external_ids
-                             else "deleted %d old chunks" % deleted)
-                    print(f"  {book_id}: {label}.", end=' ', flush=True)
+            book_id = header['book_id']
 
-                # Read chunks
-                chunk_lines = f.readlines()
-
-            chunks = [json.loads(line) for line in chunk_lines]
+            # Validate against the header's chunk_count: a mismatch means the
+            # prepare was interrupted mid-write — never let a truncated file
+            # replace existing chunks (2.1).
+            expected = header.get('chunk_count')
+            if expected is not None and len(chunks) != expected:
+                print(f"  ⚠️  {book_id}: prepare file truncated "
+                      f"({len(chunks)}/{expected} chunks) — skipped, "
+                      f"nothing deleted. Re-prepare this book.")
+                failed += 1
+                continue
             if not chunks:
+                # Legitimately empty prepare (e.g. scanned PDF without OCR).
+                print(f"  {book_id}: prepare file has 0 chunks — skipping (needs OCR?).")
+                cp.skip_book(file_key)
+                embedded_set.add(file_key)
+                skipped += 1
+                continue
+
+            # Check LanceDB for existing chunks.
+            # Provisional-light books are always replaced (see above).
+            book_force = force or book_id in pending_external_ids
+            existing = self._rag.store.get_by_book_id(book_id, limit=1)
+            content = [c for c in existing if c.get('chunk_type', ChunkType.CONTENT) in ChunkType.HIERARCHICAL_TYPES]
+            if content and not book_force:
+                print(f"  {book_id}: already in LanceDB ({len(content)}+ chunks). Skipping.")
+                cp.skip_book(file_key)
+                embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
+                skipped += 1
                 continue
 
             print(f"  {book_id}: {len(chunks)} chunks...", end=' ', flush=True)
 
-            # Embed
+            # Embed. Failures here (e.g. remote server down) abort the run —
+            # deliberately BEFORE any delete, so the existing chunks stay
+            # intact and the checkpoint resumes the run later (2.1).
             texts = [c['text'] for c in chunks]
             start = time.time()
 
@@ -1139,9 +1158,17 @@ class Indexer:
 
             embed_time = time.time() - start
 
+            # Replace only now that the embeddings exist (2.1).
+            replaced = ''
+            if content and book_force:
+                deleted = self._rag.store.delete_by_book_id(book_id)
+                replaced = (f" (replaced {deleted} provisional flat chunks)"
+                            if book_id in pending_external_ids
+                            else f" (deleted {deleted} old chunks)")
+
             # Store in LanceDB
             num_added = self._rag.store.add_chunks(chunks, embeddings_array)
-            print(f"{num_added} indexed ({embed_time:.1f}s)")
+            print(f"{num_added} indexed ({embed_time:.1f}s){replaced}")
 
             total_books += 1
             total_chunks += num_added
@@ -1150,12 +1177,14 @@ class Indexer:
             cp.complete_book(file_key)
             embedded_set.add(file_key)  # keep in-memory skip-set in sync for this run
 
-        print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. {skipped} skipped.")
+        print(f"\n  Done: {total_books} books, {total_chunks} chunks embedded. "
+              f"{skipped} skipped." + (f" {failed} FAILED (see warnings above)." if failed else ""))
         cp.delete()
         return {
             'total_books': total_books,
             'total_chunks': total_chunks,
             'skipped': skipped,
+            'failed': failed,
         }
 
     def _build_comment_chunks(
