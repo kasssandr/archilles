@@ -187,9 +187,12 @@ class TestBatchPreparePrecheck:
         from scripts.batch_index import batch_prepare
 
         key = "vault:notes/one"
+        # chunk_count matches the (zero) actual chunk lines written below —
+        # a genuinely complete file, not a truncated one (review 2.3 made
+        # the pre-check validate line count too).
         header = {
             "_header": True, "calibre_id": 0, "book_id": key,
-            "book_metadata": {}, "chunk_count": 3, "prepared_at": "x",
+            "book_metadata": {}, "chunk_count": 0, "prepared_at": "x",
         }
         with open(tmp_path / prepared_jsonl_name(key), "w", encoding="utf-8") as f:
             f.write(json.dumps(header) + "\n")

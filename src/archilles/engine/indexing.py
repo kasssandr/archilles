@@ -3,6 +3,7 @@ prepare/embed two-phase pipeline, smart updates, metadata extraction and
 hashing. Extracted from the ArchillesRAG monolith (8.16)."""
 import hashlib
 import json
+import os
 import re
 import time
 from contextlib import contextmanager
@@ -42,6 +43,35 @@ def prepared_jsonl_name(book_id: str) -> str:
         digest = hashlib.md5(original.encode('utf-8')).hexdigest()[:8]
         safe = f"{safe or 'book'}-{digest}"
     return f"{safe}.jsonl"
+
+
+def read_prepared_header(path: Path) -> Optional[dict]:
+    """Read and validate a prepared JSONL's header.
+
+    A prepare interrupted mid-write (process killed) leaves a file with a
+    valid header line but fewer chunk lines than ``header['chunk_count']``
+    promises. Both skip checks (``prepare_book``'s own and
+    ``batch_prepare``'s pre-check) used to accept such a file forever as
+    "already prepared" because they only parsed the header. This helper
+    validates header AND actual line count together, returning ``None`` on
+    any read/parse failure or count mismatch so callers fall through to
+    re-prepare instead of trusting a truncated file (review 2026-07-03,
+    finding 2.3).
+    """
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            header = json.loads(f.readline())
+            if not header.get('_header'):
+                return None
+            chunk_lines = sum(1 for line in f if line.strip())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    expected = header.get('chunk_count')
+    if expected is not None and chunk_lines != expected:
+        return None
+
+    return header
 
 
 class Indexer:
@@ -908,16 +938,16 @@ class Indexer:
         # prepared_jsonl_name for why calibre_id-based names collided (5.1).
         out_file = output_dir / prepared_jsonl_name(book_id)
         if out_file.exists():
-            # Quick check: count lines to compare chunk_count
-            with open(out_file, 'r', encoding='utf-8') as f:
-                header = json.loads(f.readline())
-                if header.get('_header'):
-                    print(f"  Already prepared ({header.get('chunk_count', '?')} chunks). Skipping.")
-                    return {
-                        'book_id': book_id,
-                        'status': 'already_prepared',
-                        'chunk_count': header.get('chunk_count', 0),
-                    }
+            header = read_prepared_header(out_file)
+            if header is not None:
+                print(f"  Already prepared ({header.get('chunk_count', '?')} chunks). Skipping.")
+                return {
+                    'book_id': book_id,
+                    'status': 'already_prepared',
+                    'chunk_count': header.get('chunk_count', 0),
+                }
+            # Invalid header or a chunk-count mismatch (interrupted prepare) —
+            # fall through and re-prepare; the atomic write below replaces it.
 
         # Extract metadata
         book_metadata = self._extract_metadata(book_path)
@@ -987,10 +1017,17 @@ class Indexer:
             'prepared_at': datetime.now().isoformat(),
         }
 
-        with open(out_file, 'w', encoding='utf-8') as f:
+        # Write to a temp name and rename atomically onto the final name: a
+        # process kill mid-write leaves only the (inert, *.jsonl.tmp) temp
+        # file — the final name never observes a partial file, and *.jsonl
+        # globs elsewhere (embed_prepared, batch_prepare's discovery) never
+        # match it.
+        tmp_file = out_file.with_suffix('.jsonl.tmp')
+        with open(tmp_file, 'w', encoding='utf-8') as f:
             f.write(json.dumps(header, ensure_ascii=False) + '\n')
             for chunk in chunks:
                 f.write(json.dumps(chunk, ensure_ascii=False) + '\n')
+        os.replace(tmp_file, out_file)
 
         print(f"  Prepared: {len(chunks)} chunks -> {out_file.name} ({out_file.stat().st_size / 1024:.0f} KB)")
 

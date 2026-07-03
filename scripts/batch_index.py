@@ -71,7 +71,7 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.engine import ArchillesRAG, LanceDBError
-from src.archilles.engine.indexing import prepared_jsonl_name
+from src.archilles.engine.indexing import prepared_jsonl_name, read_prepared_header
 from scripts.safe_indexer import SafeIndexer
 from scripts.find_books_missing_labels import find_books_missing_labels
 
@@ -1143,17 +1143,13 @@ def batch_prepare(
             existing_jsonl = Path(output_dir) / prepared_jsonl_name(book_id)
             if existing_jsonl.exists():
                 print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
-                stats['skipped'] += 1
-                try:
-                    with open(existing_jsonl, 'r', encoding='utf-8') as ef:
-                        hdr = json.loads(ef.readline())
-                        if hdr.get('_header'):
-                            print(f"         Already prepared ({hdr.get('chunk_count', '?')} chunks). Skipping.")
-                            continue
-                except Exception:
-                    pass
-                # File exists but no valid header — re-prepare
-                stats['skipped'] -= 1
+                header = read_prepared_header(existing_jsonl)
+                if header is not None:
+                    stats['skipped'] += 1
+                    print(f"         Already prepared ({header.get('chunk_count', '?')} chunks). Skipping.")
+                    continue
+                # Invalid header or a chunk-count mismatch (interrupted
+                # prepare) — fall through and re-prepare.
 
         # Quality-based format selection for multi-format books
         has_multiple = quality_select and len(book['formats']) > 1
