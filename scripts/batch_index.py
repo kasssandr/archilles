@@ -1161,6 +1161,9 @@ def batch_prepare(
 
     for i, book in enumerate(books, 1):
         book_id = create_book_id(book)
+        # Print the progress header exactly once per book (finding 3.2); the
+        # skip / quality / format branches below only add their detail line.
+        print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
 
         # Skip-existing check BEFORE quality comparison (avoid expensive
         # re-prepare). Must use the same book_id-based name prepare_book
@@ -1168,7 +1171,6 @@ def batch_prepare(
         if not dry_run:
             existing_jsonl = Path(output_dir) / prepared_jsonl_name(book_id)
             if existing_jsonl.exists():
-                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
                 header = read_prepared_header(existing_jsonl)
                 if header is not None:
                     stats['skipped'] += 1
@@ -1185,7 +1187,6 @@ def batch_prepare(
             )
             if scores:
                 stats['quality_selected'] += 1
-                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
                 for fmt, s in scores.items():
                     marker = " ✓" if fmt == best['format'] else ""
                     print(f"         {fmt}: score={s['score']}"
@@ -1193,11 +1194,9 @@ def batch_prepare(
                           f", cv={s.get('cv', '?')}, short={s.get('short_rate', '?')}){marker}")
                 print(f"         → Selected: {best['format']} | ID: {book_id}")
             else:
-                print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
                 print(f"         Format: {best['format']} | ID: {book_id}")
         else:
             best = _select_best_format(book['formats'], prefer_format)
-            print(f"\n[{i}/{len(books)}] {book['author']}: {book['title']}")
             print(f"         Format: {best['format']} | ID: {book_id}")
 
         if dry_run:

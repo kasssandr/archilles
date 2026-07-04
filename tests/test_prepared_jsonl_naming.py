@@ -213,3 +213,32 @@ class TestBatchPreparePrecheck:
         assert stats["skipped"] == 1
         assert stats["prepared"] == 0
         assert stats["failed"] == 0
+
+    def test_progress_header_printed_once_on_invalid_header_reprepare(self, tmp_path, capsys):
+        """Finding 3.2: an existing prepared file with an invalid header falls
+        through to re-prepare — the [i/n] progress line must print exactly once,
+        not once in the skip branch and again in the format branch."""
+        from scripts.batch_index import batch_prepare
+
+        key = "ZKEY_3_2"
+        # chunk_count claims 5 but the file has 0 chunk lines → read_prepared_header
+        # rejects it (2.3) → batch_prepare re-prepares instead of skipping.
+        bad_header = {
+            "_header": True, "calibre_id": 0, "book_id": key,
+            "book_metadata": {}, "chunk_count": 5, "prepared_at": "x",
+        }
+        with open(tmp_path / prepared_jsonl_name(key), "w", encoding="utf-8") as f:
+            f.write(json.dumps(bad_header) + "\n")
+
+        class OkRAG:
+            def prepare_book(self, *a, **k):
+                return {"status": "prepared"}
+
+        books = [{
+            "id": key, "title": "T", "author": "A",
+            "formats": [{"format": "PDF", "path": "x.pdf"}],
+        }]
+        stats = batch_prepare(books, OkRAG(), output_dir=str(tmp_path), dry_run=False)
+
+        assert stats["prepared"] == 1
+        assert capsys.readouterr().out.count("[1/1] A: T") == 1
