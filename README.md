@@ -264,7 +264,7 @@ Archilles reads optional configuration from `.archilles/config.json` inside your
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `enable_reranking` | `false` | Enable cross-encoder reranking (more accurate but slower; downloads ~560MB model on first use) |
+| `enable_reranking` | auto | Cross-encoder reranking (more accurate but slower; downloads ~560MB model on first use). Unset: enabled on GPUs with ≥8 GB VRAM, disabled otherwise (on CPU it pushes searches past MCP client timeouts). Set `true`/`false` to override. |
 | `reranker_device` | `"cpu"` | Device for reranker inference (`"cpu"` or `"cuda"`). CPU recommended when GPU runs BGE-M3 |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for the vector database |
 

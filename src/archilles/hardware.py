@@ -114,6 +114,18 @@ def classify_hardware(profile: HardwareProfile) -> HardwareClass:
     return "cpu-only"
 
 
+def default_enable_reranking(hardware_class: HardwareClass) -> bool:
+    """Hardware-tier default for cross-encoder reranking.
+
+    On CPU/MPS/small GPUs the reranker turns every search into a
+    multi-minute call (and below ~8 GB VRAM it cannot share the GPU with
+    BGE-M3 anyway); from ``gpu-mid`` upward it is fast and improves quality.
+    An explicit ``enable_reranking`` in any config layer overrides this —
+    see :func:`src.archilles.config.resolve_enable_reranking`.
+    """
+    return hardware_class in ("gpu-mid", "gpu-large")
+
+
 def _get_cpu_cores() -> int:
     """Get number of physical CPU cores."""
     try:

@@ -298,7 +298,7 @@ Python 3.11+. Cross-platform: Windows (primary), macOS (including Apple Silicon 
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `enable_reranking` | `false` | Cross-encoder reranking |
+| `enable_reranking` | auto | Cross-encoder reranking (unset: on for GPUs ≥8 GB VRAM, off otherwise) |
 | `reranker_device` | `"cpu"` | `"cpu"` or `"cuda"` |
 | `rag_db_path` | `.archilles/rag_db` | Custom DB path |
 

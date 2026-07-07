@@ -311,15 +311,23 @@ class MasterConfig:
     ``reranker_device``) live here because one server process can only honour
     one value each.  Per-source overrides for the ranking knobs are accepted
     so a user can keep e.g. a CPU-only adapter in a GPU-default setup.
+
+    ``enable_reranking`` is tri-state: ``None`` means "not configured
+    anywhere" and resolves to the hardware-tier default (see
+    :func:`resolve_enable_reranking`).
     """
 
     sources: list[SourceConfig] = field(default_factory=list)
     default_source: str | None = None
     transport: dict = field(default_factory=dict)
-    enable_reranking: bool = False
+    enable_reranking: bool | None = None
     reranker_device: str = "cpu"
     citation: dict = field(default_factory=dict)
     version: int = CURRENT_CONFIG_VERSION
+    # Warm the RAG stack in a background thread at MCP server start so the
+    # first search does not hit MCP client tool-call timeouts (60 s in
+    # Claude-Code-based clients vs. minutes of cold model load on CPU).
+    preload_models: bool = True
 
 
 def master_config_path() -> Path:
@@ -410,10 +418,30 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
         sources=sources,
         default_source=default_source,
         transport=dict(raw.get("transport") or {}),
-        enable_reranking=bool(raw.get("enable_reranking", False)),
+        enable_reranking=(
+            None if raw.get("enable_reranking") is None
+            else bool(raw["enable_reranking"])
+        ),
         reranker_device=str(raw.get("reranker_device", "cpu")),
         citation=dict(raw.get("citation") or {}),
         version=int(raw.get("version", CURRENT_CONFIG_VERSION)),
+        preload_models=bool(raw.get("preload_models", True)),
+    )
+
+
+def resolve_enable_reranking(explicit: bool | None) -> bool:
+    """Resolve the effective cross-encoder reranking flag.
+
+    An explicit config value (master, per-source, or library-local) wins.
+    When unset everywhere (``None``), derive the default from the detected
+    hardware class: on only for ``gpu-mid``/``gpu-large`` — on CPU the
+    reranker pushes every MCP search past client tool-call timeouts.
+    """
+    if explicit is not None:
+        return bool(explicit)
+    from src.archilles import hardware
+    return hardware.default_enable_reranking(
+        hardware.classify_hardware(hardware.detect_hardware())
     )
 
 
@@ -465,14 +493,15 @@ def resolve_source_config(master: MasterConfig, source_name: str) -> dict:
 
     # Layer 1: library-local override
     local_cfg = src.library_path / ".archilles" / "config.json"
+    local = None
     if local_cfg.exists():
         try:
             with open(local_cfg, "r", encoding="utf-8") as f:
                 local = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Cannot read library-local config %s: %s", local_cfg, e)
-            return effective
 
+    if local is not None:
         if "adapter" in local:
             effective["adapter"] = local["adapter"]
         if "rag_db_path" in local:
@@ -492,4 +521,9 @@ def resolve_source_config(master: MasterConfig, source_name: str) -> dict:
             merged.update(local["citation"])
             effective["citation"] = merged
 
+    # Finalize: reranking left unset in every layer falls back to the
+    # hardware-tier default.
+    effective["enable_reranking"] = resolve_enable_reranking(
+        effective["enable_reranking"]
+    )
     return effective

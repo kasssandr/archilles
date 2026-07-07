@@ -227,6 +227,6 @@ You can create a configuration file at `.archilles/config.json` inside your Cali
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `enable_reranking` | `false` | Enable cross-encoder reranking for better result quality. Downloads ~560 MB model on first use. |
+| `enable_reranking` | auto | Cross-encoder reranking for better result quality. Downloads ~560 MB model on first use. Unset: enabled on GPUs with ≥8 GB VRAM, disabled otherwise. |
 | `reranker_device` | `"cpu"` | `"cpu"` or `"cuda"`. CPU is usually better since the GPU is busy with embeddings. |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for the vector database, if you want to store it elsewhere. |

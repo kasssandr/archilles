@@ -54,6 +54,10 @@ def _make_rag(events, *, fts_raises=False):
         if fts_raises:
             raise RuntimeError("fts backend unavailable")
 
+    def ensure_vector_index():
+        events.append(("vector",))
+        return True
+
     store = SimpleNamespace(
         get_book_state=get_book_state,
         add_chunks=add_chunks,
@@ -61,6 +65,7 @@ def _make_rag(events, *, fts_raises=False):
         clear_pending_external=lambda book_id: 0,
         get_pending_external_book_ids=lambda: set(),
         create_fts_index=create_fts_index,
+        ensure_vector_index=ensure_vector_index,
     )
     return SimpleNamespace(
         embedding_model=SimpleNamespace(encode=_fake_encode),
@@ -80,6 +85,9 @@ class TestFtsRefreshAfterEmbed:
         assert ("fts",) in events
         # Refreshed after the book's chunks were added, not before.
         assert events.index(("fts",)) > events.index(("add", 2))
+        # The ANN index is ensured too — without it semantic/hybrid search
+        # brute-force-scans the vector column.
+        assert ("vector",) in events
 
     def test_fts_index_not_created_for_zero_books_embedded(self, tmp_path):
         # Directory has no *.jsonl files at all.
@@ -90,6 +98,7 @@ class TestFtsRefreshAfterEmbed:
 
         assert result["total_books"] == 0
         assert ("fts",) not in events
+        assert ("vector",) not in events
 
     def test_fts_index_failure_does_not_abort_run(self, tmp_path):
         _write_jsonl(tmp_path, "Book_1", 2)

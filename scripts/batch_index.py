@@ -2009,6 +2009,14 @@ def main():
                 except Exception as e:
                     print(f"   ⚠️  FTS index creation failed: {e}")
                     print("   Keyword search may not work. Run: python scripts/rag_demo.py create-index")
+                # Ensure the ANN index exists — without it semantic/hybrid
+                # search brute-force-scans the vector column.
+                try:
+                    if rag.store.ensure_vector_index():
+                        print("   ✅ Vector index present - semantic search fast")
+                except Exception as e:
+                    print(f"   ⚠️  Vector index check failed: {e}")
+                    print("   Semantic search may be slow. Run: python scripts/rag_demo.py create-index")
 
             if stats['failed'] > 0:
                 sys.exit(1)

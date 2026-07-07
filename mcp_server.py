@@ -36,6 +36,7 @@ sys.stdout = sys.stderr
 
 import asyncio
 import json
+import threading
 
 # Repo-Wurzel auf den Pfad — kanonische Import-Wurzel ist `src.*` (Review 5.14)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -62,6 +63,24 @@ TOOL_MAP = {
     'set_research_interests': 'set_research_interests_tool',
     'watchdog_scan': 'watchdog_scan_tool',
 }
+
+
+def _start_preload(server, enabled: bool) -> threading.Thread | None:
+    """Warm the RAG stack in a background daemon thread (unless disabled).
+
+    Keeps the stdio/HTTP loop responsive during startup: ``initialize`` and
+    ``tools/list`` answer immediately while models load. Returns the thread
+    (for tests), or None when preloading is disabled.
+    """
+    if not enabled:
+        logger.info("Model preload disabled by config")
+        return None
+    thread = threading.Thread(
+        target=server.preload, name="model-preload", daemon=True
+    )
+    thread.start()
+    logger.info("Model preload started in background thread")
+    return thread
 
 
 def _dispatch_tool(server, tool_name: str, params: dict) -> dict:
@@ -427,9 +446,11 @@ def main():
         sys.exit(1)
 
     if master is not None:
-        server, tools, transport_cfg = _init_unified(master)
+        server, tools, transport_cfg, preload_enabled = _init_unified(master)
     else:
-        server, tools, transport_cfg = _init_legacy_single_source()
+        server, tools, transport_cfg, preload_enabled = _init_legacy_single_source()
+
+    _start_preload(server, preload_enabled)
 
     # Resolve transport from CLI args → config → default (stdio)
     transport_mode = args.transport or transport_cfg.get("mode", "stdio")
@@ -458,7 +479,7 @@ def _init_unified(master):
         "Mode: unified (sources: %s, default: %r)",
         server.source_names, server.default_source,
     )
-    return server, tools, dict(master.transport)
+    return server, tools, dict(master.transport), master.preload_models
 
 
 def _init_legacy_single_source():
@@ -515,7 +536,8 @@ def _init_legacy_single_source():
     logger.info(f"Instance: {instance_name}")
     logger.info(f"RAG database path: {rag_db_path}")
 
-    enable_reranking = config.get('enable_reranking', False)
+    from src.archilles.config import resolve_enable_reranking
+    enable_reranking = resolve_enable_reranking(config.get('enable_reranking'))
     reranker_device = config.get('reranker_device', 'cpu')
     if enable_reranking:
         logger.info(f"Cross-encoder reranking enabled (device: {reranker_device})")
@@ -539,7 +561,8 @@ def _init_legacy_single_source():
         instance_name, adapter.adapter_type if adapter else "no adapter",
     )
     tools = create_mcp_tools(server)
-    return server, tools, config.get("transport", {})
+    preload_enabled = bool(config.get("preload_models", True))
+    return server, tools, config.get("transport", {}), preload_enabled
 
 
 if __name__ == '__main__':

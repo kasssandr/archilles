@@ -200,6 +200,50 @@ class LanceDBStore:
         # Always create FTS index for hybrid search
         self.create_fts_index()
 
+    def ensure_vector_index(self, num_chunks: int = None) -> bool:
+        """Create the IVF-PQ vector index if the table does not have one yet.
+
+        Unlike :meth:`create_indexes` this is cheap when the index already
+        exists (a ``list_indices()`` check), so indexing paths can call it
+        after every run. Without a vector index, semantic/hybrid search
+        brute-force-scans the vector column — minutes instead of seconds at
+        million-chunk scale.
+
+        Returns True when a vector index exists afterwards.
+        """
+        if self.table is None:
+            return False
+
+        try:
+            for idx in self.table.list_indices():
+                if "vector" in list(getattr(idx, "columns", [])):
+                    return True
+        except Exception as e:
+            logger.warning(f"Could not list indices: {e}")
+            return False
+
+        chunk_count = num_chunks or self.count()
+        if chunk_count < 256:
+            logger.info(
+                f"Skipping IVF-PQ index (need 256+ chunks, have {chunk_count})"
+            )
+            return False
+
+        num_partitions = min(256, max(16, int(np.sqrt(chunk_count))))
+        try:
+            logger.info(f"Creating IVF-PQ index with {num_partitions} partitions...")
+            self.table.create_index(
+                metric="cosine",
+                num_partitions=num_partitions,
+                num_sub_vectors=32,
+                index_type="IVF_PQ",
+            )
+            logger.info("Vector index created successfully")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not create vector index: {e}")
+            return False
+
     def create_fts_index(self):
         """Create full-text search index on text column."""
         if self.table is None:

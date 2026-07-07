@@ -128,6 +128,22 @@ class CalibreMCPServer:
             return False
         return self.service._ensure_initialized()
 
+    def preload(self) -> None:
+        """Warm the RAG stack (embedding model, LanceDB, reranker).
+
+        Called from a background thread at server start so the first search
+        does not pay the multi-minute lazy model load inside an MCP client's
+        tool-call timeout (Claude-Code-based clients abort after 60 s).
+        Failures are logged, never raised.
+        """
+        try:
+            ok = self._ensure_rag_initialized()
+            if ok:
+                self.service._get_reranker()
+            logger.info("Preload finished for %r (rag=%s)", self.instance_name, ok)
+        except Exception as e:
+            logger.warning("Preload failed for %r: %s", self.instance_name, e)
+
     def get_book_annotations_tool(
         self,
         book_path: str,

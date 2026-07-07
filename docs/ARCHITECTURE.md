@@ -570,7 +570,8 @@ All configuration is stored in `.archilles/config.json` inside the user's Calibr
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `enable_reranking` | `false` | Enable cross-encoder reranking (Stage 2) |
+| `enable_reranking` | auto | Cross-encoder reranking (Stage 2). Unset: hardware-tier default (GPU ≥8 GB VRAM: on, otherwise off); explicit `true`/`false` wins |
+| `preload_models` | `true` | Warm the RAG stack (embedding model, reranker) in a background thread at MCP server start, so the first search does not hit MCP client tool-call timeouts |
 | `reranker_device` | `"cpu"` | Device for reranker (`"cpu"` or `"cuda"`) |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for LanceDB database |
 | `library_path` | (env var) | Override for ARCHILLES_LIBRARY_PATH |

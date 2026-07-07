@@ -37,6 +37,28 @@ _redirect_original_stdout: Any = None
 _model_init_lock = threading.Lock()
 
 
+# Process-wide cache of CrossEncoderReranker instances, keyed by
+# (model_name, device). The unified server creates one service per source;
+# sharing the (lazily loading) wrapper means all sources share one loaded
+# cross-encoder instead of one ~2.3 GB copy each. Guarded by
+# _model_init_lock in _get_reranker.
+_shared_rerankers: dict = {}
+
+
+def _get_shared_reranker(model_name: str | None, device: str | None):
+    """Return a process-wide shared CrossEncoderReranker for (model_name, device).
+
+    Caller must hold ``_model_init_lock``.
+    """
+    key = (model_name, device)
+    reranker = _shared_rerankers.get(key)
+    if reranker is None:
+        from src.retriever import CrossEncoderReranker
+        reranker = CrossEncoderReranker(model_name=model_name, device=device)
+        _shared_rerankers[key] = reranker
+    return reranker
+
+
 @contextmanager
 def _redirect_stdout_to_stderr():
     """Temporarily redirect stdout to stderr (prevents MCP JSON-RPC corruption).
@@ -200,10 +222,8 @@ class ArchillesService:
             if not self._enable_reranking:
                 return None
             try:
-                from src.retriever import CrossEncoderReranker
-                self._reranker = CrossEncoderReranker(
-                    model_name=self._reranker_model,
-                    device=self._reranker_device,
+                self._reranker = _get_shared_reranker(
+                    self._reranker_model, self._reranker_device,
                 )
                 return self._reranker
             except Exception as e:

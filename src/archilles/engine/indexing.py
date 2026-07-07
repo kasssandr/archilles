@@ -1344,6 +1344,14 @@ class Indexer:
             except Exception as exc:
                 print(f"  ⚠️  FTS index refresh failed: {exc}")
                 print("     Keyword search may be stale. Run: python scripts/rag_demo.py create-index")
+            # Ensure the ANN index exists — without it semantic/hybrid
+            # search brute-force-scans the vector column (minutes instead
+            # of seconds at million-chunk scale).
+            try:
+                self._rag.store.ensure_vector_index()
+            except Exception as exc:
+                print(f"  ⚠️  Vector index check failed: {exc}")
+                print("     Semantic search may be slow. Run: python scripts/rag_demo.py create-index")
 
         cp.delete()
         return {

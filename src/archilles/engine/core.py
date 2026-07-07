@@ -4,6 +4,7 @@ Until 2026-06 this class lived as ``archillesRAG`` inside
 ``scripts/rag_demo.py`` (code review 2026-06-10, findings 4.9/8.16).
 ``scripts/rag_demo.py`` is now a thin CLI wrapper around this module.
 """
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -25,6 +26,47 @@ from src.archilles.engine.indexing import Indexer
 class LanceDBError(Exception):
     """Raised when LanceDB operations fail."""
     pass
+
+
+# Process-wide cache of loaded SentenceTransformer instances, keyed by
+# (model_name, device). The unified MCP server builds one ArchillesRAG per
+# source; without sharing, every source loads its own copy of the same
+# ~2.3 GB model (3x BGE-M3 in RAM, 3x load time on first search).
+_shared_embedding_models: dict = {}
+_shared_models_lock = threading.Lock()
+
+
+def _get_shared_embedding_model(model_name: str, device: str) -> SentenceTransformer:
+    """Return a process-wide shared SentenceTransformer for (model_name, device).
+
+    On CUDA the model is converted to FP16 and its ``encode()`` patched to
+    return FP32 numpy (LanceDB expects FP32). Both happen once, inside this
+    factory, so a shared instance is never converted or patched twice.
+    """
+    key = (model_name, device)
+    with _shared_models_lock:
+        model = _shared_embedding_models.get(key)
+        if model is not None:
+            return model
+
+        model = SentenceTransformer(model_name, device=device)
+        if device == "cuda":
+            # FP16: halves VRAM pressure, ~1.3-1.8x faster on GPUs without
+            # tensor cores (T1000). encode() then returns FP16 numpy —
+            # LanceDB expects FP32, hence the encode patch.
+            model = model.half()
+            _orig_encode = model.encode
+
+            def _encode_fp32(*args, **kwargs):
+                out = _orig_encode(*args, **kwargs)
+                if isinstance(out, np.ndarray) and out.dtype != np.float32:
+                    out = out.astype(np.float32)
+                return out
+
+            model.encode = _encode_fp32
+
+        _shared_embedding_models[key] = model
+        return model
 
 
 class ArchillesRAG:
@@ -266,28 +308,17 @@ class ArchillesRAG:
         if enable_ocr or force_ocr:
             print(f"  OCR: {'force' if force_ocr else 'auto-detect'} ({ocr_backend})")
 
-        # Initialize embedding model (skip for prepare-only mode)
+        # Initialize embedding model (skip for prepare-only mode). Instances
+        # are shared process-wide per (model_name, device) — see
+        # _get_shared_embedding_model.
         if skip_model:
             self.embedding_model = None
             print(f"  Embedding model: skipped (prepare-only mode)")
         else:
             print(f"  Loading embedding model... (first time: ~500 MB download)")
-            self.embedding_model = SentenceTransformer(model_name, device=self.device)
+            self.embedding_model = _get_shared_embedding_model(model_name, self.device)
             if self.device == "cuda":
-                # FP16: halbiert VRAM-Druck, ~1.3-1.8x schneller auf GPUs ohne
-                # Tensor Cores (T1000). encode() liefert dann FP16-Numpy zurueck —
-                # LanceDB erwartet FP32, daher Patch der encode-Methode.
-                self.embedding_model = self.embedding_model.half()
-                _orig_encode = self.embedding_model.encode
-
-                def _encode_fp32(*args, **kwargs):
-                    out = _orig_encode(*args, **kwargs)
-                    if isinstance(out, np.ndarray) and out.dtype != np.float32:
-                        out = out.astype(np.float32)
-                    return out
-
-                self.embedding_model.encode = _encode_fp32
-                print(f"  FP16 active (CUDA) — halbierter VRAM, schnellere Inferenz")
+                print(f"  FP16 active (CUDA) — halved VRAM, faster inference")
             print(f"  Model loaded: {model_name} (device: {self.device})")
 
         # Handle database reset if requested

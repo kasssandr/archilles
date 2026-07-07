@@ -184,6 +184,17 @@ class UnifiedMCPServer:
             master_dir=master_archilles_dir(),
         )
 
+    def preload(self) -> None:
+        """Warm every source's RAG stack.
+
+        Sequential on purpose: embedding models are shared process-wide
+        (see ``core._get_shared_embedding_model``), so the first source pays
+        the model load and the others only attach + open their LanceDB.
+        """
+        for name, server in self.servers.items():
+            logger.info("Preloading source %r ...", name)
+            server.preload()
+
     # ── Source resolution ────────────────────────────────────────────────
 
     def resolve_source(self, source: Optional[str]) -> CalibreMCPServer:
