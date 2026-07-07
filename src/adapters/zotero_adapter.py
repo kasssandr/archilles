@@ -9,7 +9,6 @@ would corrupt the database.
 import logging
 import re
 import sqlite3
-from html.parser import HTMLParser
 from pathlib import Path
 
 from src.adapters.base import (
@@ -18,6 +17,7 @@ from src.adapters.base import (
     DocumentTimestamps,
     SourceAdapter,
 )
+from src.archilles.html_text import strip_html as _strip_html
 from src.archilles.sqlite_ro import connect_readonly
 
 logger = logging.getLogger(__name__)
@@ -36,31 +36,6 @@ _CONTENT_TYPE_MAP = {
 
 # Preferred attachment formats (higher = better)
 _FORMAT_PRIORITY = {"pdf": 10, "epub": 8, "html": 3, "txt": 2}
-
-
-class _HTMLStripper(HTMLParser):
-    """Minimal HTML-to-text converter for Zotero notes."""
-
-    def __init__(self):
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data):
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts).strip()
-
-
-def _strip_html(html: str) -> str:
-    """Strip HTML tags and return plain text."""
-    if not html:
-        return ""
-    stripper = _HTMLStripper()
-    stripper.feed(html)
-    text = stripper.get_text()
-    # Collapse whitespace
-    return re.sub(r'\s+', ' ', text).strip()
 
 
 def _parse_year(date_str: str) -> int | None:

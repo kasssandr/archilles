@@ -14,10 +14,10 @@ import logging
 import re
 import sqlite3
 from datetime import datetime
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
+from src.archilles.html_text import strip_html as _strip_html
 from src.archilles.sqlite_ro import connect_readonly
 from .base import Annotation, AnnotationProvider
 
@@ -34,26 +34,6 @@ _ANNOT_TYPE_MAP = {
 
 # sortIndex format: "PPPPP|CCCCC|LLLLL"
 _SORT_INDEX_RE = re.compile(r"^(\d+)\|")
-
-
-class _HTMLStripper(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts).strip()
-
-
-def _strip_html(html: str) -> str:
-    if not html:
-        return ""
-    s = _HTMLStripper()
-    s.feed(html)
-    return re.sub(r"\s+", " ", s.get_text()).strip()
 
 
 def _parse_sort_index_page(sort_index: str) -> Optional[int]:
@@ -152,13 +132,31 @@ class ZoteroAnnotationProvider(AnnotationProvider):
         row = conn.execute("SELECT key FROM items WHERE itemID = ?", (item_id,)).fetchone()
         return row[0] if row else ""
 
+    def _item_info(
+        self, conn: sqlite3.Connection, item_id: int,
+        cache: dict[int, tuple[str, str, str]],
+    ) -> tuple[str, str, str]:
+        """Return (title, author, key), memoized per extraction run.
+
+        Hundreds of annotations typically share a handful of parent items;
+        without the cache every annotation row costs three point queries.
+        """
+        if item_id not in cache:
+            title, author = self._item_title_author(conn, item_id)
+            cache[item_id] = (title, author, self._item_key(conn, item_id))
+        return cache[item_id]
+
     def _extract_all(self, conn: sqlite3.Connection) -> list[Annotation]:
+        item_cache: dict[int, tuple[str, str, str]] = {}
         annotations: list[Annotation] = []
-        annotations.extend(self._extract_pdf_annotations(conn))
-        annotations.extend(self._extract_notes(conn))
+        annotations.extend(self._extract_pdf_annotations(conn, item_cache))
+        annotations.extend(self._extract_notes(conn, item_cache))
         return annotations
 
-    def _extract_pdf_annotations(self, conn: sqlite3.Connection) -> list[Annotation]:
+    def _extract_pdf_annotations(
+        self, conn: sqlite3.Connection,
+        item_cache: dict[int, tuple[str, str, str]],
+    ) -> list[Annotation]:
         """Read itemAnnotations (highlights/notes in Zotero PDF viewer)."""
         rows = conn.execute(
             """
@@ -194,8 +192,7 @@ class ZoteroAnnotationProvider(AnnotationProvider):
 
             parent_item_id = row["parent_item_id"]
             if parent_item_id:
-                title, author = self._item_title_author(conn, parent_item_id)
-                doc_id = self._item_key(conn, parent_item_id)
+                title, author, doc_id = self._item_info(conn, parent_item_id, item_cache)
             else:
                 title, author, doc_id = "", "", ""
 
@@ -215,7 +212,10 @@ class ZoteroAnnotationProvider(AnnotationProvider):
             )
         return annotations
 
-    def _extract_notes(self, conn: sqlite3.Connection) -> list[Annotation]:
+    def _extract_notes(
+        self, conn: sqlite3.Connection,
+        item_cache: dict[int, tuple[str, str, str]],
+    ) -> list[Annotation]:
         """Read itemNotes (standalone HTML notes attached to Zotero items)."""
         rows = conn.execute(
             """
@@ -234,8 +234,7 @@ class ZoteroAnnotationProvider(AnnotationProvider):
                 continue
 
             parent_item_id = row["parentItemID"]
-            title, author = self._item_title_author(conn, parent_item_id)
-            doc_id = self._item_key(conn, parent_item_id)
+            title, author, doc_id = self._item_info(conn, parent_item_id, item_cache)
 
             annotations.append(
                 Annotation(

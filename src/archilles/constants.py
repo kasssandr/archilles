@@ -5,6 +5,11 @@ All components that read or write chunk_type / section_type values
 should import from here rather than using string literals.
 """
 
+# Calibre book file formats in order of indexing preference. Canonical list
+# shared by the watchdog and batch_index; the Zotero adapter keeps its own
+# priority map (different format universe).
+PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
+
 
 class ChunkType:
     """Chunk type identifiers stored in the ``chunk_type`` column."""

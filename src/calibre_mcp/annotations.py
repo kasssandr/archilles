@@ -7,10 +7,8 @@ This module handles reading and processing Calibre viewer annotations.
 CRITICAL: Calibre uses SHA256 of the FILE PATH, not file content, for annotation lookup!
 """
 
-import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Optional
 from datetime import datetime
@@ -18,35 +16,17 @@ from datetime import datetime
 from src.archilles.text_match import contains_keyword
 from src.archilles.i18n import get_toc_keywords
 
+# Canonical implementations live with the CalibreViewerProvider; re-exported
+# here for the MCP server and watchdog, which import them from this module.
+from src.archilles.annotation_providers.calibre_viewer_provider import (  # noqa: F401
+    compute_book_hash,
+    get_default_annotations_dir as get_annotations_dir,
+)
+
 logger = logging.getLogger(__name__)
 
 # Sourced from the central corpus-language data (i18n); not language-filtered.
 _TOC_KEYWORDS = get_toc_keywords()
-
-
-def compute_book_hash(book_path: str) -> str:
-    """
-    Compute the hash used by Calibre for annotation filenames.
-
-    IMPORTANT: Calibre hashes the FILE PATH, not the file content!
-    This is how Calibre's viewer stores annotations - by hashing the
-    full path to the book file.
-
-    Args:
-        book_path: Full path to the book file (e.g., "D:\\Calibre\\Book.epub")
-
-    Returns:
-        SHA256 hash of the path (64 character hex string)
-    """
-    return hashlib.sha256(book_path.encode('utf-8')).hexdigest()
-
-
-def get_annotations_dir() -> Path:
-    """Get the default Calibre annotations directory."""
-    if os.name == 'nt':
-        appdata = os.environ.get('APPDATA', '')
-        return Path(appdata) / 'calibre' / 'viewer' / 'annots'
-    return Path.home() / '.local' / 'share' / 'calibre' / 'viewer' / 'annots'
 
 
 def _resolve_annotations_path(annotations_dir: Optional[str] = None) -> Path:
@@ -365,89 +345,6 @@ def filter_annotations(
         filtered.append(annot)
 
     return filtered, exclusion_stats
-
-
-def _parse_pdf_date(mod_date: str) -> str:
-    """Parse a PDF date string (D:YYYYMMDDHHmmSS) into ISO format."""
-    if not mod_date:
-        return ""
-    try:
-        if mod_date.startswith("D:"):
-            date_str = mod_date[2:16]
-            return datetime.strptime(date_str, "%Y%m%d%H%M%S").isoformat()
-    except (ValueError, IndexError):
-        pass
-    return mod_date
-
-
-def get_pdf_annotations(pdf_path: str) -> list[dict[str, Any]]:
-    """
-    Extract annotations from PDF file using PyMuPDF.
-
-    Args:
-        pdf_path: Path to PDF file
-
-    Returns:
-        List of annotations in standardized format
-    """
-    try:
-        import fitz  # PyMuPDF
-    except ImportError:
-        return []
-
-    pdf_path = Path(pdf_path)
-    if not pdf_path.exists() or pdf_path.suffix.lower() != '.pdf':
-        return []
-
-    annotations = []
-
-    try:
-        doc = fitz.open(str(pdf_path))
-        total_pages = len(doc)
-
-        for page_num in range(total_pages):
-            page = doc[page_num]
-
-            for annot in page.annots():
-                if annot is None:
-                    continue
-
-                annot_type_raw = annot.type[1] if annot.type else "Unknown"
-
-                text = ""
-                if annot_type_raw in ("Highlight", "Underline", "StrikeOut", "Squiggly"):
-                    text = page.get_textbox(annot.rect).strip()
-
-                note_content = annot.info.get("content", "").strip()
-
-                timestamp = _parse_pdf_date(annot.info.get("modDate", ""))
-
-                if annot_type_raw in ("Highlight", "Underline"):
-                    anno_type = "highlight"
-                elif annot_type_raw in ("Text", "FreeText"):
-                    anno_type = "note"
-                else:
-                    anno_type = "bookmark"
-
-                pos_frac = (page_num + 1) / total_pages if total_pages > 0 else 0
-
-                annotations.append({
-                    'type': anno_type,
-                    'highlighted_text': text,
-                    'notes': note_content,
-                    'timestamp': timestamp,
-                    'spine_index': page_num,
-                    'pos_frac': pos_frac,
-                    'source': 'pdf',
-                    'page': page_num + 1
-                })
-
-        doc.close()
-
-    except Exception:
-        pass
-
-    return annotations
 
 
 def get_combined_annotations(

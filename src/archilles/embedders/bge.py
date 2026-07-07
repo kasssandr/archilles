@@ -42,28 +42,16 @@ BGE_MODELS = {
         "hf_name": "BAAI/bge-small-en-v1.5",
         "dimension": 384,
         "max_tokens": 512,
-        "model_size_mb": 133,
-        "vram_mb": 300,
-        "quality_tier": 3,
-        "speed_tier": 9,
     },
     "bge-base": {
         "hf_name": "BAAI/bge-base-en-v1.5",
         "dimension": 768,
         "max_tokens": 512,
-        "model_size_mb": 438,
-        "vram_mb": 600,
-        "quality_tier": 6,
-        "speed_tier": 6,
     },
     "bge-m3": {
         "hf_name": "BAAI/bge-m3",
         "dimension": 1024,
         "max_tokens": 8192,
-        "model_size_mb": 2200,
-        "vram_mb": 3000,
-        "quality_tier": 9,
-        "speed_tier": 3,
     },
 }
 
@@ -74,11 +62,8 @@ def _resolve_device(device: DeviceType) -> str:
     """Resolve 'auto' to the best available device, or pass through explicit values."""
     if device != "auto":
         return device
-    if TORCH_AVAILABLE and torch.cuda.is_available():
-        return "cuda"
-    if TORCH_AVAILABLE and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        return "mps"
-    return "cpu"
+    from src.archilles.hardware import get_best_device
+    return get_best_device()
 
 
 class BGEEmbedder(TextEmbedder):
@@ -156,10 +141,6 @@ class BGEEmbedder(TextEmbedder):
             supports_mps=TORCH_AVAILABLE and hasattr(torch.backends, 'mps'),
             supports_batching=True,
             normalized_embeddings=self._normalize,
-            quality_tier=self._config["quality_tier"],
-            speed_tier=self._config["speed_tier"],
-            model_size_mb=self._config["model_size_mb"],
-            vram_required_mb=self._config["vram_mb"],
         )
 
     @property
@@ -246,29 +227,6 @@ class BGEEmbedder(TextEmbedder):
                 "normalized": self._normalize,
             }
         )
-
-
-def create_bge_embedder(
-    model_name: BGEModelName = "bge-small",
-    device: DeviceType = "auto",
-    **kwargs
-) -> Optional[BGEEmbedder]:
-    """
-    Factory function to create BGE embedder if dependencies are available.
-
-    Args:
-        model_name: Which BGE model to use
-        device: Device to use
-        **kwargs: Additional arguments for BGEEmbedder
-
-    Returns:
-        BGEEmbedder instance or None if dependencies not installed
-    """
-    if not SENTENCE_TRANSFORMERS_AVAILABLE:
-        logger.warning("sentence-transformers not available")
-        return None
-
-    return BGEEmbedder(model_name=model_name, device=device, **kwargs)
 
 
 # Quick test

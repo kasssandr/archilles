@@ -61,18 +61,34 @@ def get_library_path(*, required: bool = True) -> Path | None:
     sys.exit(1)
 
 
+def _read_library_config(library_path: Path) -> dict:
+    """Read ``<library>/.archilles/config.json`` as a dict.
+
+    One shared reader for all per-library config getters so their error
+    policy cannot drift: a missing, unparseable or non-object file yields
+    ``{}`` (with a warning for a broken file), and each getter falls back
+    to its default.
+    """
+    config_path = library_path / ".archilles" / "config.json"
+    if not config_path.exists():
+        return {}
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Cannot read %s (using defaults): %s", config_path, exc)
+        return {}
+    return config if isinstance(config, dict) else {}
+
+
 def get_rag_db_path(library_path: Path | None = None) -> str:
     """Return the RAG database path, reading config.json if present."""
     if library_path is None:
         library_path = get_library_path()
 
-    config_path = library_path / ".archilles" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        custom = config.get("rag_db_path")
-        if custom:
-            return str(Path(custom) if os.path.isabs(custom) else library_path / custom)
+    custom = _read_library_config(library_path).get("rag_db_path")
+    if custom:
+        return str(Path(custom) if os.path.isabs(custom) else library_path / custom)
 
     return str(library_path / ".archilles" / "rag_db")
 
@@ -109,13 +125,9 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
     if library_path is None:
         return list(DEFAULT_EXCLUDED_TAGS)
 
-    config_path = library_path / ".archilles" / "config.json"
-    if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        custom = config.get("excluded_tags")
-        if isinstance(custom, list):
-            return [str(t) for t in custom]
+    custom = _read_library_config(library_path).get("excluded_tags")
+    if isinstance(custom, list):
+        return [str(t) for t in custom]
 
     return list(DEFAULT_EXCLUDED_TAGS)
 
@@ -147,17 +159,7 @@ def get_languages(library_path: Path | None = None) -> list[str]:
     if library_path is None:
         return list(DEFAULT_LANGUAGES)
 
-    config_path = library_path / ".archilles" / "config.json"
-    if not config_path.exists():
-        return list(DEFAULT_LANGUAGES)
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return list(DEFAULT_LANGUAGES)
-
-    custom = config.get("languages") if isinstance(config, dict) else None
+    custom = _read_library_config(library_path).get("languages")
     if isinstance(custom, list):
         langs = [x for x in custom if isinstance(x, str) and x.strip()]
         if langs:
@@ -182,17 +184,7 @@ def get_duplicate_tag(library_path: Path | None = None) -> str:
     if library_path is None:
         return DEFAULT_DUPLICATE_TAG
 
-    config_path = library_path / ".archilles" / "config.json"
-    if not config_path.exists():
-        return DEFAULT_DUPLICATE_TAG
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return DEFAULT_DUPLICATE_TAG
-
-    val = config.get("duplicate_tag") if isinstance(config, dict) else None
+    val = _read_library_config(library_path).get("duplicate_tag")
     return val if isinstance(val, str) and val.strip() else DEFAULT_DUPLICATE_TAG
 
 
@@ -216,19 +208,9 @@ def get_mode(library_path: Path | None = None) -> str:
     if library_path is None:
         return DEFAULT_MODE
 
-    config_path = library_path / ".archilles" / "config.json"
-    if not config_path.exists():
-        return DEFAULT_MODE
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return DEFAULT_MODE
-
     from src.archilles.execution import VALID_MODES
 
-    val = config.get("mode") if isinstance(config, dict) else None
+    val = _read_library_config(library_path).get("mode")
     if isinstance(val, str) and val in VALID_MODES:
         return val
     return DEFAULT_MODE
@@ -288,17 +270,7 @@ def get_embedder_config(library_path: Path | None = None) -> dict:
     if library_path is None:
         return {}
 
-    config_path = library_path / ".archilles" / "config.json"
-    if not config_path.exists():
-        return {}
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-    block = config.get("embedder") if isinstance(config, dict) else None
+    block = _read_library_config(library_path).get("embedder")
     return block if isinstance(block, dict) else {}
 
 

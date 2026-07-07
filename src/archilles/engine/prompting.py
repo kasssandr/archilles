@@ -2,7 +2,7 @@
 assembly and markdown export. Extracted from the ArchillesRAG monolith (8.16)."""
 from datetime import datetime
 from html import escape as _html_escape
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from src.archilles.constants import ChunkType
 from src.archilles.i18n import t
@@ -254,6 +254,10 @@ You are an academic research assistant. Your task is to answer the user's questi
 
         lines.append("<documents>")
 
+        # Children of the same section share one parent — fetch each parent
+        # chunk only once per prompt instead of once per result.
+        parent_cache: Dict[str, Any] = {}
+
         for i, result in enumerate(results, start=1):
             doc_id = f"doc_{i}"
             metadata = result['metadata']
@@ -261,7 +265,9 @@ You are an academic research assistant. Your task is to answer the user's questi
 
             # Apply context expansion if enabled and available
             if expand_context:
-                text = self.expand_chunk_context(text, metadata, expansion_chars)
+                text = self.expand_chunk_context(
+                    text, metadata, expansion_chars, parent_cache=parent_cache
+                )
 
             # Build metadata line (matches inline metadata format)
             meta_parts = []
@@ -308,7 +314,8 @@ You are an academic research assistant. Your task is to answer the user's questi
         self,
         chunk_text: str,
         metadata: Dict[str, Any],
-        expansion_chars: int = 400
+        expansion_chars: int = 400,
+        parent_cache: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Expand chunk context using the parent chunk or stored window_text (Small-to-Big Retrieval).
@@ -334,7 +341,12 @@ You are an academic research assistant. Your task is to answer the user's questi
         # flat-index chunks do not and fall through to window_text below.
         parent_id = metadata.get('parent_id', '')
         if parent_id and hasattr(self._rag, 'store'):
-            parent = self._rag.store.get_by_id(parent_id)
+            if parent_cache is not None and parent_id in parent_cache:
+                parent = parent_cache[parent_id]
+            else:
+                parent = self._rag.store.get_by_id(parent_id)
+                if parent_cache is not None:
+                    parent_cache[parent_id] = parent
             if parent and parent.get('text'):
                 return parent['text']
 

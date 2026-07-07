@@ -79,6 +79,9 @@ class Indexer:
 
     def __init__(self, rag):
         self._rag = rag
+        # Cached ModularPipeline — created on first use so batch runs do not
+        # reload the embedding model per book.
+        self._modular_pipeline = None
 
     def _apply_book_metadata_to_chunk(self, chunk_data: Dict[str, Any],
                                        book_metadata: Dict[str, Any]) -> None:
@@ -168,6 +171,83 @@ class Indexer:
 
             chunks.append(chunk_data)
         return chunks
+
+    def _detect_needs_ocr(self, extracted) -> bool:
+        """Detect scanned/mostly-scanned PDFs from extraction statistics.
+
+        Prints a warning and returns True when the text yield suggests the
+        PDF is (mostly) scanned and should be re-indexed with --enable-ocr.
+        Shared by index_book and prepare_book so the thresholds cannot drift.
+        """
+        if extracted.metadata.detected_format != 'pdf':
+            return False
+
+        total_pages = extracted.metadata.total_pages or 0
+        total_words = extracted.metadata.total_words or 0
+
+        if not extracted.chunks:
+            print("  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
+            return True
+
+        if total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
+            # Also check page coverage: if most pages have chunks, it's front-matter, not scanned
+            pages_with_text = len(set(
+                c['metadata'].get('page', 0)
+                for c in extracted.chunks
+                if isinstance(c.get('metadata'), dict)
+            ))
+            page_coverage = pages_with_text / total_pages if total_pages > 0 else 1.0
+            if page_coverage < 0.4:
+                wpp = total_words // total_pages
+                print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
+                return True
+
+        return False
+
+    def _build_annotation_chunks(
+        self,
+        annotations: List[Dict[str, Any]],
+        book_id: str,
+        book_title: str,
+        annotation_hash: str,
+        book_format: str,
+        metadata_hash: str,
+        book_metadata: Optional[Dict[str, Any]],
+        indexed_at: Optional[str] = None,
+    ) -> tuple:
+        """Build annotation chunk dicts plus their texts for batched embedding.
+
+        Returns:
+            (chunks, texts) — parallel lists; embedding is left to the caller
+            so both call sites (index_book, _update_metadata_only) encode all
+            annotation texts in one batch.
+        """
+        indexed_at = indexed_at or datetime.now().isoformat()
+        chunks, texts = [], []
+        for idx, annot in enumerate(annotations):
+            annot_text = self._build_annotation_text(annot)
+            if not annot_text:
+                continue
+
+            chunk = {
+                'id': f"{book_id}_annot_{idx}",
+                'text': annot_text,
+                'book_id': book_id,
+                'book_title': book_title,
+                'chunk_index': -(idx + 10),  # Negative to distinguish from content
+                'chunk_type': ChunkType.ANNOTATION,
+                'annotation_type': annot.get('type', ''),
+                'annotation_source': annot.get('source', ''),
+                'annotation_hash': annotation_hash,
+                'page_number': annot.get('page', 0) or 0,
+                'format': book_format,
+                'indexed_at': indexed_at,
+                'metadata_hash': metadata_hash,
+            }
+            self._apply_book_metadata_to_chunk(chunk, book_metadata)
+            chunks.append(chunk)
+            texts.append(annot_text)
+        return chunks, texts
 
     @staticmethod
     def _build_annotation_text(annot: Dict[str, Any]) -> str:
@@ -499,7 +579,12 @@ class Indexer:
         print(f"  Using ModularPipeline (profile: {profile_name})")
 
         try:
-            pipeline = ModularPipeline.from_profile(profile_name)
+            # Reuse one pipeline for the whole run — building it per book
+            # would reload the embedding model each time.
+            pipeline = self._modular_pipeline
+            if pipeline is None:
+                pipeline = ModularPipeline.from_profile(profile_name)
+                self._modular_pipeline = pipeline
             processed = pipeline.process(book_path)
 
             print(f"  Parsed: {processed.page_count or 'N/A'} pages in {processed.parse_time:.1f}s")
@@ -522,9 +607,6 @@ class Indexer:
                 calibre_id=calibre_id if calibre_id else None,
                 source_id=source_id,
             )
-
-            # Unload model to free GPU memory
-            pipeline.unload()
 
             print(f"\n  Indexed {chunks_added} chunks in {processed.total_time:.1f}s total")
 
@@ -756,25 +838,7 @@ class Indexer:
         extract_time = time.time() - start_time
 
         # Detect scanned/mostly-scanned PDFs
-        needs_ocr = False
-        if extracted.metadata.detected_format == 'pdf':
-            total_pages = extracted.metadata.total_pages or 0
-            total_words = extracted.metadata.total_words or 0
-            if not extracted.chunks:
-                needs_ocr = True
-                print(f"  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
-            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
-                # Also check page coverage: if most pages have chunks, it's front-matter, not scanned
-                pages_with_text = len(set(
-                    c['metadata'].get('page', 0)
-                    for c in extracted.chunks
-                    if isinstance(c.get('metadata'), dict)
-                )) if extracted.chunks else 0
-                page_coverage = pages_with_text / total_pages if total_pages > 0 else 1.0
-                if page_coverage < 0.4:
-                    needs_ocr = True
-                    wpp = total_words // total_pages
-                    print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
+        needs_ocr = self._detect_needs_ocr(extracted)
 
         if self._rag.hierarchical and extracted.chunks:
             self._apply_hierarchical_chunking(extracted, book_id)
@@ -842,32 +906,16 @@ class Indexer:
             if annotations:
                 annot_hash = self._compute_annotation_hash(annotations)
 
-                # Build annotation chunks and collect texts for batched embedding
-                annot_texts = []
-                annot_chunks_pending = []
-                for idx, annot in enumerate(annotations):
-                    annot_text = self._build_annotation_text(annot)
-                    if not annot_text:
-                        continue
-
-                    annot_chunk = {
-                        'id': f"{book_id}_annot_{idx}",
-                        'text': annot_text,
-                        'book_id': book_id,
-                        'book_title': book_metadata.get('title', book_path.stem) if book_metadata else book_path.stem,
-                        'chunk_index': -(idx + 10),  # Negative to distinguish from content
-                        'chunk_type': ChunkType.ANNOTATION,
-                        'annotation_type': annot.get('type', ''),
-                        'annotation_source': annot.get('source', ''),
-                        'annotation_hash': annot_hash,
-                        'page_number': annot.get('page', 0) or 0,
-                        'format': extracted.metadata.detected_format,
-                        'indexed_at': indexed_at,
-                        'metadata_hash': meta_hash,
-                    }
-                    self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
-                    annot_texts.append(annot_text)
-                    annot_chunks_pending.append(annot_chunk)
+                annot_chunks_pending, annot_texts = self._build_annotation_chunks(
+                    annotations,
+                    book_id=book_id,
+                    book_title=book_metadata.get('title', book_path.stem) if book_metadata else book_path.stem,
+                    annotation_hash=annot_hash,
+                    book_format=extracted.metadata.detected_format,
+                    metadata_hash=meta_hash,
+                    book_metadata=book_metadata,
+                    indexed_at=indexed_at,
+                )
 
                 # Batch-encode all annotation texts at once
                 if annot_texts:
@@ -999,24 +1047,7 @@ class Indexer:
         print(f"  Extract: {len(extracted.chunks)} chunks, {extracted.metadata.total_words:,}w, {extracted.metadata.total_pages or '?'}p ({extract_time:.1f}s)")
 
         # Detect scanned/mostly-scanned PDFs
-        needs_ocr = False
-        if extracted.metadata.detected_format == 'pdf':
-            total_pages = extracted.metadata.total_pages or 0
-            total_words = extracted.metadata.total_words or 0
-            if not extracted.chunks:
-                needs_ocr = True
-                print(f"  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")
-            elif total_pages >= 3 and total_words > 0 and (total_words / total_pages) < 150:
-                pages_with_text = len(set(
-                    c['metadata'].get('page', 0)
-                    for c in extracted.chunks
-                    if isinstance(c.get('metadata'), dict)
-                )) if extracted.chunks else 0
-                page_coverage = pages_with_text / total_pages if total_pages > 0 else 1.0
-                if page_coverage < 0.4:
-                    needs_ocr = True
-                    wpp = total_words // total_pages
-                    print(f"  ⚠️  Only {total_words}w across {total_pages}p ({wpp}w/p), text on {pages_with_text}/{total_pages} pages — likely mostly scanned. Re-index with --enable-ocr.")
+        needs_ocr = self._detect_needs_ocr(extracted)
 
         # Step 2: Build chunk dicts (shared with index_book)
         indexed_at = datetime.now().isoformat()
@@ -1352,7 +1383,7 @@ class Indexer:
         for section in sections:
             flat_sections.extend(split_section(section))
 
-        chunks, embeddings = [], []
+        chunks, texts = [], []
         title = book_metadata.get('title', book_id)
 
         for i, section in enumerate(flat_sections):
@@ -1366,13 +1397,6 @@ class Indexer:
                 parts.append(section['text'])
 
             chunk_text = f"[CALIBRE_COMMENT] {' '.join(parts)}"
-
-            if embed:
-                embedding = self._rag.embedding_model.encode(
-                    chunk_text, show_progress_bar=False, convert_to_numpy=True
-                )
-            else:
-                embedding = []
 
             chunk = {
                 'id': f"{book_id}_comment_{i}",
@@ -1390,7 +1414,16 @@ class Indexer:
             self._apply_book_metadata_to_chunk(chunk, book_metadata)
 
             chunks.append(chunk)
-            embeddings.append(embedding.tolist() if hasattr(embedding, 'tolist') else embedding)
+            texts.append(chunk_text)
+
+        # Batch-encode all comment texts at once
+        if embed and texts:
+            encoded = self._rag.embedding_model.encode(
+                texts, show_progress_bar=False, convert_to_numpy=True
+            )
+            embeddings = [e.tolist() for e in encoded]
+        else:
+            embeddings = [[] for _ in chunks]
 
         return chunks, embeddings
 
@@ -1485,39 +1518,21 @@ class Indexer:
 
             # Add new annotation chunks
             if annotations:
-                annot_chunks = []
-                annot_embeddings = []
-                for idx, annot in enumerate(annotations):
-                    annot_text = self._build_annotation_text(annot)
-                    if not annot_text:
-                        continue
-
-                    annot_embedding = self._rag.embedding_model.encode(
-                        annot_text, show_progress_bar=False, convert_to_numpy=True
-                    )
-
-                    annot_chunk = {
-                        'id': f"{book_id}_annot_{idx}",
-                        'text': annot_text,
-                        'book_id': book_id,
-                        'book_title': book_metadata.get('title', book_id),
-                        'chunk_index': -(idx + 10),
-                        'chunk_type': ChunkType.ANNOTATION,
-                        'annotation_type': annot.get('type', ''),
-                        'annotation_source': annot.get('source', ''),
-                        'annotation_hash': annotation_hash or '',
-                        'page_number': annot.get('page', 0) or 0,
-                        'format': state.get('format', ''),
-                        'indexed_at': datetime.now().isoformat(),
-                        'metadata_hash': new_hash,
-                    }
-                    self._apply_book_metadata_to_chunk(annot_chunk, book_metadata)
-
-                    annot_chunks.append(annot_chunk)
-                    annot_embeddings.append(annot_embedding.tolist())
+                annot_chunks, annot_texts = self._build_annotation_chunks(
+                    annotations,
+                    book_id=book_id,
+                    book_title=book_metadata.get('title', book_id),
+                    annotation_hash=annotation_hash or '',
+                    book_format=state.get('format', ''),
+                    metadata_hash=new_hash,
+                    book_metadata=book_metadata,
+                )
 
                 if annot_chunks:
-                    embeddings_array = np.array(annot_embeddings)
+                    # Batch-encode all annotation texts at once
+                    embeddings_array = self._rag.embedding_model.encode(
+                        annot_texts, show_progress_bar=False, convert_to_numpy=True
+                    )
                     self._rag.store.add_chunks(annot_chunks, embeddings_array)
                     print(f"    Added {len(annot_chunks)} new annotation chunks")
                     annot_updated = True

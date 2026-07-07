@@ -95,8 +95,8 @@ from src.archilles.recipe import IndexRecipe, default_recipe
 from src.archilles.indexer import IndexingCheckpoint
 from src.archilles.sqlite_ro import connect_readonly
 
-# Preferred book formats in order of priority
-PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
+# Preferred book formats in order of priority — canonical list in constants.py
+from src.archilles.constants import PREFERRED_FORMATS
 
 
 @dataclass(frozen=True)

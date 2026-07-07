@@ -10,12 +10,11 @@ This module provides:
 - Integration with LanceDB storage
 """
 
-import re
 import time
 import logging
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import List, Optional, Iterator
+from typing import List, Optional
 
 from .profiles import IndexingProfile, get_profile
 from .parsers.base import DocumentParser
@@ -257,25 +256,6 @@ class ModularPipeline:
 
     # ── Chunker selection ────────────────────────────────────────
 
-    def _read_frontmatter_field(self, file_path: Path, field_name: str) -> str:
-        """Return a scalar YAML frontmatter field from a Markdown file, or ''."""
-        try:
-            text = file_path.read_text(encoding='utf-8', errors='replace')
-            if not text.startswith('---'):
-                return ''
-            end = text.find('\n---', 3)
-            if end == -1:
-                return ''
-            yaml_block = text[3:end]
-            m = re.search(
-                r'^' + re.escape(field_name) + r':\s*([^\n]+)',
-                yaml_block,
-                re.MULTILINE,
-            )
-            return m.group(1).strip().strip('"\'') if m else ''
-        except Exception:
-            return ''
-
     def _select_chunker(self, file_path: Path) -> TextChunker:
         """Return the appropriate chunker for *file_path*.
 
@@ -283,8 +263,9 @@ class ModularPipeline:
         Falls back to the default chunker for all other formats and strategies.
         """
         if file_path.suffix.lower() in {'.md', '.markdown'}:
-            strategy = self._read_frontmatter_field(file_path, 'chunking_strategy')
-            if strategy == 'dialogue':
+            from src.adapters.obsidian_adapter import parse_frontmatter
+            frontmatter, _ = parse_frontmatter(file_path)
+            if frontmatter.get('chunking_strategy') == 'dialogue':
                 return self._get_dialogue_chunker()
         return self._get_default_chunker()
 
@@ -404,33 +385,6 @@ class ModularPipeline:
             chunk_time=chunk_time,
             embed_time=embed_time
         )
-
-    def process_batch(
-        self,
-        file_paths: List[str | Path],
-        progress_callback: Optional[callable] = None
-    ) -> Iterator[ProcessedDocument]:
-        """
-        Process multiple documents.
-
-        Args:
-            file_paths: List of document paths
-            progress_callback: Optional callback(current, total, doc)
-
-        Yields:
-            ProcessedDocument for each file
-        """
-        total = len(file_paths)
-        for i, file_path in enumerate(file_paths):
-            try:
-                result = self.process(file_path)
-                if progress_callback:
-                    progress_callback(i + 1, total, result)
-                yield result
-            except Exception as e:
-                logger.error(f"Failed to process {file_path}: {e}")
-                if progress_callback:
-                    progress_callback(i + 1, total, None)
 
     def unload(self) -> None:
         """Unload models to free memory."""

@@ -25,6 +25,7 @@ Called from:
 
 import json
 import logging
+import os
 import sqlite3
 import time
 from datetime import datetime
@@ -33,8 +34,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# Book formats in order of preference (mirrors batch_index.py)
-_PREFERRED_FORMATS = ['.pdf', '.epub', '.mobi', '.azw3', '.txt', '.md', '.txtz']
+# Book formats in order of preference — canonical list in constants.py
+from src.archilles.constants import PREFERRED_FORMATS as _PREFERRED_FORMATS  # noqa: E402
 
 # Tags that exclude a book from indexing. The canonical list lives in
 # ``src.archilles.config`` so every consumer (watchdog, batch_index, MCP
@@ -45,11 +46,30 @@ from src.archilles.indexer import IndexingCheckpoint  # noqa: E402
 from src.archilles.sqlite_ro import connect_readonly  # noqa: E402
 
 
+_PREFERRED_FORMAT_SET = frozenset(_PREFERRED_FORMATS)
+
+
 def _discover_formats(book_path: Path) -> list[dict[str, str]]:
+    """Find supported book files in *book_path*, in PREFERRED_FORMATS order.
+
+    One directory scan instead of one glob per extension — this runs for
+    every library book on every watchdog scan.
+    """
+    by_ext: dict[str, list[str]] = {}
+    try:
+        with os.scandir(book_path) as it:
+            for entry in it:
+                if not entry.is_file():
+                    continue
+                suffix = os.path.splitext(entry.name)[1].lower()
+                if suffix in _PREFERRED_FORMAT_SET:
+                    by_ext.setdefault(suffix, []).append(entry.path)
+    except OSError:
+        return []
     return [
-        {'format': ext[1:].upper(), 'path': str(f)}
+        {'format': ext[1:].upper(), 'path': path}
         for ext in _PREFERRED_FORMATS
-        for f in book_path.glob(f'*{ext}')
+        for path in sorted(by_ext.get(ext, ()))
     ]
 
 
@@ -211,10 +231,9 @@ def _warn_light_plan_if_hierarchical(db_path: str, resolved_plan) -> None:
     if resolved_plan is None or resolved_plan.mode != "light":
         return
     try:
-        from src.archilles.engine import ArchillesRAG
+        from src.storage.lancedb_store import LanceDBStore
         from src.archilles.execution import warn_if_light_plan_hides_hierarchy
-        rag = ArchillesRAG(db_path=db_path, skip_model=True)
-        warn_if_light_plan_hides_hierarchy(resolved_plan, rag.store)
+        warn_if_light_plan_hides_hierarchy(resolved_plan, LanceDBStore(db_path))
     except Exception:
         pass
 
@@ -253,6 +272,7 @@ class WatchdogScanner:
         self._annotation_cache_dirty = False
         self._shutdown_requested = False
         self._rag = None
+        self._plan = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -362,6 +382,10 @@ class WatchdogScanner:
             if not h.get('has_content', True)
         }
 
+        # Formats discovered in phase 1 are reused by phases 2-4 so each book
+        # directory is scanned at most once per watchdog run.
+        formats_by_cid: dict[int, list[dict[str, str]]] = {}
+
         for cid, meta in calibre_books.items():
             # Skip books carrying excluded tags (see config.get_excluded_tags)
             if self.excluded_tags_lower and any(
@@ -371,6 +395,7 @@ class WatchdogScanner:
 
             book_path = Path(meta['path'])
             formats = _discover_formats(book_path)
+            formats_by_cid[cid] = formats
             if not formats:
                 continue  # no supported file on disk
 
@@ -445,7 +470,8 @@ class WatchdogScanner:
                 meta = calibre_books.get(cid)
                 if not meta:
                     continue
-                formats = _discover_formats(Path(meta['path']))
+                formats = (formats_by_cid[cid] if cid in formats_by_cid
+                           else _discover_formats(Path(meta['path'])))
                 if not formats:
                     continue
                 file_path = formats[0]['path']
@@ -512,7 +538,8 @@ class WatchdogScanner:
                     meta = calibre_books.get(cid)
                     if not meta:
                         continue
-                    formats = _discover_formats(Path(meta['path']))
+                    formats = (formats_by_cid[cid] if cid in formats_by_cid
+                               else _discover_formats(Path(meta['path'])))
                     if not formats:
                         continue
                     print(f"\n[{already_done + j}/{total_p3}] {meta.get('author', '')}: {entry['title']}")
@@ -597,7 +624,8 @@ class WatchdogScanner:
                 meta = calibre_books.get(cid)
                 if not meta:
                     continue
-                formats = _discover_formats(Path(meta['path']))
+                formats = (formats_by_cid[cid] if cid in formats_by_cid
+                           else _discover_formats(Path(meta['path'])))
                 if not formats:
                     continue
                 print(f"\n[{already_done + j}/{total_p4}] {meta.get('author', '')}: {entry['title']}")
@@ -639,14 +667,21 @@ class WatchdogScanner:
         indexing rather than treat an empty dict as "the whole library is new".
         An empty but healthy DB returns {} without raising.
         """
-        # Import lazily so the watchdog can be imported without heavy deps
-        from src.archilles.engine import ArchillesRAG
-        rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
-        return rag.store.get_hashes_for_indexed_books()
+        # Open the store directly — a full ArchillesRAG (even with skip_model)
+        # probes the GPU and builds an extractor, pure overhead for a hash read.
+        from src.storage.lancedb_store import LanceDBStore
+        return LanceDBStore(self.db_path).get_hashes_for_indexed_books()
 
     def _resolve_plan(self):
-        """Resolve this library's ExecutionPlan (mode + detected hardware)."""
-        return _resolve_execution_plan(Path(self.library_path))
+        """Resolve this library's ExecutionPlan (mode + detected hardware).
+
+        Cached per scanner instance — scan(), the indexing phases and
+        _load_rag all need the plan, and each resolution re-reads
+        config.json.
+        """
+        if self._plan is None:
+            self._plan = _resolve_execution_plan(Path(self.library_path))
+        return self._plan
 
     def _load_rag(self):
         """Load a full ArchillesRAG instance, wired to the Hardware-Tiers-V2 plan.
@@ -827,13 +862,15 @@ class WatchdogScanner:
 # Zotero Watchdog
 # ══════════════════════════════════════════════════════════════════
 
-_ZOTERO_EXCLUDED_TYPE_IDS = (1, 3, 27)  # annotation, attachment, note
-_ZOTERO_INDEXABLE_CONTENT_TYPES = (
-    "application/pdf",
-    "application/epub+zip",
-    "text/html",
-    "text/plain",
+# Canonical definitions live in the Zotero adapter; derived here so the
+# scanner's notion of "excluded item" / "indexable attachment" cannot drift
+# from what the adapter actually indexes.
+from src.adapters.zotero_adapter import (  # noqa: E402
+    _CONTENT_TYPE_MAP as _ZOTERO_CONTENT_TYPE_MAP,
+    _EXCLUDED_TYPE_IDS as _ZOTERO_EXCLUDED_TYPE_IDS,
 )
+
+_ZOTERO_INDEXABLE_CONTENT_TYPES = tuple(_ZOTERO_CONTENT_TYPE_MAP)
 
 
 def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
@@ -1009,6 +1046,7 @@ class ZoteroWatchdogScanner:
         self._annotation_cache_dirty = False
         self._shutdown_requested = False
         self._rag = None
+        self._plan = None
 
     @property
     def shutdown_requested(self) -> bool:
@@ -1202,13 +1240,21 @@ class ZoteroWatchdogScanner:
         whole library look new and, under full-external, marks everything
         pending_external. An empty but healthy DB returns {} without raising.
         """
-        from src.archilles.engine import ArchillesRAG
-        rag = ArchillesRAG(db_path=self.db_path, skip_model=True)
-        return rag.store.get_hashes_by_book_id()
+        # Open the store directly — a full ArchillesRAG (even with skip_model)
+        # probes the GPU and builds an extractor, pure overhead for a hash read.
+        from src.storage.lancedb_store import LanceDBStore
+        return LanceDBStore(self.db_path).get_hashes_by_book_id()
 
     def _resolve_plan(self):
-        """Resolve this library's ExecutionPlan (mode + detected hardware)."""
-        return _resolve_execution_plan(Path(self.library_path))
+        """Resolve this library's ExecutionPlan (mode + detected hardware).
+
+        Cached per scanner instance — scan(), the indexing phases and
+        _load_rag all need the plan, and each resolution re-reads
+        config.json.
+        """
+        if self._plan is None:
+            self._plan = _resolve_execution_plan(Path(self.library_path))
+        return self._plan
 
     def _load_rag(self):
         """Load a full ArchillesRAG instance, wired to the Hardware-Tiers-V2 plan.

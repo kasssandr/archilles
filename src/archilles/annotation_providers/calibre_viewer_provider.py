@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def compute_book_hash(book_path: str) -> str:
-    """Calibre hashes the FILE PATH (not content) for annotation filenames."""
+    """Compute the hash Calibre uses for annotation filenames.
+
+    CRITICAL: Calibre hashes the FILE PATH (not the file content) —
+    this is how the viewer locates a book's annotation JSON.
+    """
     return hashlib.sha256(book_path.encode("utf-8")).hexdigest()
 
 
