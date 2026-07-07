@@ -13,7 +13,7 @@ A privacy-first RAG system that brings semantic search to your personal research
 
 ---
 
-**[Quick Start](#quick-start)** • **[Features](#key-features)** • **[Documentation](#documentation)** • **[Roadmap](#product-roadmap)** • **[archilles.org](https://archilles.org)**
+**[Why Archilles?](docs/WHY.md)** • **[Quick Start](#quick-start)** • **[Features](#key-features)** • **[Documentation](#documentation)** • **[Roadmap](#product-roadmap)** • **[archilles.org](https://archilles.org)**
 
 ---
 
@@ -390,6 +390,7 @@ We're actively seeking beta testers from diverse research disciplines. If you ha
 
 ## Documentation
 
+🧭 **[Why Archilles?](docs/WHY.md)** – What it is for and the principles behind it
 📖 **[Installation Guide](docs/INSTALLATION.md)** – Detailed setup instructions
 📘 **[Usage Guide](docs/USAGE.md)** – All commands, MCP tools, and practical workflows
 🗂️ **[Feature Catalog](docs/FEATURES.md)** – Complete reference of all implemented features
