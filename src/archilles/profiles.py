@@ -18,10 +18,8 @@ Quality is IDENTICAL across all profiles - only indexing speed differs.
 The embedding device (cuda/mps/cpu) is detected automatically at startup.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from typing import Literal, Dict, Any
-from datetime import datetime
-import json
 
 ProfileName = Literal["minimal", "balanced", "maximal"]
 
@@ -47,15 +45,6 @@ class IndexingProfile:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
         return asdict(self)
-
-    def to_json(self) -> str:
-        """Convert to JSON string."""
-        return json.dumps(self.to_dict(), indent=2)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "IndexingProfile":
-        """Create from dictionary."""
-        return cls(**data)
 
 
 # Lazy-initialised: calling get_best_device() at import time pulls in torch,
@@ -143,93 +132,6 @@ def list_profiles() -> None:
     print()
 
 
-@dataclass
-class IndexMetadata:
-    """
-    Metadata stored with each index for reproducibility.
-
-    This information is critical for:
-    - Reproducing search results on different systems
-    - Deciding whether to re-index with a different profile
-    - Debugging performance issues
-    """
-
-    archilles_version: str
-    profile_name: ProfileName
-    embedding_model: str
-    chunk_size: int
-    chunk_overlap: int
-    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-
-    # Hardware snapshot at index creation time
-    hardware_gpu: str = "unknown"
-    hardware_vram_gb: float = 0.0
-    hardware_ram_gb: float = 0.0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for database metadata."""
-        return asdict(self)
-
-    @classmethod
-    def from_profile(
-        cls,
-        profile: IndexingProfile,
-        version: str = "0.2.0",
-        gpu: str = "unknown",
-        vram_gb: float = 0.0,
-        ram_gb: float = 0.0,
-    ) -> "IndexMetadata":
-        """Create metadata from a profile and hardware info."""
-        return cls(
-            archilles_version=version,
-            profile_name=profile.name,
-            embedding_model=profile.embedding_model,
-            chunk_size=profile.chunk_size,
-            chunk_overlap=profile.chunk_overlap,
-            hardware_gpu=gpu,
-            hardware_vram_gb=vram_gb,
-            hardware_ram_gb=ram_gb,
-        )
-
-
-def create_index_metadata(
-    profile: IndexingProfile,
-    version: str = "0.2.0",
-) -> IndexMetadata:
-    """
-    Create index metadata from profile and current hardware.
-
-    Args:
-        profile: The indexing profile being used
-        version: ARCHILLES version string
-
-    Returns:
-        IndexMetadata for storing with the collection
-    """
-    # Try to detect current hardware
-    try:
-        from .hardware import detect_hardware
-        hw = detect_hardware()
-        return IndexMetadata.from_profile(
-            profile=profile,
-            version=version,
-            gpu=hw.gpu_name or "none",
-            vram_gb=hw.vram_gb or 0.0,
-            ram_gb=hw.ram_gb,
-        )
-    except Exception:
-        # Fallback if hardware detection fails
-        return IndexMetadata.from_profile(profile=profile, version=version)
-
-
 # Quick test
 if __name__ == "__main__":
     list_profiles()
-
-    print("\nMinimal profile details:")
-    p = get_profile("minimal")
-    print(p.to_json())
-
-    print("\nExample index metadata:")
-    meta = IndexMetadata.from_profile(p, gpu="NVIDIA Quadro T1000", vram_gb=4.0, ram_gb=64.0)
-    print(json.dumps(meta.to_dict(), indent=2))

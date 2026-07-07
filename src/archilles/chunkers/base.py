@@ -97,7 +97,6 @@ class TextChunker(ABC):
     Implementations should:
     1. Accept a ChunkerConfig for configuration
     2. Implement chunk() to split text into chunks
-    3. Optionally implement chunk_with_pages() for page-aware chunking
 
     Example implementation:
         class MyChunker(TextChunker):
@@ -128,62 +127,6 @@ class TextChunker(ABC):
     def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
         """Split text into chunks."""
         pass
-
-    def chunk_with_pages(
-        self,
-        pages: List[str],
-        source_file: str = ""
-    ) -> List[TextChunk]:
-        """Chunk text while preserving page information.
-
-        Joins pages, chunks the combined text, then maps chunks back to
-        their source pages. Subclasses can override for page-aware chunking.
-        """
-        if not pages:
-            return []
-
-        # Track page boundaries in the combined text
-        page_boundaries = []  # (start_char, end_char, page_num)
-        current_pos = 0
-
-        combined_parts = []
-        for page_num, page_text in enumerate(pages, start=1):
-            start = current_pos
-            combined_parts.append(page_text)
-            current_pos += len(page_text) + 2  # +2 for \n\n separator
-            page_boundaries.append((start, current_pos - 2, page_num))
-
-        combined_text = "\n\n".join(combined_parts)
-
-        # Chunk the combined text
-        chunks = self.chunk(combined_text, source_file)
-
-        # Map chunks back to pages using a two-pointer merge.
-        # Both chunks and page_boundaries are sorted by start_char,
-        # so we advance a page pointer instead of rescanning all pages.
-        page_idx = 0
-        n_pages = len(page_boundaries)
-        for chunk in chunks:
-            # Advance past pages that end before this chunk starts
-            while page_idx < n_pages and page_boundaries[page_idx][1] <= chunk.start_char:
-                page_idx += 1
-
-            # Collect pages overlapping [chunk.start_char, chunk.end_char)
-            first_page = None
-            last_page = None
-            j = page_idx
-            while j < n_pages and page_boundaries[j][0] < chunk.end_char:
-                pg = page_boundaries[j][2]
-                if first_page is None:
-                    first_page = pg
-                last_page = pg
-                j += 1
-
-            if first_page is not None:
-                chunk.page_start = first_page
-                chunk.page_end = last_page
-
-        return chunks
 
     def estimate_tokens(self, text: str) -> int:
         """Estimate token count (~4 chars/token). Override with actual tokenizer."""

@@ -65,10 +65,6 @@ class RemoteBGEEmbedder(TextEmbedder):
             supports_mps=False,
             supports_batching=True,
             normalized_embeddings=True,
-            quality_tier=9,
-            speed_tier=7,
-            model_size_mb=0,
-            vram_required_mb=0,
         )
 
     @property

@@ -5,7 +5,7 @@ Simple chunker that splits text into fixed-size chunks.
 Useful when consistent chunk sizes are needed (e.g., for batching).
 """
 
-from typing import List, Optional
+from typing import List
 
 from .base import TextChunker, TextChunk, ChunkerConfig
 
@@ -17,10 +17,9 @@ def _sliding_window_chunks(
     overlap: int,
     min_size: int,
     respect_word_boundaries: bool = True,
-    token_count_fn=None,
 ) -> List[TextChunk]:
     """
-    Core sliding-window chunking used by both FixedSizeChunker and TokenBasedChunker.
+    Core sliding-window chunking used by FixedSizeChunker.
 
     Args:
         text: Pre-stripped text to chunk
@@ -29,7 +28,6 @@ def _sliding_window_chunks(
         overlap: Overlap between consecutive chunks in characters
         min_size: Minimum chunk size to emit
         respect_word_boundaries: Whether to break at word boundaries
-        token_count_fn: Optional callable to compute token count per chunk
     """
     step = chunk_size - overlap
     if step <= 0:
@@ -51,7 +49,6 @@ def _sliding_window_chunks(
 
         stripped = chunk_text.strip()
         if len(stripped) >= min_size:
-            token_count = token_count_fn(stripped) if token_count_fn else None
             chunks.append(TextChunk(
                 text=stripped,
                 chunk_index=len(chunks),
@@ -59,7 +56,6 @@ def _sliding_window_chunks(
                 start_char=position,
                 end_char=end,
                 char_count=len(stripped),
-                token_count=token_count,
             ))
         elif stripped and end >= text_len and chunks:
             # Trailing remainder shorter than min_size → merge into the
@@ -73,7 +69,6 @@ def _sliding_window_chunks(
                 start_char=last.start_char,
                 end_char=end,
                 char_count=len(merged),
-                token_count=token_count_fn(merged) if token_count_fn else None,
             )
 
         position += step
@@ -115,51 +110,6 @@ class FixedSizeChunker(TextChunker):
         )
 
 
-class TokenBasedChunker(TextChunker):
-    """
-    Token-based chunker using approximate token counts.
-
-    Useful when targeting specific token limits for embedding models.
-    Uses a configurable chars-per-token ratio (default ~4) to convert
-    token limits into character limits for the sliding window.
-    """
-
-    def __init__(
-        self,
-        config: Optional[ChunkerConfig] = None,
-        chars_per_token: float = 4.0,
-    ):
-        super().__init__(config)
-        self.chars_per_token = chars_per_token
-
-    @property
-    def name(self) -> str:
-        return "token-based"
-
-    @property
-    def description(self) -> str:
-        return f"Chunks text by approximate token count (~{self.chars_per_token} chars/token)"
-
-    def chunk(self, text: str, source_file: str = "") -> List[TextChunk]:
-        if not text or not text.strip():
-            return []
-
-        ratio = self.chars_per_token
-        return _sliding_window_chunks(
-            text=text.strip(),
-            source_file=source_file,
-            chunk_size=int(self.config.chunk_size * ratio),
-            overlap=int(self.config.chunk_overlap * ratio),
-            min_size=int(self.config.min_chunk_size * ratio),
-            respect_word_boundaries=True,
-            token_count_fn=self.estimate_tokens,
-        )
-
-    def estimate_tokens(self, text: str) -> int:
-        """Estimate token count using configured ratio."""
-        return int(len(text) / self.chars_per_token)
-
-
 # Quick test
 if __name__ == "__main__":
     test_text = """
@@ -176,11 +126,3 @@ if __name__ == "__main__":
     chunks = chunker.chunk(test_text, "test.txt")
     for chunk in chunks:
         print(f"  [{chunk.chunk_index}] {chunk.char_count} chars: {chunk.text[:50]}...")
-
-    print("\nToken-based chunker:")
-    token_chunker = TokenBasedChunker(
-        ChunkerConfig(chunk_size=50, chunk_overlap=10, size_unit="tokens")
-    )
-    chunks = token_chunker.chunk(test_text, "test.txt")
-    for chunk in chunks:
-        print(f"  [{chunk.chunk_index}] ~{chunk.token_count} tokens: {chunk.text[:50]}...")

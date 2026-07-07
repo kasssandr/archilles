@@ -17,8 +17,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-ProfileName = Literal["minimal", "balanced", "maximal"]
-
 # Internal hardware classes (Hardware-Tiers-V2 §4). These are detected
 # automatically and drive plan(); they are NOT part of the user-facing
 # vocabulary (which is auto/light/full-local/full-external).
@@ -43,44 +41,6 @@ class HardwareProfile:
     vram_gb: Optional[float]
     cuda_available: bool
     mps_available: bool = False  # Apple Silicon Metal Performance Shaders
-
-    def recommend_profile(self) -> ProfileName:
-        """
-        Recommend an indexing profile based on detected hardware.
-
-        All profiles use BGE-M3 (same quality!) - only batch_size differs:
-        - < 8 GB VRAM -> "minimal" (batch_size=8, ~2 min/book)
-        - 8-16 GB VRAM -> "balanced" (batch_size=32, ~30s/book)
-        - > 16 GB VRAM -> "maximal" (batch_size=64, ~15s/book)
-        - Apple MPS   -> "minimal" (unified memory, conservative batch)
-        - CPU only    -> "minimal" (batch_size=8, ~15 min/book)
-
-        Returns:
-            Recommended profile name
-        """
-        if not self.cuda_available:
-            if self.mps_available:
-                logger.info("Apple MPS detected - recommending 'minimal' profile")
-            else:
-                logger.info("No GPU acceleration available - recommending 'minimal' profile (CPU)")
-            return "minimal"
-
-        if self.vram_gb is None or self.vram_gb < 8:
-            logger.info(
-                f"VRAM ({self.vram_gb or 0:.1f} GB) - recommending 'minimal' profile (batch_size=8)"
-            )
-            return "minimal"
-
-        if self.vram_gb >= 16:
-            logger.info(
-                f"High VRAM ({self.vram_gb:.1f} GB) - recommending 'maximal' profile (batch_size=64)"
-            )
-            return "maximal"
-
-        logger.info(
-            f"Moderate VRAM ({self.vram_gb:.1f} GB) - recommending 'balanced' profile (batch_size=32)"
-        )
-        return "balanced"
 
     def summary(self) -> str:
         """Generate a human-readable hardware summary."""
@@ -234,117 +194,9 @@ def get_best_device() -> str:
     return "cpu"
 
 
-def _print_hardware_header(profile: HardwareProfile, recommended: ProfileName) -> None:
-    """Print the common hardware-detection banner used by display functions."""
-    print()
-    print("=" * 64)
-    print("  ARCHILLES - Hardware Detection")
-    print("=" * 64)
-    print()
-    print("  Detected Hardware:")
-    print(f"    CPU: {profile.cpu_cores} cores")
-    print(f"    RAM: {profile.ram_gb:.1f} GB")
-
-    if profile.mps_available:
-        print("    GPU: Apple MPS (Metal Performance Shaders)")
-    elif profile.gpu_available and profile.gpu_name:
-        vram_str = f"{profile.vram_gb:.1f} GB" if profile.vram_gb else "unknown"
-        print(f"    GPU: {profile.gpu_name} ({vram_str})")
-        print(f"    CUDA: {'available' if profile.cuda_available else 'not available'}")
-    else:
-        print("    GPU: not detected (CPU-only mode)")
-
-    print()
-    print(f"  Recommended Profile: {recommended.upper()}")
-
-
-def print_hardware_detection(profile: Optional[HardwareProfile] = None) -> HardwareProfile:
-    """
-    Print hardware detection results in a formatted box.
-
-    Args:
-        profile: Optional pre-detected profile, will detect if not provided
-
-    Returns:
-        The hardware profile (detected or provided)
-    """
-    if profile is None:
-        profile = detect_hardware()
-
-    recommended = profile.recommend_profile()
-    _print_hardware_header(profile, recommended)
-
-    print()
-    print("=" * 64)
-    print()
-
-    return profile
-
-
-_PROFILE_DESCRIPTIONS = {
-    "minimal": "Fast & resource-efficient (CPU-optimized)",
-    "balanced": "Good balance of speed and quality",
-    "maximal": "Maximum quality (requires strong GPU)",
-}
-
-_PROFILE_OPTIONS = ["minimal", "balanced", "maximal"]
-
-
-def select_profile_interactive(profile: Optional[HardwareProfile] = None) -> str:
-    """
-    Interactive profile selection with hardware-based recommendation.
-
-    Args:
-        profile: Optional pre-detected profile, will detect if not provided
-
-    Returns:
-        Selected profile name ("minimal", "balanced", or "maximal")
-    """
-    if profile is None:
-        profile = detect_hardware()
-
-    recommended = profile.recommend_profile()
-    _print_hardware_header(profile, recommended)
-
-    print()
-    print("-" * 64)
-    print()
-    print("  Select a profile:")
-    print()
-
-    for i, opt in enumerate(_PROFILE_OPTIONS, 1):
-        rec_marker = " <- recommended" if opt == recommended else ""
-        print(f"    [{i}] {opt.upper()}: {_PROFILE_DESCRIPTIONS[opt]}{rec_marker}")
-
-    print()
-    print("=" * 64)
-    print()
-
-    default_index = _PROFILE_OPTIONS.index(recommended) + 1
-
-    while True:
-        try:
-            choice = input(f"Choose profile [1-3, default={default_index}]: ").strip()
-
-            if choice == "":
-                return recommended
-
-            if choice in ("1", "2", "3"):
-                return _PROFILE_OPTIONS[int(choice) - 1]
-
-            if choice.lower() in _PROFILE_OPTIONS:
-                return choice.lower()
-
-            print("  Invalid choice. Enter 1, 2, or 3.")
-
-        except (EOFError, KeyboardInterrupt):
-            print(f"\n  Using recommended profile: {recommended}")
-            return recommended
-
-
 # Quick test
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     hw = detect_hardware()
     print(f"\nHardware Summary:\n{hw.summary()}")
-    print(f"\nRecommended Profile: {hw.recommend_profile()}")
+    print(f"\nHardware Class: {classify_hardware(hw)}")

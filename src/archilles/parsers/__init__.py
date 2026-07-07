@@ -9,7 +9,7 @@ Provides pluggable document parsing with:
 """
 
 from .base import DocumentParser, ParsedDocument, ParsedChunk, ParserCapabilities
-from .registry import ParserRegistry, get_parser, register_parser
+from .registry import ParserRegistry
 
 # Optional parser imports (may not be available if dependencies not installed)
 try:
@@ -28,8 +28,6 @@ __all__ = [
     'ParsedChunk',
     'ParserCapabilities',
     'ParserRegistry',
-    'get_parser',
-    'register_parser',
     'PyMuPDFParser',
     'EPUBParser',
 ]

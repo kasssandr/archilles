@@ -2,11 +2,10 @@
 ARCHILLES Indexer Module
 
 Provides robust, checkpoint-based indexing with:
-- Chunk-level progress tracking
+- Book-level progress tracking
 - Automatic resume after interruption
-- Failed book retry functionality
 """
 
-from .checkpoint import IndexingCheckpoint, ChunkProgress
+from .checkpoint import IndexingCheckpoint
 
-__all__ = ['IndexingCheckpoint', 'ChunkProgress']
+__all__ = ['IndexingCheckpoint']

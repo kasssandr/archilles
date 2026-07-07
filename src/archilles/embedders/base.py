@@ -12,7 +12,7 @@ Design Philosophy:
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional, Literal
+from typing import List, Dict, Any, Literal
 import numpy as np
 
 
@@ -41,14 +41,6 @@ class EmbedderCapabilities:
     supports_mps: bool = False  # Apple Silicon
     supports_batching: bool = True
     normalized_embeddings: bool = True  # L2 normalized
-
-    # Performance characteristics (relative scale 1-10)
-    speed_tier: int = 5  # Higher = faster
-    quality_tier: int = 5  # Higher = better quality
-
-    # Memory requirements
-    model_size_mb: float = 0.0  # Approximate model size
-    vram_required_mb: float = 0.0  # VRAM needed for GPU inference
 
 
 @dataclass
@@ -164,10 +156,6 @@ class TextEmbedder(ABC):
         """Embed a single text. Returns a 1D numpy array."""
         result = self.embed_batch([text])
         return result.get_embedding(0)
-
-    def embed_with_metadata(self, text: str) -> EmbeddingResult:
-        """Embed a single text, returning full EmbeddingResult metadata."""
-        return self.embed_batch([text])
 
     @abstractmethod
     def load_model(self) -> None:
