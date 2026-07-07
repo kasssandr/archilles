@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** Juni 2026
+**Last updated:** Juli 2026
 
 ---
 
@@ -44,6 +44,14 @@ Die Adapter-Architektur (ADR-021) und die MCP-Schnittstelle machen ARCHILLES zur
 
 **Kommunikation:** "Bring your own library. ARCHILLES makes it searchable." — "Read your library. Remember your research."
 
+### Zugangswege und Provider-Unabhängigkeit
+
+Mitte 2026 hat sich das Model Context Protocol als herstellerübergreifender Standard konsolidiert (Anthropic, OpenAI, Google, Microsoft). Damit ist die *Protokoll*-Frage entschieden — offen bleibt die *Zugangs*-Frage: Claude Desktop bindet lokale MCP-Server erstklassig ein; andere Consumer-Apps gaten den Zugang oder drängen zu gehosteten Endpunkten. ARCHILLES beantwortet das mit zwei bereits gebauten Wegen und einem dritten, bewusst dünnen:
+
+Erstens **MCP-stdio** für Claude Desktop als Referenzweg. Zweitens der **HTTP/SSE-Transport** (seit April 2026) für ChatGPT Desktop, Cursor, Codex und künftige Clients — er liegt bereit und wird aktiviert, sobald die jeweiligen Apps lokalen Zugang tatsächlich öffnen. Drittens ein **direkter Frage-Pfad** (CLI): Retrieval-Ergebnis plus Prompt gegen einen beliebigen OpenAI-kompatiblen Endpunkt — Cloud-API oder lokales Modell via Ollama. Dieser Pfad ist kein Produkt-Frontend und wird keines (die Grenze aus ADR-022 gilt); er ist der Nachweis, dass der Zugang zum eigenen Bibliothekswissen an keinem einzelnen Anbieter hängt.
+
+Die ehrliche Formel der Positionierung lautet: **Daten und Index bleiben lokal; das Reasoning geht per bewusster Wahl in die Cloud — oder, wenn es sein muss, an ein lokales Modell.** „Mein Korpus, meine Wahl" meint beides: die Wahl des Anbieters und die Freiheit, keinen zu brauchen.
+
 ---
 
 ## Aktueller Stand: v0.9 (Juni 2026)
@@ -68,21 +76,23 @@ Scheduled Routines (Mai 2026): Eine Orchestrierungsschicht über die bestehenden
 
 ---
 
-## v1.0 — Stabilisierung und LLM-Offenheit (Ziel: Q2 2026)
+## v1.0 — Beweisbare Qualität und Konsolidierung (Ziel: Q3 2026)
 
-**Fokus:** Das Fundament für den Community-Release legen und Archilles LLM-agnostisch machen.
+**Fokus:** Die Retrieval-Qualität messbar machen, die Annotation-Engine vollenden, das Fundament für den Community-Release legen.
 
-Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung: Die Dokumentation muss vollständig und verständlich sein, der Installationsprozess reibungslos, und die bestehenden Funktionen müssen robust genug für Nutzer sein, die keine Entwickler sind.
+Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung — mit einer Ausnahme, die an die erste Stelle rückt:
 
-**Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
+**Benchmark-Harness für Bibliotheks-Retrieval (erste Priorität):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Harness ist bewusst minimal gehalten (versioniertes Goldset im JSONL-Format, Metrik-Modul, A/B-Runner — siehe ADR-030) und erfüllt eine Doppelrolle: Es ist die externe Kommunikation des Differenzierers *und* das interne Messinstrument, das die Parent-Child-Entscheidung (v1.1) empirisch statt spekulativ macht. Das Goldset ist Kurationsarbeit des Nutzers und wächst inkrementell; das Harness läuft ab dem ersten Dutzend Fälle. Veröffentlichung vor dem Community-Release.
 
-**Benchmark-Suite für Bibliotheks-Retrieval (neu):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Benchmark wird vor dem Community-Release veröffentlicht und dient sowohl der internen Qualitätssicherung als auch der externen Kommunikation.
+**Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Die Annotation-Engine ist der Teil des Stacks, den sonst niemand baut (ADR-022) — sie bleibt auf dem kritischen Pfad. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
+
+**Direkter Frage-Pfad (klein):** Ein CLI-Kommando, das ein Retrieval-Ergebnis samt `PromptBuilder`-Prompt an einen konfigurierbaren OpenAI-kompatiblen Endpunkt sendet (Cloud oder Ollama). Kein Frontend, keine UI — eine dünne Versicherung gegen faktische Einzel-Anbieter-Abhängigkeit (siehe Positionierung).
 
 **Calibre Watchdog (umgesetzt April 2026):** Automatische Synchronisation zwischen Calibre und LanceDB. Ein periodischer Scan-Prozess erkennt drei Änderungstypen: Metadaten-Änderungen (Comments, Tags, Rating — via `metadata_hash`-Vergleich, ADR-011), Annotations-Änderungen (via `annotation_hash`), und neu hinzugekommene Titel. Metadaten- und Annotations-Updates werden sofort via `index_book()` ausgeführt (~1–3s pro Buch); neue Bücher werden in eine Index-Queue geschrieben. Der Watchdog ist kein Daemon, sondern ein idempotenter Scan, aufrufbar via `scripts/watchdog.py` oder Windows Task Scheduler. Er ist die Voraussetzung für alle nachgelagerten Features, die auf aktuellem LanceDB-Bestand aufbauen. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
 
-**Watchdog-Generalisierung für Zotero und Obsidian (offen, Schritt B):** Der Watchdog ist heute Calibre-spezifisch — er liest direkt `metadata.db`. Das Adapter-Interface (`compute_metadata_hash`, `compute_orphan_ids`) ist seit April vorbereitet, der `WatchdogScanner` selbst noch nicht generalisiert. Im Mai 2026 wurde stattdessen pragmatisch eine Routine-Orchestrierung ausgeliefert (siehe v0.9-Abschnitt), die für Lab und Zotero `batch_index --all --skip-existing` nutzt. Schritt B holt das nach: `WatchdogScanner` adapter-agnostisch machen (Annotation-Cache pro Adapter, `doc_id` statt `calibre_id`), das MCP-Tool `watchdog_scan` aus `_CALIBRE_ONLY_TOOLS` rausnehmen, damit ein „Jetzt-indexieren"-Knopf in Claude-Frontends auch für Lab und Zotero funktioniert.
+**Watchdog-Generalisierung für Zotero und Obsidian (Schritt B — nach v1.0 verschoben):** Der praktische Bedarf ist seit Mai 2026 durch die Scheduled Routines gedeckt (ADR-025): Lab und Zotero werden über `batch_index --all --skip-existing` unbeaufsichtigt aktuell gehalten. Schritt B — `WatchdogScanner` adapter-agnostisch, `watchdog_scan` aus `_CALIBRE_ONLY_TOOLS` heraus, „Jetzt-indexieren"-Knopf in den Frontends — bleibt sinnvoll, ist aber Komfort, keine Adoptionsbedingung. Er wandert hinter Benchmark und Annotation Phase 5.
 
-Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher aktualisieren, mit Index-Queue-Management und Hintergrundverarbeitung). Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Unit-Test-Suite und Performance-Benchmarks.
+Weitere geplante Arbeiten: Umfassende Dokumentation einschließlich Installationsanleitung, Konfigurationsreferenz und Troubleshooting. Robuster Installationsprozess für Nutzer, die keine Entwickler sind.
 
 ---
 
@@ -92,7 +102,7 @@ Weitere geplante Features: Inkrementelle Indexierung (nur geänderte Bücher akt
 
 **Teilweise umgesetzt (März 2026):** Structure-Aware Chunking ist implementiert — PDF-Chunks tragen jetzt `chapter`/`section_title` aus dem TOC, der SemanticChunker erkennt Markdown-Headings und erzwingt Chunk-Breaks an Kapitelgrenzen. Der DialogueChunker behandelt Chat-Exporte korrekt. Running-Footer-Entfernung verbessert die Chunk-Qualität bei PDFs. Die verbleibende Arbeit betrifft fortgeschrittene Chunking-Strategien.
 
-**Small-to-Big Retrieval und Parent-Child-Hierarchien:** Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, liefere dem LLM aber den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Bereits einfaches Recursive Hierarchical Chunking bringt ca. 80% des Qualitätsgewinns gegenüber flachem Chunking. **Stand Juni 2026:** Die Mechanik ist end-to-end implementiert. Eine Validierung (17.06.) deckte auf, dass der frühere `full_text`-Re-Chunking-Pfad die Struktur-/Seiten-Metadaten der `child`-Chunks verlor (nicht zitierfähig); seither baut `_group_chunks_hierarchically()` die Hierarchie aus den strukturbewusst extrahierten Chunks — Children erben Metadaten/Offsets, aufeinanderfolgende Children einer Sektion werden zu ~2048-Token-Parents gruppiert — mit `parent_id`/`window_text`. Das `--hierarchical`-Flag reicht sie durch Service und Indexer, und das Retrieval liefert bei vorhandenem `parent_id` den Parent-Chunk als Kontext. Was aussteht, ist nicht mehr die Implementierung, sondern die *produktive Aktivierung*: Default-Schaltung, ein hierarchischer Reindex des Bestands und die Qualitätsvalidierung am Korpus. Dieser „Parent-Child-Refresh" sollte mit drei weiteren anstehenden Reindex-Anlässen gebündelt werden (Duplikat-Bereinigung, i18n-Index-Präfixe, deutsche EPUB-Sektionserkennung) — als ein koordinierter Lauf, nicht vier Einzelaktionen.
+**Small-to-Big Retrieval und Parent-Child-Hierarchien:** Indexiere kleine Chunks (Absatzebene) für hohe Retrieval-Präzision, liefere dem LLM aber den größeren Kontext (Kapitel oder erweiterte Passage). Das löst das Kernproblem, das Geisteswissenschaftler an RAG-Systemen frustriert: Sätze, die mitten im Argument abreißen. Bereits einfaches Recursive Hierarchical Chunking bringt ca. 80% des Qualitätsgewinns gegenüber flachem Chunking. **Stand Juni 2026:** Die Mechanik ist end-to-end implementiert. Eine Validierung (17.06.) deckte auf, dass der frühere `full_text`-Re-Chunking-Pfad die Struktur-/Seiten-Metadaten der `child`-Chunks verlor (nicht zitierfähig); seither baut `_group_chunks_hierarchically()` die Hierarchie aus den strukturbewusst extrahierten Chunks — Children erben Metadaten/Offsets, aufeinanderfolgende Children einer Sektion werden zu ~2048-Token-Parents gruppiert — mit `parent_id`/`window_text`. Das `--hierarchical`-Flag reicht sie durch Service und Indexer, und das Retrieval liefert bei vorhandenem `parent_id` den Parent-Chunk als Kontext. Was aussteht, ist nicht mehr die Implementierung, sondern die *Entscheidung und Aktivierung* — und die fällt gegen Messung, nicht gegen Intuition (ADR-030): Das Benchmark-Harness (v1.0) misst zuerst die flache Baseline, dann einen hierarchisch indexierten Teilbestand. Erst wenn der Qualitätsgewinn die ~25–30 % Mehr-Vektoren der Parent-Ebene rechtfertigt — und der in der Validierung vom 17.06. identifizierte tote `parent_id`-Pfad entweder produktiv genutzt oder die Parent-Ebene verschlankt wird —, folgt die Default-Schaltung und der hierarchische Reindex des Bestands. Dieser „Parent-Child-Refresh" wird mit drei weiteren anstehenden Reindex-Anlässen gebündelt (Duplikat-Bereinigung, i18n-Index-Präfixe, deutsche EPUB-Sektionserkennung) — als ein koordinierter Lauf, nicht vier Einzelaktionen. Die VRAM-Messung am 4-GB-Gerät entscheidet lokal vs. extern für diesen Lauf (ADR-028: `full-external`).
 
 **Semantic-Hybrid-Chunking (Upgrade-Pfad):** Kombiniert semantisches Splitting via Embedding-Ähnlichkeit mit Agglomerative Clustering und dynamischen Thresholds, die sich automatisch pro Buch anpassen. Weitere 20–30% Qualitätsgewinn, aber signifikant mehr Implementierungsaufwand — daher als optionaler Upgrade-Pfad nach der Parent-Child-Grundlage.
 
@@ -170,6 +180,8 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 
 **Multi-Library-Support / Unified MCP Server:** Verwaltung mehrerer Bibliotheken (Calibre, Zotero, Obsidian) in einem einzigen MCP-Server, bibliotheksübergreifende Suche, gemeinsames Dokumentenmodell mit `calibre_id` und `zotero_key`. Darauf aufbauend: Zotero als Matching-Brücke für den Annotation-Import (ISBN/DOI-basiertes Matching, ZoteroAnnotationProvider).
 
+**DEVONthink-Adapter (vertagt, mit definierten Wiedereintritts-Bedingungen):** DEVONthink liefert seit Version 4.3 („Herschel") einen nativen MCP-Server und deckt damit den Kern-Anwendungsfall im eigenen Ökosystem selbst ab. Ein externer Adapter wäre zugleich die teuerste Stelle, um Untestbarkeits-Risiko auszugeben (Mac-only, kein Testgerät, keine Live-Bibliothek). ARCHILLES' Heimrevier ist stattdessen **Windows und Linux** — Plattformen, auf denen es kein DEVONthink gibt — plus die Fähigkeit, die DEVONthinks MCP-Server nicht hat: **bibliotheksübergreifende Suche** über Calibre, Zotero und Obsidian in einem Index mit seitengenauen Zitationen. Wiedereintritts-Signale (Review: Q1 2027): dokumentierte Unzufriedenheit der DEVONthink-Community mit Retrieval-Qualität oder Zitationspräzision des nativen Servers; Inbound-Nachfragen nach einem Adapter; verfügbare Mac-Hardware und ein Beta-Tester. Falls Wiedereintritt: ausschließlich der Datei-Format-Pfad (Fixtures, read-only, auf Windows testbar) — der AppleScript-Pfad ist für ein Windows-Solo-Projekt dauerhaft ausgeschlossen.
+
 **Wikidata-Integration:** Entity-Disambiguierung für präzisere Wissensgraphen.
 
 **Erweiterte Plattformunterstützung:** Desktop-Anwendungen, Linux-Paketmanager (apt, yum, AUR), Mobile Companion App (Suche).
@@ -183,6 +195,8 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 **Infrastruktur, nicht Anwendung.** ARCHILLES ist der semantische Layer zwischen Bibliotheken und LLMs — die Wasserleitung, nicht die Küche. Second-Brain-Funktionalität, Chat-Interfaces und agentische Schreibwerkzeuge werden von spezialisierten Systemen besser gelöst. ARCHILLES liefert die Bibliotheks-Anbindung, die diese Systeme brauchen.
 
 **Privacy ist die Architektur, nicht ein Feature.** Keine Netzwerk-Calls im normalen Betrieb, keine Telemetrie, alle Daten lokal. Wenn der Nutzer sich mit einem Cloud-LLM verbindet, ist das seine bewusste Entscheidung — „Mein Korpus, meine Wahl."
+
+**Souveränität als Versicherung.** Provider-Unabhängigkeit ist keine Marketing-These, sondern eine Versicherungspolice: Der Zugang zum eigenen Bibliothekswissen darf an keinem Anbieter, keiner Plattform-Politik und keiner Jurisdiktion hängen. Die Prämie dieser Versicherung wird bewusst klein gehalten — ein dünner Frage-Pfad gegen beliebige OpenAI-kompatible Endpunkte genügt als Exit; ein eigenes Frontend würde die Grenze Infrastruktur→Anwendung verletzen und wird nicht gebaut.
 
 **Weniger Code, mehr Architektur.** Wo eine architektonische Lösung bessere Ergebnisse liefert als eine code-intensive Heuristik, wird die Architektur gewählt.
 
