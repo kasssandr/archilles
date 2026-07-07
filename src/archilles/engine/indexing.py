@@ -630,9 +630,11 @@ class Indexer:
 
     def _index_book_phase1(self, book_path: Path, book_id: str, book_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Phase 1 indexing: Metadata + comments only (fast).
+        Phase 1 indexing: Metadata + comments + annotations (fast, no fulltext).
 
-        Creates a single searchable chunk with all metadata fields.
+        Creates a single searchable chunk with all metadata fields, plus
+        annotation chunks (carrying annotation_hash) when the book has
+        highlights/notes — the watchdog diffs against that hash.
 
         Args:
             book_path: Path to book file
@@ -726,8 +728,49 @@ class Indexer:
             'text': searchable_text,
             **chunk_metadata
         }
-        embeddings_array = np.array([embedding])
-        self._rag.store.add_chunks([chunk_data], embeddings_array)
+        chunks = [chunk_data]
+        embedding_arrays = [np.array([embedding])]
+
+        # Persist annotations + annotation_hash on stubs too: the watchdog
+        # compares the stored hash against the freshly computed one, so a stub
+        # without it is re-flagged as annotations_changed on every scan and
+        # delta-rewritten forever. metadata_hash stays '' — stubs deliberately
+        # do not participate in the metadata diff.
+        annot_count = 0
+        try:
+            annot_result = get_combined_annotations(
+                book_path=str(book_path),
+                include_pdf=True,
+                exclude_toc_markers=True,
+                min_length=20
+            )
+            annotations = annot_result.get('annotations', [])
+            if annotations:
+                annot_hash = self._compute_annotation_hash(annotations)
+                annot_chunks, annot_texts = self._build_annotation_chunks(
+                    annotations,
+                    book_id=book_id,
+                    book_title=title,
+                    annotation_hash=annot_hash,
+                    book_format=chunk_metadata['format'],
+                    metadata_hash='',
+                    book_metadata=book_metadata,
+                    indexed_at=chunk_metadata['indexed_at'],
+                )
+                if annot_texts:
+                    annot_emb = self._rag.embedding_model.encode(
+                        annot_texts, show_progress_bar=False, convert_to_numpy=True
+                    )
+                    chunks.extend(annot_chunks)
+                    embedding_arrays.append(annot_emb)
+                    annot_count = len(annot_chunks)
+        except Exception as e:
+            print(f"  ⚠ Annotation extraction failed (non-fatal): {e}")
+
+        embeddings_array = np.concatenate(embedding_arrays)
+        self._rag.store.add_chunks(chunks, embeddings_array)
+        if annot_count:
+            print(f"    Added {annot_count} annotation chunk(s)")
 
         index_time = time.time() - start_time
 
@@ -736,7 +779,7 @@ class Indexer:
 
         return {
             'book_id': book_id,
-            'chunks_indexed': 1,
+            'chunks_indexed': len(chunks),
             'total_words': len(searchable_text.split()),
             'total_pages': None,
             'extraction_time': 0,
