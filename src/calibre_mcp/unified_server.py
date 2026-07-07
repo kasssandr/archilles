@@ -385,12 +385,25 @@ class UnifiedMCPServer:
             citation_config=citation_srv.citation_config,
         )
 
+        response_extra = {}
+        if not all(r.get("rerank_score") is not None for r in merged):
+            # Without a cross-encoder the 'similarity' values are RRF
+            # rank-fusion scores (~1/(60+rank); best possible hit ≈ 0.016).
+            # Clients reading them as cosine similarities conclude every
+            # result is noise.
+            response_extra["score_note"] = (
+                "Similarity values are RRF rank-fusion scores, not cosine "
+                "similarities: the best possible hit scores ~0.016 (1/61). "
+                "Judge relevance by rank and text, not by the absolute value."
+            )
+
         return {
             "query": query,
             "num_results": len(merged),
             "search_mode": mode,
             "language_filter": language,
             "per_source_counts": per_source_counts,
+            **response_extra,
             "system_prompt": claude_prompt["system"],
             "user_prompt": claude_prompt["user"],
             "usage_instructions": (

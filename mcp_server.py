@@ -65,6 +65,25 @@ TOOL_MAP = {
 }
 
 
+def _reconfigure_stdio_utf8(*streams) -> None:
+    """Force UTF-8 (and line buffering) on the stdio transport streams.
+
+    On Windows, Python decodes stdin with the locale code page (cp1252)
+    while MCP clients send UTF-8 — 'Straßengewalt' arrived as
+    'StraÃŸengewalt', corrupting every non-ASCII query before it reached
+    the search engine. errors='replace' keeps a stray invalid byte from
+    killing the read loop.
+    """
+    for stream in streams:
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(
+                    encoding="utf-8", errors="replace", line_buffering=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not reconfigure stdio stream: {e}")
+
+
 def _start_preload(server, enabled: bool) -> threading.Thread | None:
     """Warm the RAG stack in a background daemon thread (unless disabled).
 
@@ -118,11 +137,9 @@ async def stdio_server(server, tools: list[dict]):
     """
     logger.info("Starting ARCHILLES MCP Server (stdio mode)")
 
-    # Ensure line-buffered mode (important on Windows)
-    if hasattr(sys.stdin, 'reconfigure'):
-        sys.stdin.reconfigure(line_buffering=True)
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(line_buffering=True)
+    # UTF-8 + line buffering (important on Windows: default stdin decoding
+    # is the locale code page, which mangles non-ASCII queries)
+    _reconfigure_stdio_utf8(sys.stdin, sys.stdout)
 
     logger.info(f"Registered {len(tools)} tools")
     for tool in tools:

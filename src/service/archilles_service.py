@@ -173,8 +173,12 @@ class ArchillesService:
         """
         if self._rag is not None:
             return True
-        if self._init_attempted:
-            return False
+        # NOTE: no lock-free `_init_attempted` fast path here. That flag is
+        # already True while another thread (e.g. the preload thread at MCP
+        # server start) is still mid-initialization — short-circuiting to
+        # False made concurrent searches silently return zero results for
+        # this source. Waiting on the lock is correct: once acquired, the
+        # running init has finished and the re-check below gives the truth.
 
         # Serialise model construction across all sources: the unified server
         # initialises every source in parallel threads, and concurrent
