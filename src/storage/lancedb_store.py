@@ -244,6 +244,25 @@ class LanceDBStore:
             logger.warning(f"Could not create vector index: {e}")
             return False
 
+    def optimize_indexes(self) -> bool:
+        """Merge rows added since the last index build into existing indexes.
+
+        Incremental (unlike the full rebuilds in create_indexes/
+        create_fts_index): LanceDB scans rows not yet covered by an index on
+        every query, so paths that add data without refreshing indexes
+        degrade search from milliseconds to minutes as the backlog grows.
+
+        Returns True on success.
+        """
+        if self.table is None:
+            return False
+        try:
+            self.table.optimize()
+            return True
+        except Exception as e:
+            logger.warning(f"Index optimize failed: {e}")
+            return False
+
     def create_fts_index(self):
         """Create full-text search index on text column."""
         if self.table is None:

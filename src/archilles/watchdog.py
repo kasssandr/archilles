@@ -238,6 +238,32 @@ def _warn_light_plan_if_hierarchical(db_path: str, resolved_plan) -> None:
         pass
 
 
+def _refresh_search_indexes(rag, results: dict, dry_run: bool) -> None:
+    """Keep the ANN/FTS indexes covering the rows this run wrote.
+
+    The watchdog paths index via ``rag.index_book()`` and, unlike
+    batch_index/embed_prepared, never refreshed any index — rows added by
+    scheduled runs accumulated outside the indexes and every keyword/hybrid
+    query brute-force-scanned them (minutes instead of seconds at
+    million-chunk scale). Never raises: index maintenance must not fail an
+    otherwise successful scan.
+    """
+    if dry_run or rag is None:
+        return
+    total = (
+        results.get('delta_updates', 0)
+        + results.get('new_indexed', 0)
+        + results.get('fulltext_indexed', 0)
+    )
+    if total <= 0:
+        return
+    try:
+        rag.store.ensure_vector_index()
+        rag.store.optimize_indexes()
+    except Exception as exc:
+        logger.warning("Index refresh after watchdog run failed: %s", exc)
+
+
 class WatchdogScanner:
     """
     Idempotent scanner: safe to run multiple times; hash comparison skips
@@ -643,6 +669,8 @@ class WatchdogScanner:
             if not self._shutdown_requested:
                 cp_fulltext.delete()
             results['fulltext_indexed_time'] = round(time.time() - ft0, 1)
+
+        _refresh_search_indexes(self._rag, results, dry_run)
 
         results['total_time'] = round(time.time() - t0, 1)
         results['interrupted'] = self._shutdown_requested
@@ -1221,6 +1249,8 @@ class ZoteroWatchdogScanner:
                         logger.error("New-item indexing failed for key=%s: %s", key, exc)
                         results['errors'].append({'doc_id': key, 'error': str(exc)})
                 results['new_indexed_time'] = round(time.time() - ni0, 1)
+
+        _refresh_search_indexes(self._rag, results, dry_run)
 
         results['total_time'] = round(time.time() - t0, 1)
         results['interrupted'] = self._shutdown_requested

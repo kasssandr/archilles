@@ -67,3 +67,22 @@ class TestEnsureVectorIndex:
 
     def test_no_table_returns_false(self, store):
         assert store.ensure_vector_index() is False
+
+
+class TestOptimizeIndexes:
+    def test_merges_unindexed_rows_into_fts_index(self, store):
+        store.add_chunks(_make_chunks(300), _random_embeddings(300))
+        store.create_fts_index()
+        # Rows added after the index build are unindexed until optimized —
+        # every FTS/hybrid query brute-force-scans them.
+        more = [
+            {**c, "id": c["id"] + "_late"} for c in _make_chunks(300)
+        ]
+        store.add_chunks(more, _random_embeddings(300))
+        assert store.table.index_stats("text_idx").num_unindexed_rows > 0
+
+        assert store.optimize_indexes() is True
+        assert store.table.index_stats("text_idx").num_unindexed_rows == 0
+
+    def test_no_table_returns_false(self, store):
+        assert store.optimize_indexes() is False
