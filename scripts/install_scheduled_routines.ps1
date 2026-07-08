@@ -3,44 +3,73 @@
 #
 # Registers tasks in Windows Task Scheduler under the current user
 # (NO admin rights required). Trigger: at every logon. Throttling is done
-# by marker files inside each script (1x/day or 1x/ISO-week).
+# by marker files inside each script (once per day or once per ISO week).
 #
-#   Archilles-Routine-Calibre    -> run_routine.py --source archilles --phase A (Metadaten-Stubs, schnell, täglich)
-#   Archilles-Routine-Calibre-B  -> run_routine.py --source archilles --phase B (Volltext-Backlog, langsam, ohne Limit)
-#   Archilles-Routine-Lab        -> run_routine.py --source archilles-lab    (Obsidian, täglich)
-#   Archilles-Routine-Zotero     -> run_routine.py --source archilles-zotero (Zotero, täglich)
+#   Archilles-Routine-Calibre    -> run_routine.py --source archilles --phase A (metadata stubs + delta updates, fast)
+#   Archilles-Routine-Calibre-B  -> run_routine.py --source archilles --phase B (full-text backlog, slow, no limit)
+#   Archilles-Routine-Lab        -> run_routine.py --source archilles-lab    (Obsidian vault)
+#   Archilles-Routine-Zotero     -> run_routine.py --source archilles-zotero (Zotero)
 #   Archilles-Status-Mail        -> scripts/weekly_status_mail.py
 #   Archilles-Vault-Linker       -> scripts/run_link_vault.py
 #
-# Reihenfolge bei Logon (Lock serialisiert alle Routinen):
-#   PT5M  → Calibre-A, Lab, Zotero starten gemeinsam (schnell, je ~2-5 min)
-#   PT25M → Calibre-B startet erst wenn die anderen Routinen typischerweise
-#            fertig sind; läuft dann stundenlang bis CTRL+C oder fertig
-#   PT15M → Status-Mail
-#   PT30M → Vault-Linker
+# Default cadence: Zotero and Obsidian vault daily, Calibre (both phases)
+# weekly. Override per machine via parameters, e.g. for an annotation-heavy
+# Calibre workflow:
+#
+#   .\install_scheduled_routines.ps1 -CalibreFrequency daily
+#
+# Python and repo root are auto-detected (first "python" on PATH; parent of
+# this script's directory) and can likewise be overridden via -PythonPath /
+# -RepoRoot. Re-running the installer is safe: existing Archilles-* tasks
+# are replaced.
+#
+# Logon order (a runtime lock serialises all routines):
+#   PT5M  -> Calibre-A, Lab, Zotero start together (fast, ~2-5 min each)
+#   PT25M -> Calibre-B starts once the others are typically done; may then
+#            run for hours until the backlog is drained or CTRL+C
+#   PT15M -> Status mail
+#   PT30M -> Vault linker
 #
 # Calibre-B:
-#   * Kein max_new-Limit — läuft bis Rückstand leer oder manuell gestoppt
-#   * CTRL+C (einmal): aktuelles Buch fertig indexieren, dann stoppen
-#   * Checkpoint index_fulltext_checkpoint.json: nächster Lauf macht weiter
-#   * Eigener Marker last_routine_run_phaseB.txt: läuft täglich bis Rückstand leer
-#   * Unbegrenzte ExecutionTimeLimit (Task Scheduler tötet ihn nicht nach 8h)
+#   * No max_new limit - runs until the backlog is empty or stopped manually
+#   * CTRL+C (once): finish indexing the current book, then stop
+#   * Checkpoint index_fulltext_checkpoint.json: the next run resumes
+#   * Own marker last_routine_run_phaseB.txt (same cadence as Phase A)
+#   * Unlimited ExecutionTimeLimit (Task Scheduler will not kill it after 8h)
 #
 # Uninstall later:
 #   Get-ScheduledTask -TaskName 'Archilles-*' | Unregister-ScheduledTask -Confirm:$false
 #
 # =============================================================================
 
+param(
+    # Python interpreter used by all tasks. Default: first "python" on PATH.
+    [string]$PythonPath,
+    # Repository root. Default: parent of the directory this script lives in.
+    [string]$RepoRoot,
+    [ValidateSet("daily", "weekly")] [string]$CalibreFrequency = "weekly",
+    [ValidateSet("daily", "weekly")] [string]$ZoteroFrequency = "daily",
+    [ValidateSet("daily", "weekly")] [string]$LabFrequency = "daily"
+)
+
 $ErrorActionPreference = "Stop"
 
-$Python   = "C:\Users\tomra\AppData\Local\Programs\Python\Python312\python.exe"
-$RepoRoot = "C:\Users\tomra\archilles"
+if (-not $PythonPath) {
+    $PythonPath = (Get-Command python -ErrorAction SilentlyContinue).Source
+    if (-not $PythonPath) {
+        throw "No 'python' found on PATH - pass -PythonPath explicitly."
+    }
+}
+if (-not $RepoRoot) {
+    $RepoRoot = Split-Path $PSScriptRoot -Parent
+}
+
 $Runner   = Join-Path $RepoRoot "scripts\run_routine.py"
 $Mailer   = Join-Path $RepoRoot "scripts\weekly_status_mail.py"
 $Linker   = Join-Path $RepoRoot "scripts\run_link_vault.py"
 
-foreach ($p in @($Python, $Runner, $Mailer, $Linker, $RepoRoot)) {
-    if (-not (Test-Path $p)) { throw "Pfad nicht gefunden: $p" }
+foreach ($p in @($PythonPath, $Runner, $Mailer, $Linker, $RepoRoot)) {
+    if (-not (Test-Path $p)) { throw "Path not found: $p" }
 }
 
 $Settings = New-ScheduledTaskSettingsSet `
@@ -50,7 +79,7 @@ $Settings = New-ScheduledTaskSettingsSet `
     -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit (New-TimeSpan -Hours 8)
 
-# Phase B darf unbegrenzt laufen — kein 8h-Kill durch den Scheduler
+# Phase B may run without limit - no 8h kill by the scheduler
 $SettingsB = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `
     -DontStopOnIdleEnd `
@@ -74,7 +103,7 @@ function New-ArchillesTask {
     )
 
     $action = New-ScheduledTaskAction `
-        -Execute          $Python `
+        -Execute          $PythonPath `
         -Argument         ($Arguments -join ' ') `
         -WorkingDirectory $RepoRoot
 
@@ -98,20 +127,21 @@ function New-ArchillesTask {
 
 Write-Host "ARCHILLES Scheduled Routines - Installation"
 Write-Host "User:    $CurrentUser"
-Write-Host "Python:  $Python"
+Write-Host "Python:  $PythonPath"
 Write-Host "Repo:    $RepoRoot"
+Write-Host "Cadence: Calibre=$CalibreFrequency, Zotero=$ZoteroFrequency, Vault=$LabFrequency"
 Write-Host ""
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Calibre" `
-    -Description "Calibre Phase A: Metadaten-Stubs fuer neue Buecher + Delta-Updates, max. 1x/Tag (schnell)" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles", "--frequency", "daily", "--phase", "A", "--wait-for-lock", "7200") `
+    -Description "Calibre Phase A: metadata stubs for new books + delta updates, max. 1x/$CalibreFrequency (fast)" `
+    -Arguments   @("`"$Runner`"", "--source", "archilles", "--frequency", $CalibreFrequency, "--phase", "A", "--wait-for-lock", "7200") `
     -Delay       "PT5M"
 
-# Phase B hat eigene Settings (unbegrenzte Laufzeit) — direkt registrieren statt New-ArchillesTask
+# Phase B has its own settings (unlimited runtime) - register directly instead of New-ArchillesTask
 $actionB  = New-ScheduledTaskAction `
-    -Execute          $Python `
-    -Argument         ("`"$Runner`" --source archilles --frequency daily --phase B --wait-for-lock 7200") `
+    -Execute          $PythonPath `
+    -Argument         ("`"$Runner`" --source archilles --frequency $CalibreFrequency --phase B --wait-for-lock 7200") `
     -WorkingDirectory $RepoRoot
 $triggerB = New-ScheduledTaskTrigger -AtLogOn -User $CurrentUser
 $triggerB.Delay = "PT25M"
@@ -120,7 +150,7 @@ if (Get-ScheduledTask -TaskName "Archilles-Routine-Calibre-B" -ErrorAction Silen
 }
 Register-ScheduledTask `
     -TaskName    "Archilles-Routine-Calibre-B" `
-    -Description "Calibre Phase B: Volltext-Backlog (Phase1-Stubs -> Volltext), laeuft bis fertig oder CTRL+C, kein Zeitlimit" `
+    -Description "Calibre Phase B: full-text backlog (phase1 stubs -> full text), runs until done or CTRL+C, no time limit" `
     -Action      $actionB `
     -Trigger     $triggerB `
     -Settings    $SettingsB `
@@ -129,14 +159,14 @@ Write-Host "  registered: Archilles-Routine-Calibre-B"
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Lab" `
-    -Description "Obsidian vault: index new documents, max. 1x per day" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles-lab", "--frequency", "daily", "--wait-for-lock", "7200") `
+    -Description "Obsidian vault: index new documents, max. 1x/$LabFrequency" `
+    -Arguments   @("`"$Runner`"", "--source", "archilles-lab", "--frequency", $LabFrequency, "--wait-for-lock", "7200") `
     -Delay       "PT5M"
 
 New-ArchillesTask `
     -Name        "Archilles-Routine-Zotero" `
-    -Description "Zotero library: index new documents, max. 1x per day" `
-    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", "daily", "--wait-for-lock", "7200") `
+    -Description "Zotero library: watchdog scan, max. 1x/$ZoteroFrequency" `
+    -Arguments   @("`"$Runner`"", "--source", "archilles-zotero", "--frequency", $ZoteroFrequency, "--wait-for-lock", "7200") `
     -Delay       "PT5M"
 
 New-ArchillesTask `

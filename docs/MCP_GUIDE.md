@@ -433,14 +433,20 @@ powershell.exe -ExecutionPolicy Bypass -File C:\Path\To\archilles\scripts\instal
 
 This registers (idempotently, no admin rights):
 
-| Task | Trigger / Delay | Frequency in script |
-|------|-----------------|---------------------|
-| `Archilles-Routine-Calibre` | OnLogon + 5 min | daily (Phase A: fast metadata stubs + delta updates) |
-| `Archilles-Routine-Calibre-B` | OnLogon + 25 min | daily (Phase B: full-text backlog, no execution time limit) |
+| Task | Trigger / Delay | Default frequency |
+|------|-----------------|-------------------|
+| `Archilles-Routine-Calibre` | OnLogon + 5 min | weekly (Phase A: fast metadata stubs + delta updates) |
+| `Archilles-Routine-Calibre-B` | OnLogon + 25 min | weekly (Phase B: full-text backlog, no execution time limit) |
 | `Archilles-Routine-Lab` | OnLogon + 5 min | daily |
 | `Archilles-Routine-Zotero` | OnLogon + 5 min | daily |
 | `Archilles-Status-Mail` | OnLogon + 15 min | weekly (first logon of new ISO week) |
 | `Archilles-Vault-Linker` | OnLogon + 30 min | monthly + hard-gated on Lab routine |
+
+Python interpreter and repo root are auto-detected; frequencies are parameters. If your Calibre library changes faster than your Zotero library, flip the defaults:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File ...\install_scheduled_routines.ps1 -CalibreFrequency daily -ZoteroFrequency weekly
+```
 
 The trigger fires at every logon; the script decides per run whether work is due (a single marker file in `<library>/.archilles/last_routine_run.txt` makes this idempotent). Missed triggers because the machine was off are picked up at the next logon.
 

@@ -326,8 +326,8 @@ Reads the master config (`~/.archilles/config.json`), looks up the named source,
 
 | Adapter | Tool invoked | What runs |
 | --- | --- | --- |
-| `calibre` | `scripts/watchdog.py --json` | Hash-diff scan + delta updates for metadata/annotations, queues new books |
-| `obsidian`, `folder`, `zotero` | `scripts/batch_index.py --all --skip-existing` | Indexes documents not yet in LanceDB; metadata diff is *not* detected |
+| `calibre`, `zotero` | `scripts/watchdog.py --json` | Hash-diff scan + delta updates for metadata/annotations, queues new books |
+| `obsidian`, `folder` | `scripts/batch_index.py --all --skip-existing` | Indexes documents not yet in LanceDB; metadata diff is *not* detected |
 
 CLI: `--source <name>` (required, must match a master-config entry) and `--frequency daily|weekly` (required). Throttling lives in the script, not the trigger: each successful run writes `<library>/.archilles/last_routine_run.txt` with an ISO timestamp; subsequent invocations skip when the marker is from today (`daily`) or the same ISO calendar week (`weekly`). Flags `--force` and `--dry-run` bypass the marker and the subprocess respectively.
 
@@ -348,14 +348,15 @@ Reads each source's `routine_history.jsonl` plus the linker's `vault_linker_hist
 
 #### `install_scheduled_routines.ps1` — Windows Task Scheduler installer
 
-Idempotent PowerShell installer that registers five tasks under the current user without admin rights, all with OnLogon trigger and per-task delay (5 min for the three routines, 10 min for the mailer, 30 min for the linker so it strictly runs after the Lab routine has had a chance to complete). Throttling lives in the scripts, not in the triggers — so a task can fire at every logon and the script decides whether work is due. Missed triggers (machine off) are picked up at the next logon via `-StartWhenAvailable`.
+Idempotent PowerShell installer that registers six tasks under the current user without admin rights, all with OnLogon trigger and per-task delay (5 min for the fast routines, 25 min for the Calibre full-text drainer, 15 min for the mailer, 30 min for the linker so it strictly runs after the Lab routine has had a chance to complete). Throttling lives in the scripts, not in the triggers — so a task can fire at every logon and the script decides whether work is due. Missed triggers (machine off) are picked up at the next logon via `-StartWhenAvailable`. Python interpreter and repo root are auto-detected; the per-source frequencies below are the shipped defaults and can be overridden via installer parameters (`-CalibreFrequency`, `-ZoteroFrequency`, `-LabFrequency`).
 
-| Task | Delay | Frequency in script | Tool |
+| Task | Delay | Default frequency | Tool |
 | --- | --- | --- | --- |
-| `Archilles-Routine-Calibre` | PT5M | daily | `watchdog.py --json` |
+| `Archilles-Routine-Calibre` | PT5M | weekly (Phase A) | `watchdog.py --json` |
+| `Archilles-Routine-Calibre-B` | PT25M | weekly (Phase B, no execution time limit) | `watchdog.py --json` |
 | `Archilles-Routine-Lab` | PT5M | daily | `batch_index --all --skip-existing` |
-| `Archilles-Routine-Zotero` | PT5M | weekly | `batch_index --all --skip-existing` |
-| `Archilles-Status-Mail` | PT10M | weekly | `weekly_status_mail.py` |
+| `Archilles-Routine-Zotero` | PT5M | daily | `watchdog.py --json` |
+| `Archilles-Status-Mail` | PT15M | weekly | `weekly_status_mail.py` |
 | `Archilles-Vault-Linker` | PT30M | monthly + hard-gate | `link_vault.py --semantic --apply` |
 
 * * *

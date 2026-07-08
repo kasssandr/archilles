@@ -74,7 +74,7 @@ Register project-specific keywords once and they automatically receive a score b
 Export your library (or any filtered subset) as BibTeX, RIS, EndNote, JSON, or CSV. Filter by author, tag, or publication year. One tool call from Claude Desktop is all it takes.
 
 ### 🔄 **Scheduled Routines** *(Windows, multi-source)*
-Six idempotent Task Scheduler entries cover the unattended case: daily Calibre and Zotero watchdogs, a daily Obsidian-vault scan, a no-time-limit drainer for the Calibre full-text backlog, monthly cross-link maintenance for the Obsidian vault (hard-gated on a successful index run), and a weekly Gmail status digest so you know the rest is working. One PowerShell installer, no admin rights, throttled per source by marker files. See [MCP Guide → Option E](docs/MCP_GUIDE.md#option-e-unified-scheduled-routines-multi-source-windows).
+Six idempotent Task Scheduler entries cover the unattended case: a daily Zotero watchdog, a daily Obsidian-vault scan, a weekly Calibre scan plus a weekly no-time-limit drainer for its full-text backlog, monthly cross-link maintenance for the Obsidian vault (hard-gated on a successful index run), and a weekly Gmail status digest so you know the rest is working. One PowerShell installer, no admin rights, throttled per source by marker files; cadences are installer parameters if your rhythm differs. See [MCP Guide → Option E](docs/MCP_GUIDE.md#option-e-unified-scheduled-routines-multi-source-windows).
 
 ---
 
