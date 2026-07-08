@@ -223,11 +223,11 @@ Jede destillierte Aussage endet mit mindestens einem Anker:
 
 ```
 Mommsen deutet die Gracchen-Krise als Beginn der Revolution
-[src: 1234_chunk_87 · S. 312].
+[src: 1234_chunk_87 · p. 312].
 ```
 
-**Syntax:** `[src: <chunk_id> · S. <seite>]` — mehrere Anker mit `; ` getrennt
-in einer Klammer: `[src: 1234_chunk_87 · S. 312; 1234_chunk_88 · S. 313]`.
+**Syntax:** `[src: <chunk_id> · p. <seite>]` — mehrere Anker mit `; ` getrennt
+in einer Klammer: `[src: 1234_chunk_87 · p. 312; 1234_chunk_88 · p. 313]`.
 Greppbar über `\[src: `. Das Sigil-Prinzip (kompakte, maschinenlesbare
 Inline-Marke, die gegen normale Markdown-Syntax disambiguiert) entspricht der
 Scriptor-Flag-Syntax `[?FN:…]`.
@@ -235,12 +235,12 @@ Scriptor-Flag-Syntax `[?FN:…]`.
 **Seitenzahl-Semantik — Kontrakt mit dem Chunk-Schema:** `<seite>` ist das
 `page_label` des Chunks (das *gedruckte* Seitenlabel, zitierfähig, z. B.
 `xiv` oder `312`), mit Fallback auf `page_number` (physische PDF-Seite), wenn
-kein Label vorliegt. Das ist exakt die Semantik, die die `[S. NN]`-Marker des
-Scriptor-„Vektor"-Liefertexts beim Chunking erzeugen — Scriptor und Wiki sind
-die beiden Enden derselben Zitierbarkeits-Pipeline und dürfen bei „was heißt
-Seite" nicht auseinanderdriften. Bei Chunks ohne Seitenbezug (EPUB ohne
-Print-Labels) trägt der Anker stattdessen die Sektion:
-`[src: 1234_chunk_87 · Kap. „Die Gracchen"]`.
+kein Label vorliegt. Das ist exakt die Semantik, die die `[p. NN]`-Marker des
+Scriptor-„Vektor"-Liefertexts beim Chunking erzeugen (das Label darf römisch
+sein, `[p. xiv]`) — Scriptor und Wiki sind die beiden Enden derselben
+Zitierbarkeits-Pipeline und dürfen bei „was heißt Seite" nicht
+auseinanderdriften. Bei Chunks ohne Seitenbezug (EPUB ohne Print-Labels) trägt
+der Anker stattdessen die Sektion: `[src: 1234_chunk_87 · Kap. „Die Gracchen"]`.
 
 **Stabilitäts-Vorbehalt:** Chunk-IDs haben die Form `{book_id}_chunk_{i}` und
 sind index-basiert — ein Reindex des Buchs kann sie verschieben. Der Anker ist
