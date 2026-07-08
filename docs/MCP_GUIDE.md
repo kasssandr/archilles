@@ -423,9 +423,9 @@ Load it with `launchctl load ~/Library/LaunchAgents/org.archilles.watchdog.plist
 
 ### Option E: Unified Scheduled Routines (multi-source, Windows)
 
-If your `~/.archilles/config.json` lists more than one source — Calibre, Zotero, an Obsidian vault — the helper `scripts/run_routine.py` covers all of them with a single wrapper. It picks the right tool per adapter (`watchdog.py` for Calibre, `batch_index.py --all --skip-existing` for Zotero and folder/Obsidian), self-throttles via per-library marker files, and writes a structured history that a weekly mailer can summarise.
+If your `~/.archilles/config.json` lists more than one source — Calibre, Zotero, an Obsidian vault — the helper `scripts/run_routine.py` covers all of them with a single wrapper. It picks the right tool per adapter (`watchdog.py` for Calibre and Zotero, `batch_index.py --all --skip-existing` for folder/Obsidian vaults), self-throttles via per-library marker files, and writes a structured history that a weekly mailer can summarise.
 
-Install all five tasks at once:
+Install all six tasks at once:
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File C:\Path\To\archilles\scripts\install_scheduled_routines.ps1
@@ -435,10 +435,11 @@ This registers (idempotently, no admin rights):
 
 | Task | Trigger / Delay | Frequency in script |
 |------|-----------------|---------------------|
-| `Archilles-Routine-Calibre` | OnLogon + 5 min | daily |
+| `Archilles-Routine-Calibre` | OnLogon + 5 min | daily (Phase A: fast metadata stubs + delta updates) |
+| `Archilles-Routine-Calibre-B` | OnLogon + 25 min | daily (Phase B: full-text backlog, no execution time limit) |
 | `Archilles-Routine-Lab` | OnLogon + 5 min | daily |
-| `Archilles-Routine-Zotero` | OnLogon + 5 min | weekly |
-| `Archilles-Status-Mail` | OnLogon + 10 min | weekly (first logon of new ISO week) |
+| `Archilles-Routine-Zotero` | OnLogon + 5 min | daily |
+| `Archilles-Status-Mail` | OnLogon + 15 min | weekly (first logon of new ISO week) |
 | `Archilles-Vault-Linker` | OnLogon + 30 min | monthly + hard-gated on Lab routine |
 
 The trigger fires at every logon; the script decides per run whether work is due (a single marker file in `<library>/.archilles/last_routine_run.txt` makes this idempotent). Missed triggers because the machine was off are picked up at the next logon.
