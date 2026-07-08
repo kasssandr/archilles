@@ -8,8 +8,12 @@ to the last 7 days, and assembles a plaintext email.
 
 Auth
 ----
-Requires ``GMAIL_APP_PASSWORD`` in ``~/.archilles/secrets.env`` (or
-``secrets.env.txt`` — Notepad's silent ``.txt`` suffix is tolerated).
+Reads ``~/.archilles/secrets.env`` (or ``secrets.env.txt`` — Notepad's
+silent ``.txt`` suffix is tolerated):
+
+    GMAIL_APP_PASSWORD   required — Gmail app password
+    GMAIL_USER           required — sending Gmail address (SMTP login)
+    GMAIL_RECIPIENT      optional — defaults to GMAIL_USER
 
 Marker
 ------
@@ -40,14 +44,13 @@ from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
 
 
-GMAIL_USER = "tomradau@gmail.com"
-RECIPIENT = "tomradau@gmail.com"
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 465  # SMTPS
 
 
-def _load_secret() -> str | None:
-    """Look up GMAIL_APP_PASSWORD in ~/.archilles/secrets.env (or .env.txt)."""
+def _load_secrets() -> dict[str, str]:
+    """Read all KEY=VALUE pairs from ~/.archilles/secrets.env (or .env.txt)."""
+    secrets: dict[str, str] = {}
     home_archilles = Path.home() / ".archilles"
     for name in ("secrets.env", "secrets.env.txt"):
         f = home_archilles / name
@@ -58,9 +61,8 @@ def _load_secret() -> str | None:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, _, v = line.partition("=")
-            if k.strip() == "GMAIL_APP_PASSWORD":
-                return v.strip().strip('"').strip("'")
-    return None
+            secrets.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    return secrets
 
 
 def _read_history(history_file: Path, since: datetime) -> list[dict]:
@@ -220,27 +222,32 @@ def main() -> int:
     with runtime_lock.routine_lock("weekly_status_mail") as acquired:
         if not acquired:
             return 1
-        password = _load_secret()
-        if not password:
-            print("GMAIL_APP_PASSWORD nicht in ~/.archilles/secrets.env(.txt) gefunden.",
+        secrets = _load_secrets()
+        password = secrets.get("GMAIL_APP_PASSWORD")
+        gmail_user = secrets.get("GMAIL_USER")
+        recipient = secrets.get("GMAIL_RECIPIENT") or gmail_user
+        missing = [k for k, v in (("GMAIL_APP_PASSWORD", password),
+                                  ("GMAIL_USER", gmail_user)) if not v]
+        if missing:
+            print(f"{', '.join(missing)} not found in ~/.archilles/secrets.env(.txt).",
                   file=sys.stderr)
             return 3
 
         msg = MIMEText(body, _charset="utf-8")
         msg["Subject"] = f"[Archilles] Wochen-Status {now.strftime('%Y-%m-%d')}"
-        msg["From"] = GMAIL_USER
-        msg["To"] = RECIPIENT
+        msg["From"] = gmail_user
+        msg["To"] = recipient
 
         try:
             with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
-                smtp.login(GMAIL_USER, password)
+                smtp.login(gmail_user, password)
                 smtp.send_message(msg)
         except Exception as exc:
-            print(f"SMTP-Fehler: {exc}", file=sys.stderr)
+            print(f"SMTP error: {exc}", file=sys.stderr)
             return 4
 
         marker.write_text(now.isoformat(), encoding="utf-8")
-        print(f"OK — Status-Mail gesendet an {RECIPIENT} ({now.isoformat()})")
+        print(f"OK — status mail sent to {recipient} ({now.isoformat()})")
         return 0
 
 

@@ -13,10 +13,10 @@ Each entry is a content-cell div containing:
 The script groups consecutive entries within a time window into conversations.
 
 Usage:
-    python import_gemini_to_vault.py "Mein Aktivitaetsverlauf.html" D:\Archilles-Lab
-    python import_gemini_to_vault.py activity.html D:\Archilles-Lab --dry-run
-    python import_gemini_to_vault.py activity.html D:\Archilles-Lab --interactive
-    python import_gemini_to_vault.py activity.html D:\Archilles-Lab --limit 10
+    python import_gemini_to_vault.py "Mein Aktivitaetsverlauf.html" D:/MyVault
+    python import_gemini_to_vault.py activity.html D:/MyVault --dry-run
+    python import_gemini_to_vault.py activity.html D:/MyVault --interactive
+    python import_gemini_to_vault.py activity.html D:/MyVault --limit 10
 """
 
 import re

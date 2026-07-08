@@ -6,7 +6,7 @@ Usage::
     from src.adapters import create_adapter
 
     adapter = create_adapter(Path("D:/Calibre-Bibliothek"))          # auto-detect
-    adapter = create_adapter(Path("D:/Archilles-Lab"), "folder")     # explicit
+    adapter = create_adapter(Path("D:/MyVault"), "folder")     # explicit
 """
 
 from pathlib import Path

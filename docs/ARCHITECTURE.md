@@ -335,7 +335,7 @@ Output is captured (`subprocess.run(capture_output=True)`) and written to `<libr
 
 #### `run_link_vault.py` — gated vault maintenance
 
-A specialised wrapper around `D:\Archilles-Lab\CLAUDE\KI-Prompts+Codes\link_vault.py --semantic --apply`, which clusters Obsidian notes by topic, generates MOC files, and inserts cross-links based on LanceDB-derived semantic similarity. Because `--semantic` reads embeddings, the vault-linker requires a freshly indexed LanceDB. Two gates protect this:
+A specialised wrapper around an external `link_vault.py --semantic --apply` maintenance script (path set via `--script` or the `link_vault_script` key on the vault source in the master config), which clusters Obsidian notes by topic, generates MOC files, and inserts cross-links based on LanceDB-derived semantic similarity. Because `--semantic` reads embeddings, the vault-linker requires a freshly indexed LanceDB. Two gates protect this:
 
 1. **Lab-routine gate.** Reads `<lab>/.archilles/last_routine_run.txt`; if not dated today, the run is skipped with reason `lab_routine_not_today`.
 2. **Monthly marker.** Own marker `<lab>/.archilles/last_link_vault_run.txt`; if it falls in the current calendar month, skipped with reason `monthly_marker`.

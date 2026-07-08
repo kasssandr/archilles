@@ -269,7 +269,7 @@ You can also set the SSE transport permanently in `.archilles/config.json` insid
 ```json
 {
   "adapter": "calibre",
-  "library_path": "D:\\Calibre-Bibliothek",
+  "library_path": "D:\\CalibreLibrary",
   "instance_name": "archilles-bib",
   "transport": {
     "mode": "sse",
@@ -450,7 +450,7 @@ powershell.exe -ExecutionPolicy Bypass -File ...\install_scheduled_routines.ps1 
 
 The trigger fires at every logon; the script decides per run whether work is due (a single marker file in `<library>/.archilles/last_routine_run.txt` makes this idempotent). Missed triggers because the machine was off are picked up at the next logon.
 
-The status mail requires a Gmail App Password in `~/.archilles/secrets.env` (key `GMAIL_APP_PASSWORD`); recipient and sender are hard-coded in the script — adjust before first use if you forked the repo.
+The status mail reads `~/.archilles/secrets.env`: `GMAIL_APP_PASSWORD` and `GMAIL_USER` (sending address) are required, `GMAIL_RECIPIENT` is optional and defaults to the sender.
 
 Uninstall:
 

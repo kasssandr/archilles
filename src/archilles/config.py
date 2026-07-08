@@ -301,6 +301,9 @@ class SourceConfig:
     linked_attachment_base: Path | None = None
     enable_reranking: bool | None = None
     reranker_device: str | None = None
+    # Path to an external vault-maintenance script (used by
+    # scripts/run_link_vault.py); None = vault linking not configured.
+    link_vault_script: Path | None = None
 
 
 @dataclass
@@ -391,6 +394,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
                 f"Source '{src['name']}': priority_tags must be a list, got {type(priority).__name__}"
             )
         linked = src.get("linked_attachment_base")
+        link_vault = src.get("link_vault_script")
         sources.append(SourceConfig(
             name=str(src["name"]),
             library_path=Path(src["library_path"]).expanduser(),
@@ -401,6 +405,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             linked_attachment_base=Path(linked).expanduser() if linked else None,
             enable_reranking=src.get("enable_reranking"),
             reranker_device=src.get("reranker_device"),
+            link_vault_script=Path(link_vault).expanduser() if link_vault else None,
         ))
 
     names = [s.name for s in sources]

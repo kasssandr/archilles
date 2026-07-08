@@ -5,7 +5,9 @@ gating against the Lab indexing routine and monthly throttling.
 
 Logic
 -----
-1. Load master config, find the ``archilles-lab`` source.
+1. Load master config, find the ``archilles-lab`` source. The path to the
+   external ``link_vault.py`` comes from ``--script`` or the source's
+   ``link_vault_script`` key in ``~/.archilles/config.json``.
 2. **Hard gate:** read ``<lab>/.archilles/last_routine_run.txt``.  If absent
    or not dated today, SKIP — the linker requires a fresh LanceDB from a
    completed Lab indexing run.  The next logon trigger will retry.
@@ -44,11 +46,6 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
-
-
-LINK_VAULT_SCRIPT = Path(
-    r"D:\Archilles-Lab\CLAUDE\KI-Prompts+Codes\link_vault.py"
-)
 
 
 def _is_today(marker: Path, now: datetime) -> bool:
@@ -105,20 +102,29 @@ def main() -> int:
                              "the LanceDB is current")
     parser.add_argument("--dry-run", action="store_true",
                         help="Print plan and exit (no subprocess, no marker update)")
+    parser.add_argument("--script", type=Path, default=None,
+                        help="Path to the external link_vault.py (overrides the "
+                             "source's link_vault_script config key)")
     args = parser.parse_args()
-
-    if not LINK_VAULT_SCRIPT.exists():
-        print(f"link_vault.py nicht gefunden: {LINK_VAULT_SCRIPT}", file=sys.stderr)
-        return 2
 
     master = load_master_config()
     if master is None:
-        print("Keine Master-Config gefunden.", file=sys.stderr)
+        print("No master config found.", file=sys.stderr)
         return 2
 
     lab = next((s for s in master.sources if s.name == "archilles-lab"), None)
     if lab is None:
-        print("Source 'archilles-lab' nicht in Master-Config.", file=sys.stderr)
+        print("Source 'archilles-lab' not in master config.", file=sys.stderr)
+        return 2
+
+    link_vault_script = args.script or lab.link_vault_script
+    if link_vault_script is None:
+        print("No link_vault script configured — pass --script or set "
+              "'link_vault_script' on the 'archilles-lab' source in "
+              "~/.archilles/config.json.", file=sys.stderr)
+        return 2
+    if not link_vault_script.exists():
+        print(f"link_vault.py not found: {link_vault_script}", file=sys.stderr)
         return 2
 
     library_path = Path(lab.library_path)
@@ -162,7 +168,7 @@ def main() -> int:
         return 0
 
     cmd = [
-        sys.executable, str(LINK_VAULT_SCRIPT),
+        sys.executable, str(link_vault_script),
         str(library_path),
         "--semantic", "--apply",
     ]

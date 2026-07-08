@@ -12,7 +12,7 @@ Converts the four content types found in a NotebookLM Takeout export:
 Usage:
     python scripts/import_notebooklm_takeout.py \\
         --takeout "C:/Users/me/Downloads/Takeout" \\
-        --vault "D:/Archilles-Lab" \\
+        --vault "D:/MyVault" \\
         [--notebook "My Notebook"]   \\  # process one notebook only
         [--dry-run]                  \\  # preview without writing
         [--skip-existing]            \\  # don't overwrite already-imported files

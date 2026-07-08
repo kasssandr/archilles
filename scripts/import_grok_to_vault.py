@@ -6,10 +6,10 @@ Converts Grok's prod-grok-backend.json export into Markdown files
 with YAML frontmatter, organized by month in the KI-Chats folder.
 
 Usage:
-    python import_grok_to_vault.py prod-grok-backend.json D:\Archilles-Lab
-    python import_grok_to_vault.py prod-grok-backend.json D:\Archilles-Lab --limit 10
-    python import_grok_to_vault.py prod-grok-backend.json D:\Archilles-Lab --interactive
-    python import_grok_to_vault.py prod-grok-backend.json D:\Archilles-Lab --dry-run
+    python import_grok_to_vault.py prod-grok-backend.json D:/MyVault
+    python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --limit 10
+    python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --interactive
+    python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --dry-run
 """
 
 import json
@@ -187,7 +187,7 @@ def main():
     parser.add_argument(
         "vault_path",
         type=Path,
-        help="Path to the Obsidian vault (e.g., D:\\Archilles-Lab)"
+        help="Path to the Obsidian vault (e.g., D:\\MyVault)"
     )
     parser.add_argument(
         "--output-folder",
