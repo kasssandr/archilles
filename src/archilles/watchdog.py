@@ -161,6 +161,37 @@ def _compute_metadata_hash(meta: dict[str, Any]) -> str:
     return compute_metadata_hash(meta)
 
 
+def _priority_match(
+    author: str,
+    tags: list[str],
+    title: str,
+    collections: list[str],
+    first_authors: list[str],
+    first_tags: list[str],
+    first_titles: list[str],
+    first_collections: list[str],
+) -> bool:
+    """True if the item matches any explicit priority filter (group 0).
+
+    Author and title match by substring; tags and collections match by exact
+    (case-insensitive) set membership. This mirrors the original Calibre
+    priority rule and extends it to Zotero collections.
+    """
+    if first_authors and any(a.lower() in author.lower() for a in first_authors):
+        return True
+    if first_tags:
+        tags_lc = {t.lower() for t in tags}
+        if any(t.lower() in tags_lc for t in first_tags):
+            return True
+    if first_titles and any(t.lower() in title.lower() for t in first_titles):
+        return True
+    if first_collections:
+        colls_lc = {c.lower() for c in collections}
+        if any(c.lower() in colls_lc for c in first_collections):
+            return True
+    return False
+
+
 def _index_priority_key(
     entry: dict,
     calibre_books: dict,
@@ -186,16 +217,16 @@ def _index_priority_key(
     meta = calibre_books.get(entry['calibre_id'], {})
     rating = meta.get('rating') or 0
 
-    is_priority = False
-    if first_authors:
-        author_lc = meta.get('author', '').lower()
-        is_priority = any(a.lower() in author_lc for a in first_authors)
-    if not is_priority and first_tags:
-        tags_lc = {t.lower() for t in meta.get('tags', [])}
-        is_priority = any(t.lower() in tags_lc for t in first_tags)
-    if not is_priority and first_titles:
-        title_lc = meta.get('title', '').lower()
-        is_priority = any(t.lower() in title_lc for t in first_titles)
+    is_priority = _priority_match(
+        meta.get('author', ''),
+        meta.get('tags', []),
+        meta.get('title', ''),
+        [],  # Calibre has no collections
+        first_authors,
+        first_tags,
+        first_titles,
+        [],
+    )
 
     if rating >= 10:   rating_order = 0  # 5★
     elif rating >= 8:  rating_order = 1  # 4★

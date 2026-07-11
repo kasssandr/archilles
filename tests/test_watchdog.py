@@ -1161,3 +1161,38 @@ class TestOrphanCleanup:
 
         assert results['orphans_removed'] == 0
         assert any('commit conflict' in e['error'] for e in results['errors'])
+
+
+# ---------------------------------------------------------------------------
+# _priority_match: shared, data-model-agnostic priority matcher
+# ---------------------------------------------------------------------------
+
+
+class TestPriorityMatch:
+    """Author/title match by substring; tags/collections by exact
+    (case-insensitive) set membership — preserving the original Calibre rule
+    and extending it to Zotero collections."""
+
+    def test_author_substring(self):
+        from src.archilles.watchdog import _priority_match
+        assert _priority_match("Hannah Arendt", [], "", [], ["arendt"], [], [], []) is True
+        assert _priority_match("Hannah Arendt", [], "", [], ["kant"], [], [], []) is False
+
+    def test_tag_exact_membership(self):
+        from src.archilles.watchdog import _priority_match
+        assert _priority_match("", ["Prio"], "", [], [], ["prio"], [], []) is True
+        # substring must NOT match — exact membership only
+        assert _priority_match("", ["Priority"], "", [], [], ["prio"], [], []) is False
+
+    def test_collection_exact_membership(self):
+        from src.archilles.watchdog import _priority_match
+        assert _priority_match("", [], "", ["Current Project"], [], [], [], ["current project"]) is True
+        assert _priority_match("", [], "", ["Archive"], [], [], [], ["current project"]) is False
+
+    def test_title_substring(self):
+        from src.archilles.watchdog import _priority_match
+        assert _priority_match("", [], "The Human Condition", [], [], [], ["human"], []) is True
+
+    def test_no_filters_is_false(self):
+        from src.archilles.watchdog import _priority_match
+        assert _priority_match("Author", ["tag"], "Title", ["Coll"], [], [], [], []) is False
