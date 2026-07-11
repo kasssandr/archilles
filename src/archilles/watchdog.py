@@ -1024,6 +1024,7 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
                 "title": "",
                 "authors": [],
                 "tags": [],
+                "collections": [],
                 "abstract": "",
                 "date": "",
                 "attachment_modified_at": None,
@@ -1095,6 +1096,20 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
                 result[key]["tags"].append(row["name"])
         for data in result.values():
             data["tags"].sort()
+
+        # Collections — one query for all items (priority signal, NOT hashed)
+        coll_rows = conn.execute("""
+            SELECT ci.itemID, c.collectionName
+            FROM collectionItems ci
+            JOIN collections c ON ci.collectionID = c.collectionID
+        """).fetchall()
+
+        for row in coll_rows:
+            key = id_to_key.get(row["itemID"])
+            if key:
+                result[key]["collections"].append(row["collectionName"])
+        for data in result.values():
+            data["collections"].sort()
 
         # Attachments: has_attachment + max dateModified (signals annotation changes)
         ct_ph = ",".join("?" * len(_ZOTERO_INDEXABLE_CONTENT_TYPES))

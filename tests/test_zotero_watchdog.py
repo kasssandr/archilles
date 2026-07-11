@@ -72,6 +72,7 @@ def _build_zotero_db(library_path: Path, items: list[dict], *, att_content_type:
     cr_id = [0]
     tag_id = [0]
     att_id = [1000]
+    coll_ids: dict[str, int] = {}
 
     for item in items:
         conn.execute(
@@ -98,6 +99,15 @@ def _build_zotero_db(library_path: Path, items: list[dict], *, att_content_type:
             tag_id[0] += 1
             conn.execute("INSERT OR IGNORE INTO tags VALUES (?, ?)", (tag_id[0], tag))
             conn.execute("INSERT INTO itemTags (itemID, tagID, type) VALUES (?, ?, 0)", (item["itemID"], tag_id[0]))
+
+        for coll in item.get("collections", []):
+            if coll not in coll_ids:
+                coll_ids[coll] = len(coll_ids) + 1
+                conn.execute(
+                    "INSERT INTO collections VALUES (?, ?, NULL, 1, ?)",
+                    (coll_ids[coll], coll, f"COLL{coll_ids[coll]:04d}"),
+                )
+            conn.execute("INSERT INTO collectionItems VALUES (?, ?)", (coll_ids[coll], item["itemID"]))
 
         if item.get("has_attachment", True) and not item.get("deleted"):
             att_id[0] += 1
@@ -196,6 +206,32 @@ class TestZoteroMetadataForScan:
     def test_missing_db_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
             _zotero_metadata_for_scan(tmp_path)
+
+    def test_collections_surfaced_and_sorted(self, tmp_path):
+        _build_zotero_db(tmp_path, [
+            {"itemID": 1, "key": "ABC001", "title": "T",
+             "collections": ["Zeta Project", "Current Project"]},
+        ])
+        item = _zotero_metadata_for_scan(tmp_path)["ABC001"]
+        assert item["collections"] == ["Current Project", "Zeta Project"]
+
+    def test_no_collections_is_empty_list(self, tmp_path):
+        _build_zotero_db(tmp_path, [{"itemID": 1, "key": "ABC001", "title": "T"}])
+        item = _zotero_metadata_for_scan(tmp_path)["ABC001"]
+        assert item["collections"] == []
+
+    def test_collections_do_not_affect_metadata_hash(self, tmp_path):
+        """Moving an item into a collection is not a content change, so the
+        metadata hash must ignore collections (no false metadata_changed)."""
+        _build_zotero_db(tmp_path, [
+            {"itemID": 1, "key": "ABC001", "title": "T",
+             "collections": ["Current Project"]},
+        ])
+        data = _zotero_metadata_for_scan(tmp_path)["ABC001"]
+        h_with = _compute_zotero_metadata_hash(data)
+        h_without = _compute_zotero_metadata_hash(
+            {k: v for k, v in data.items() if k != "collections"})
+        assert h_with == h_without
 
 
 # ── Tests: _compute_zotero_metadata_hash ────────────────────────
