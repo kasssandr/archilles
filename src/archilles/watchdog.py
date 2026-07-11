@@ -1247,7 +1247,28 @@ class ZoteroWatchdogScanner:
         _warn_light_plan_if_hierarchical(self.db_path, self._resolve_plan())
 
         # ── Phase 1: fast scan ────────────────────────────────────
-        zotero_items = _zotero_metadata_for_scan(self.library_path)
+        try:
+            zotero_items = _zotero_metadata_for_scan(self.library_path)
+        except sqlite3.OperationalError as exc:
+            # A running Zotero holds a lock on zotero.sqlite; the read then
+            # raises "database is locked". This is transient (the app is simply
+            # open), so skip cleanly instead of crashing with a traceback —
+            # the next scheduled run picks it up. Any other OperationalError
+            # (corruption, I/O) is a real failure and is surfaced.
+            if "locked" in str(exc).lower():
+                msg = ("Zotero database is locked (the Zotero app is likely "
+                       "open) — skipping this scan; will retry next run.")
+                logger.warning(msg)
+                results['db_locked'] = True
+            else:
+                msg = f"Could not read Zotero database — aborting scan: {exc}"
+                logger.error(msg)
+                results['errors'].append({'error': msg})
+            results['total_time'] = round(time.time() - t0, 1)
+            results['interrupted'] = self._shutdown_requested
+            if not dry_run:
+                self._write_log(results)
+            return results
         results['scanned'] = len(zotero_items)
 
         try:

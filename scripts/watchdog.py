@@ -99,6 +99,12 @@ def _print_results(results: dict, json_mode: bool) -> None:
         print(json.dumps(results, indent=2, ensure_ascii=False))
         return
 
+    if results.get('db_locked'):
+        print("\nARCHILLES Watchdog — SKIPPED: Zotero database is locked "
+              "(the Zotero app is likely open). Nothing was indexed; "
+              "the next scheduled run will retry.")
+        return
+
     n_new  = len(results['new_books'])
     n_pending = len(results.get('fulltext_pending', []))
     n_meta = len(results['metadata_changed'])

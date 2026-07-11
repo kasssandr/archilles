@@ -420,6 +420,49 @@ class TestZoteroIndexNew:
         assert [c['key'] for c in indexed_calls] == ["key30", "key20", "key10"]
 
 
+# ── DB-lock hardening: a running Zotero holds zotero.sqlite ──
+
+
+class TestZoteroDbLockHardening:
+    """When the Zotero app is open it holds a lock on zotero.sqlite; the
+    initial metadata read then raises sqlite3.OperationalError. A locked DB is
+    transient — the scan must skip cleanly (db_locked, exit 0, no traceback)
+    rather than crash. A non-lock OperationalError is a real error."""
+
+    def _scanner(self, tmp_path):
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        scanner = _make_scanner(lib, tmp_path)
+        plan = MagicMock()
+        plan.embed_local = True
+        plan.mode = "balanced"
+        scanner._resolve_plan = lambda: plan
+        return scanner
+
+    def test_locked_db_skips_cleanly(self, tmp_path, monkeypatch):
+        scanner = self._scanner(tmp_path)
+        monkeypatch.setattr(
+            "src.archilles.watchdog._zotero_metadata_for_scan",
+            lambda _lib: (_ for _ in ()).throw(
+                sqlite3.OperationalError("database is locked")),
+        )
+        results = scanner.scan(dry_run=True)
+        assert results.get("db_locked") is True
+        assert results["errors"] == []          # transient → not an error (exit 0)
+        assert results["scanned"] == 0
+
+    def test_non_lock_operational_error_is_reported(self, tmp_path, monkeypatch):
+        scanner = self._scanner(tmp_path)
+        monkeypatch.setattr(
+            "src.archilles.watchdog._zotero_metadata_for_scan",
+            lambda _lib: (_ for _ in ()).throw(
+                sqlite3.OperationalError("disk I/O error")),
+        )
+        results = scanner.scan(dry_run=True)
+        assert results.get("db_locked") is not True
+        assert results["errors"]                 # real failure → surfaced (exit 1)
+
+
 # ── _zotero_priority_key: Variante A (explicit priority beats recency) ──
 
 
