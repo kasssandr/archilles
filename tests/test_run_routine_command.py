@@ -61,3 +61,8 @@ class TestZoteroIndexNew:
         cmd = _build_command("zotero", max_new=25)
         assert "--max-new" in cmd
         assert "25" in cmd
+
+    def test_build_command_zotero_passes_collections(self):
+        cmd = _build_command("zotero", max_new=None, priority_collections=["Current Project"])
+        assert "--first-collection" in cmd
+        assert "Current Project" in cmd

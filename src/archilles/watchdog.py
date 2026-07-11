@@ -235,6 +235,36 @@ def _index_priority_key(
     return (0 if is_priority else 1, rating_order, -entry['calibre_id'])
 
 
+def _zotero_priority_key(
+    entry: dict,
+    zotero_items: dict,
+    first_authors: list[str],
+    first_tags: list[str],
+    first_titles: list[str],
+    first_collections: list[str],
+) -> tuple[int, int, int]:
+    """Sort key for Zotero new-item indexing order.
+
+    Returns (group, 0, recency): group 0 = explicit priority match
+    (author/tag/title/collection), group 1 = normal queue. Zotero has no
+    rating, so the middle slot is always 0. Recency (-item_id) puts the newest
+    item first — the analog of Calibre's -calibre_id. Variante A: an explicit
+    priority match beats recency (an old tagged item outranks a new untagged one).
+    """
+    data = zotero_items.get(entry['doc_id'], {})
+    is_priority = _priority_match(
+        " ".join(data.get('authors', [])),
+        data.get('tags', []),
+        data.get('title', ''),
+        data.get('collections', []),
+        first_authors,
+        first_tags,
+        first_titles,
+        first_collections,
+    )
+    return (0 if is_priority else 1, 0, -data.get('item_id', 0))
+
+
 def _resolve_execution_plan(library_path: Path):
     """Resolve the ExecutionPlan for a library (Hardware-Tiers-V2 §10.4).
 
@@ -1191,6 +1221,10 @@ class ZoteroWatchdogScanner:
         queue_new: bool = True,
         index_new: bool = False,
         max_new: int | None = None,
+        first_authors: list[str] | None = None,
+        first_tags: list[str] | None = None,
+        first_titles: list[str] | None = None,
+        first_collections: list[str] | None = None,
     ) -> dict[str, Any]:
         """Run a full scan and return a results dict."""
         t0 = time.time()
@@ -1343,7 +1377,11 @@ class ZoteroWatchdogScanner:
                 # backlog drains over several runs, newest-first.
                 pending = sorted(
                     results['new_books'],
-                    key=lambda e: -zotero_items.get(e['doc_id'], {}).get('item_id', 0),
+                    key=lambda e: _zotero_priority_key(
+                        e, zotero_items,
+                        first_authors or [], first_tags or [],
+                        first_titles or [], first_collections or [],
+                    ),
                 )
                 if max_new is not None:
                     pending = pending[:max_new]

@@ -298,6 +298,9 @@ class SourceConfig:
     # Tags whose books are indexed first (group 0 in _index_priority_key).
     # Substring match, case-insensitive — e.g. ["prio", "favorites"].
     priority_tags: list[str] | None = None
+    # Zotero collection names whose items are indexed first (group 0). Exact
+    # match, case-insensitive. Zotero only.
+    priority_collections: list[str] | None = None
     linked_attachment_base: Path | None = None
     enable_reranking: bool | None = None
     reranker_device: str | None = None
@@ -393,6 +396,12 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             raise ValueError(
                 f"Source '{src['name']}': priority_tags must be a list, got {type(priority).__name__}"
             )
+        priority_coll = src.get("priority_collections")
+        if priority_coll is not None and not isinstance(priority_coll, list):
+            raise ValueError(
+                f"Source '{src['name']}': priority_collections must be a list, "
+                f"got {type(priority_coll).__name__}"
+            )
         linked = src.get("linked_attachment_base")
         link_vault = src.get("link_vault_script")
         sources.append(SourceConfig(
@@ -402,6 +411,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             rag_db_path=src.get("rag_db_path"),
             excluded_tags=[str(t) for t in excluded] if excluded is not None else None,
             priority_tags=[str(t) for t in priority] if priority is not None else None,
+            priority_collections=[str(c) for c in priority_coll] if priority_coll is not None else None,
             linked_attachment_base=Path(linked).expanduser() if linked else None,
             enable_reranking=src.get("enable_reranking"),
             reranker_device=src.get("reranker_device"),

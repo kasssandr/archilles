@@ -72,6 +72,7 @@ def _build_command(
     max_new: int | None = None,
     priority_tags: list[str] | None = None,
     rating: int | None = None,
+    priority_collections: list[str] | None = None,
 ) -> list[str]:
     if adapter in ("calibre", "zotero"):
         # watchdog.py auto-detects library type via zotero.sqlite vs metadata.db
@@ -80,6 +81,10 @@ def _build_command(
         # these are indexed before everything else, regardless of rating/recency.
         for tag in priority_tags or []:
             cmd += ["--first-tag", tag]
+        # Zotero collections as a priority axis (Calibre has none; the flag is
+        # accepted but only the Zotero scanner honours it).
+        for coll in priority_collections or []:
+            cmd += ["--first-collection", coll]
         if adapter == "calibre":
             if phase == "A":
                 # Phase A: fast daily scan — create metadata stubs for new books,
@@ -246,7 +251,8 @@ def main() -> int:
 
     adapter = src.adapter or "calibre"
     cmd = _build_command(adapter, phase=phase, max_new=args.max_new,
-                         priority_tags=src.priority_tags, rating=args.rating)
+                         priority_tags=src.priority_tags, rating=args.rating,
+                         priority_collections=src.priority_collections)
     env = os.environ.copy()
     env["ARCHILLES_LIBRARY_PATH"] = str(library_path)
     env["PYTHONIOENCODING"] = "utf-8"

@@ -216,6 +216,12 @@ def main() -> None:
         help='Index books whose title contains this substring first; repeatable'
     )
     parser.add_argument(
+        '--first-collection', metavar='COLLECTION', dest='first_collections',
+        action='append', default=[],
+        help='Index items in this Zotero collection first (exact name, '
+             'case-insensitive); repeatable. Zotero only.'
+    )
+    parser.add_argument(
         '--rating', type=int, choices=[0, 1, 2, 3, 4, 5], default=None, metavar='STARS',
         help='Restrict the fulltext-pending backlog (--index-fulltext-pending) to books '
              'with exactly this star rating. 0 = unrated, 1-5 = N stars. No effect on '
@@ -287,6 +293,13 @@ def main() -> None:
         scan_kwargs['first_titles'] = args.first_titles
     elif scanner_type == "zotero":
         scan_kwargs['max_new'] = args.max_new
+        scan_kwargs['first_authors'] = args.first_authors
+        scan_kwargs['first_tags'] = args.first_tags
+        scan_kwargs['first_titles'] = args.first_titles
+        scan_kwargs['first_collections'] = args.first_collections
+        if args.rating is not None:
+            print("WARNING: --rating is ignored for Zotero (Calibre-only; "
+                  "Zotero has no rating field).", file=sys.stderr)
 
     results = scanner.scan(**scan_kwargs)
 

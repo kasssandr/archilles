@@ -420,6 +420,42 @@ class TestZoteroIndexNew:
         assert [c['key'] for c in indexed_calls] == ["key30", "key20", "key10"]
 
 
+# ── _zotero_priority_key: Variante A (explicit priority beats recency) ──
+
+
+class TestZoteroPriorityKey:
+    def test_tag_beats_newer_untagged(self, tmp_path):
+        from src.archilles.watchdog import _zotero_priority_key
+        items = {
+            "old_tagged":   {"item_id": 10, "authors": [], "tags": ["Prio"], "title": "", "collections": []},
+            "new_untagged": {"item_id": 99, "authors": [], "tags": [],       "title": "", "collections": []},
+        }
+        entries = [{"doc_id": "new_untagged"}, {"doc_id": "old_tagged"}]
+        ordered = sorted(entries, key=lambda e: _zotero_priority_key(
+            e, items, [], ["prio"], [], []))
+        # Old-but-tagged item first (group 0), then newer untagged (group 1)
+        assert [e["doc_id"] for e in ordered] == ["old_tagged", "new_untagged"]
+
+    def test_collection_match_is_group_zero(self, tmp_path):
+        from src.archilles.watchdog import _zotero_priority_key
+        items = {"c": {"item_id": 5, "authors": [], "tags": [], "title": "",
+                       "collections": ["Current Project"]}}
+        key = _zotero_priority_key({"doc_id": "c"}, items, [], [], [], ["current project"])
+        assert key[0] == 0  # group 0 = priority
+
+    def test_author_substring_and_recency_within_group(self, tmp_path):
+        from src.archilles.watchdog import _zotero_priority_key
+        items = {
+            "a_old": {"item_id": 1, "authors": ["Hannah Arendt"], "tags": [], "title": "", "collections": []},
+            "a_new": {"item_id": 9, "authors": ["Hannah Arendt"], "tags": [], "title": "", "collections": []},
+        }
+        entries = [{"doc_id": "a_old"}, {"doc_id": "a_new"}]
+        ordered = sorted(entries, key=lambda e: _zotero_priority_key(
+            e, items, ["arendt"], [], [], []))
+        # Both priority (author match) → newest first within the group
+        assert [e["doc_id"] for e in ordered] == ["a_new", "a_old"]
+
+
 # ── Finding 4.3: annotation cache commits per successful Phase-2 update ──
 
 
