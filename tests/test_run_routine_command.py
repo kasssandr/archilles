@@ -32,6 +32,13 @@ class TestNonCalibreZoteroFallback:
         assert "--skip-existing" in cmd
         assert "--non-interactive" in cmd
 
+    def test_cleanup_orphans_included_for_path_keyed_adapters(self):
+        """Deletes/renames in path-keyed sources (Obsidian, Folder) leave
+        stale index entries; the routine must clean them up each run.
+        Calibre/Zotero get the equivalent inside the watchdog scan."""
+        assert "--cleanup-orphans" in _build_command("obsidian")
+        assert "--cleanup-orphans" in _build_command("folder")
+
 
 class TestCalibreZoteroUnaffected:
     def test_calibre_still_uses_watchdog(self):

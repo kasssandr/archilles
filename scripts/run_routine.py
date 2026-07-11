@@ -100,11 +100,16 @@ def _build_command(
     # resolution entirely, pinning these libraries to flat/minimal forever
     # regardless of the configured mode. Let mode/config decide instead —
     # weak hardware still resolves to light automatically via plan().
+    # --cleanup-orphans: path-keyed sources (Obsidian/Folder) turn every
+    # delete or rename into a stale index entry; without a hash diff the
+    # routine at least keeps deletions from accumulating. (Calibre/Zotero
+    # get the same via the watchdog's built-in orphan cleanup.)
     return [
         sys.executable,
         str(REPO_ROOT / "scripts" / "batch_index.py"),
         "--all",
         "--skip-existing",
+        "--cleanup-orphans",
         "--non-interactive",
     ]
 
@@ -141,6 +146,7 @@ def _parse_stats(stdout: str, adapter: str) -> dict:
                 "delta_updates": data.get("delta_updates", 0),
                 "new_indexed": data.get("new_indexed", 0),
                 "fulltext_indexed": data.get("fulltext_indexed", 0),
+                "orphans_removed": data.get("orphans_removed", 0),
                 "errors": len(data.get("errors", [])),
             }
         except Exception:
@@ -150,6 +156,7 @@ def _parse_stats(stdout: str, adapter: str) -> dict:
         ("indexed",  r"Successfully indexed:\s+(\d+)"),
         ("failed",   r"Failed:\s+(\d+)"),
         ("skipped",  r"Skipped:\s+(\d+)"),
+        ("orphans_removed", r"Cleanup complete: (\d+)"),
     ):
         m = re.search(pat, stdout)
         if m:
@@ -382,6 +389,8 @@ def main() -> int:
                 parts.append(f"Newly indexed: {stats['new_indexed']}")
             if stats.get('fulltext_indexed'):
                 parts.append(f"Fulltext indexed: {stats['fulltext_indexed']}")
+            if stats.get('orphans_removed'):
+                parts.append(f"Orphans removed: {stats['orphans_removed']}")
             parts.append(f"Errors: {stats.get('errors', 0)}")
             print(f"\n  Watchdog finished in {duration:.0f}s — " + " | ".join(parts))
 

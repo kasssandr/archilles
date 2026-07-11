@@ -105,6 +105,7 @@ def _print_results(results: dict, json_mode: bool) -> None:
     n_anno = len(results['annotations_changed'])
     n_unch = len(results['unchanged'])
     n_err  = len(results['errors'])
+    n_orph = len(results.get('orphans_found', []))
 
     header = "scan complete" if not results.get('interrupted') else "scan INTERRUPTED"
     print(f"\nARCHILLES Watchdog — {header} in {results['total_time']}s")
@@ -117,6 +118,9 @@ def _print_results(results: dict, json_mode: bool) -> None:
     print(f"  Unchanged:            {n_unch}")
     print(f"  Delta updates done:   {results['delta_updates']}"
           + (f" in {results['delta_time']}s" if results['delta_updates'] else ""))
+    if n_orph:
+        print(f"  Orphans (deleted):    {n_orph} found, "
+              f"{results.get('orphans_removed', 0)} removed from index")
     if results.get('new_indexed'):
         print(f"  New books indexed:    {results['new_indexed']}"
               + f" in {results.get('new_indexed_time', 0)}s")

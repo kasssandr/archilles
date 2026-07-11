@@ -22,6 +22,11 @@ from src.calibre_mcp.annotations import get_combined_annotations
 # Characters that are invalid in Windows filenames (superset of POSIX).
 _UNSAFE_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
+# PDFs shorter than this never trigger the needs-OCR warning. Reference
+# managers routinely attach tiny scanned PDFs (Zotero stores publisher TOC /
+# preview scans); flagging each one buries the real OCR candidates in noise.
+OCR_WARN_MIN_PAGES = 6
+
 
 def prepared_jsonl_name(book_id: str) -> str:
     """Filename for a book's prepared-chunks JSONL (one file per book).
@@ -184,6 +189,11 @@ class Indexer:
 
         total_pages = extracted.metadata.total_pages or 0
         total_words = extracted.metadata.total_words or 0
+
+        # Tiny PDFs are not worth an OCR round-trip (see OCR_WARN_MIN_PAGES).
+        # An unknown page count (0) stays eligible — it could be a big book.
+        if 0 < total_pages < OCR_WARN_MIN_PAGES:
+            return False
 
         if not extracted.chunks:
             print("  ⚠️  No text extracted — likely fully scanned. Re-index with --enable-ocr.")

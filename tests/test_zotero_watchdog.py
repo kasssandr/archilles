@@ -463,3 +463,78 @@ class TestExcludedTagsDefault:
         )
 
         assert scanner.excluded_tags_lower == set()
+
+
+# ── Orphan cleanup: indexed items deleted from Zotero ────────────
+
+
+class TestZoteroOrphanCleanup:
+    """Scheduled scans must remove index entries for items that vanished
+    from Zotero (deleted outright or moved to the trash)."""
+
+    def test_missing_item_reported_in_dry_run(self, tmp_path):
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        _build_zotero_db(lib, [{"itemID": 1, "key": "KEEP01", "title": "Keep"}])
+        scanner = _make_scanner(lib, tmp_path)
+        stored = {
+            "KEEP01": {"metadata_hash": "", "annotation_hash": ""},
+            "GONE01": {"metadata_hash": "h", "annotation_hash": ""},
+        }
+        with patch.object(scanner, '_load_indexed_hashes', return_value=stored):
+            results = scanner.scan(dry_run=True)
+
+        assert results['orphans_found'] == ["GONE01"]
+        assert results['orphans_removed'] == 0
+
+    def test_trashed_item_is_an_orphan(self, tmp_path):
+        """deletedItems (Zotero trash) are excluded from the scan snapshot,
+        so a trashed indexed item counts as deleted."""
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        _build_zotero_db(lib, [
+            {"itemID": 1, "key": "KEEP01", "title": "Keep"},
+            {"itemID": 2, "key": "TRASH1", "title": "Trashed", "deleted": True},
+        ])
+        scanner = _make_scanner(lib, tmp_path)
+        stored = {
+            "KEEP01": {"metadata_hash": "", "annotation_hash": ""},
+            "TRASH1": {"metadata_hash": "h", "annotation_hash": ""},
+        }
+        with patch.object(scanner, '_load_indexed_hashes', return_value=stored):
+            results = scanner.scan(dry_run=True)
+
+        assert results['orphans_found'] == ["TRASH1"]
+
+    def test_missing_item_removed_from_index(self, tmp_path):
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        _build_zotero_db(lib, [{"itemID": 1, "key": "KEEP01", "title": "Keep"}])
+        scanner = _make_scanner(lib, tmp_path)
+        stored = {
+            "KEEP01": {"metadata_hash": "", "annotation_hash": ""},
+            "GONE01": {"metadata_hash": "h", "annotation_hash": ""},
+        }
+        with patch.object(scanner, '_load_indexed_hashes', return_value=stored), \
+             patch("src.storage.lancedb_store.LanceDBStore") as mock_store_cls:
+            mock_store_cls.return_value.delete_by_book_id.return_value = 3
+            results = scanner.scan(dry_run=False, queue_new=False)
+
+        mock_store_cls.return_value.delete_by_book_id.assert_called_once_with("GONE01")
+        assert results['orphans_removed'] == 1
+        assert not results['errors']
+
+    def test_empty_snapshot_skips_cleanup(self, tmp_path):
+        """Zero scanned items must never wipe the index."""
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        _build_zotero_db(lib, [])
+        scanner = _make_scanner(lib, tmp_path)
+        stored = {"KEEP01": {"metadata_hash": "h", "annotation_hash": ""}}
+        with patch.object(scanner, '_load_indexed_hashes', return_value=stored), \
+             patch("src.storage.lancedb_store.LanceDBStore") as mock_store_cls:
+            results = scanner.scan(dry_run=False, queue_new=False)
+
+        mock_store_cls.return_value.delete_by_book_id.assert_not_called()
+        assert results['orphans_found'] == []
+        assert results['orphans_removed'] == 0

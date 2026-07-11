@@ -1054,3 +1054,110 @@ def test_default_excluded_tags_single_source_of_truth():
     assert DEFAULT_EXCLUDED_TAGS is config.DEFAULT_EXCLUDED_TAGS
     assert batch_index.DEFAULT_EXCLUDED_TAGS is config.DEFAULT_EXCLUDED_TAGS
     assert DEFAULT_EXCLUDED_TAGS == ['exclude']
+
+
+# ---------------------------------------------------------------------------
+# Orphan cleanup: indexed books deleted from Calibre
+# ---------------------------------------------------------------------------
+
+class TestOrphanCleanup:
+    """Scheduled scans must remove index entries for deleted books instead of
+    letting them accumulate (watchdog counterpart of --cleanup-orphans)."""
+
+    @pytest.fixture
+    def scanner_factory(self, tmp_path: Path):
+        def _make(indexed_hashes: dict, excluded: list[str] | None = None):
+            scanner = WatchdogScanner(
+                library_path=tmp_path,
+                db_path=str(tmp_path / ".archilles" / "rag_db"),
+                archilles_dir=tmp_path / ".archilles",
+                excluded_tags=excluded,
+            )
+            scanner._load_indexed_hashes = lambda: indexed_hashes
+            scanner._annotation_changed = lambda file_path, stored_hash: False
+            return scanner
+        return _make
+
+    def test_deleted_book_reported_in_dry_run(
+        self, calibre_library: Path, scanner_factory,
+    ):
+        _add_book(calibre_library, 1, "Still here",
+                  authors=["A"], with_file="x.epub")
+        scanner = scanner_factory(indexed_hashes={
+            1:  {'book_id': '1', 'metadata_hash': '', 'annotation_hash': ''},
+            99: {'book_id': '99', 'metadata_hash': 'h', 'annotation_hash': ''},
+        })
+
+        results = scanner.scan(dry_run=True)
+
+        assert results['orphans_found'] == ['99']
+        assert results['orphans_removed'] == 0
+
+    def test_deleted_book_removed_from_index(
+        self, calibre_library: Path, scanner_factory,
+    ):
+        _add_book(calibre_library, 1, "Still here",
+                  authors=["A"], with_file="x.epub")
+        scanner = scanner_factory(indexed_hashes={
+            1:  {'book_id': '1', 'metadata_hash': '', 'annotation_hash': ''},
+            99: {'book_id': '99', 'metadata_hash': 'h', 'annotation_hash': ''},
+        })
+
+        with patch("src.storage.lancedb_store.LanceDBStore") as mock_store_cls:
+            mock_store_cls.return_value.delete_by_book_id.return_value = 7
+            results = scanner.scan(dry_run=False, queue_new=False)
+
+        mock_store_cls.return_value.delete_by_book_id.assert_called_once_with('99')
+        assert results['orphans_found'] == ['99']
+        assert results['orphans_removed'] == 1
+        assert not results['errors']
+
+    def test_empty_library_snapshot_skips_cleanup(
+        self, calibre_library: Path, scanner_factory,
+    ):
+        """An empty metadata.db read must never wipe the index: with zero
+        library books every indexed entry would look orphaned — the scanner
+        skips the cleanup instead."""
+        scanner = scanner_factory(indexed_hashes={
+            1: {'book_id': '1', 'metadata_hash': 'h', 'annotation_hash': ''},
+        })
+
+        with patch("src.storage.lancedb_store.LanceDBStore") as mock_store_cls:
+            results = scanner.scan(dry_run=False, queue_new=False)
+
+        mock_store_cls.return_value.delete_by_book_id.assert_not_called()
+        assert results['orphans_found'] == []
+        assert results['orphans_removed'] == 0
+
+    def test_excluded_tag_book_is_not_an_orphan(
+        self, calibre_library: Path, scanner_factory,
+    ):
+        """Excluded-tag books are skipped for indexing but still exist in the
+        library — they must not be treated as deleted."""
+        _add_book(calibre_library, 1, "Excluded but present",
+                  authors=["A"], tags=["exclude"], with_file="x.epub")
+        scanner = scanner_factory(indexed_hashes={
+            1: {'book_id': '1', 'metadata_hash': 'h', 'annotation_hash': ''},
+        })
+
+        results = scanner.scan(dry_run=True)
+
+        assert results['orphans_found'] == []
+
+    def test_deletion_failure_is_recorded_not_fatal(
+        self, calibre_library: Path, scanner_factory,
+    ):
+        _add_book(calibre_library, 1, "Still here",
+                  authors=["A"], with_file="x.epub")
+        scanner = scanner_factory(indexed_hashes={
+            1:  {'book_id': '1', 'metadata_hash': '', 'annotation_hash': ''},
+            99: {'book_id': '99', 'metadata_hash': 'h', 'annotation_hash': ''},
+        })
+
+        with patch("src.storage.lancedb_store.LanceDBStore") as mock_store_cls:
+            mock_store_cls.return_value.delete_by_book_id.side_effect = \
+                RuntimeError("commit conflict")
+            results = scanner.scan(dry_run=False, queue_new=False)
+
+        assert results['orphans_removed'] == 0
+        assert any('commit conflict' in e['error'] for e in results['errors'])

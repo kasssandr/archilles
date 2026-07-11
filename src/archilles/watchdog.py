@@ -264,6 +264,45 @@ def _refresh_search_indexes(rag, results: dict, dry_run: bool) -> None:
         logger.warning("Index refresh after watchdog run failed: %s", exc)
 
 
+def _cleanup_orphaned_books(
+    db_path: str,
+    orphan_book_ids: list[str],
+    dry_run: bool,
+    results: dict,
+) -> None:
+    """Remove index entries for books that no longer exist in the source library.
+
+    Watchdog counterpart of ``batch_index --cleanup-orphans``: scheduled runs
+    keep the index in sync with deletions (a rename in path-keyed sources
+    shows up as delete + new). Callers must derive ``orphan_book_ids`` from a
+    successfully scanned, non-empty library snapshot — on an empty snapshot
+    they skip the cleanup entirely so a read glitch can never wipe the index.
+
+    Deletion failures are recorded in ``results['errors']`` but do not abort
+    the scan; the orphan is re-detected on the next run.
+    """
+    results['orphans_found'] = sorted(orphan_book_ids)
+    results['orphans_removed'] = 0
+    if not orphan_book_ids:
+        return
+    suffix = " (dry-run: kept)" if dry_run else ""
+    print(f"\n🗑️  {len(orphan_book_ids)} indexed book(s) no longer in the "
+          f"library — removing from index{suffix}")
+    if dry_run:
+        return
+    from src.storage.lancedb_store import LanceDBStore
+    store = LanceDBStore(db_path)
+    for book_id in results['orphans_found']:
+        try:
+            deleted = store.delete_by_book_id(book_id)
+        except Exception as exc:
+            logger.error("Orphan cleanup failed for book_id=%s: %s", book_id, exc)
+            results['errors'].append({'doc_id': book_id, 'error': str(exc)})
+            continue
+        print(f"   [{book_id}] {deleted} chunks removed")
+        results['orphans_removed'] += 1
+
+
 class WatchdogScanner:
     """
     Idempotent scanner: safe to run multiple times; hash comparison skips
@@ -371,6 +410,8 @@ class WatchdogScanner:
             'new_indexed_time':    0.0,
             'fulltext_indexed':    0,    # count of Phase-4 fulltext-pending indexes
             'fulltext_indexed_time': 0.0,
+            'orphans_found':       [],   # book_ids indexed but gone from the library
+            'orphans_removed':     0,
             'scanned':             0,
             'interrupted':         False,
         }
@@ -464,6 +505,18 @@ class WatchdogScanner:
                 })
             elif not meta_changed and not annot_changed:
                 results['unchanged'].append(cid)
+
+        # ── Orphan cleanup: indexed books deleted from Calibre ────────
+        # Guard: an empty library snapshot would make every indexed book
+        # look orphaned — treat that as a scan problem and skip (same
+        # caution as the hash-load guard above, 2.5).
+        if calibre_books:
+            orphan_ids = [
+                h.get('book_id') or str(cid)
+                for cid, h in indexed_hashes.items()
+                if cid not in calibre_books
+            ]
+            _cleanup_orphaned_books(self.db_path, orphan_ids, dry_run, results)
 
         # ── Phase 2: apply delta updates ──────────────────────────────
         # When Phase 4 will drain the full backlog (index_fulltext_pending=True
@@ -879,6 +932,9 @@ class WatchdogScanner:
             + (f" completed in {results.get('new_indexed_time', 0)}s" if results.get('new_indexed') else ""),
             f"  fulltext_indexed: {results.get('fulltext_indexed', 0)}"
             + (f" completed in {results.get('fulltext_indexed_time', 0)}s" if results.get('fulltext_indexed') else ""),
+            f"  orphans_removed: {results.get('orphans_removed', 0)}"
+            + (f" of {len(results.get('orphans_found', []))} {results.get('orphans_found', [])}"
+               if results.get('orphans_found') else ""),
             "",
         ]
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
@@ -1101,6 +1157,8 @@ class ZoteroWatchdogScanner:
             'delta_time':          0.0,
             'new_indexed':         0,
             'new_indexed_time':    0.0,
+            'orphans_found':       [],   # book_ids indexed but gone from the library
+            'orphans_removed':     0,
             'scanned':             0,
             'interrupted':         False,
         }
@@ -1172,6 +1230,14 @@ class ZoteroWatchdogScanner:
                 results['annotations_changed'].append(key)
             if not meta_changed and not annot_changed:
                 results['unchanged'].append(key)
+
+        # ── Orphan cleanup: indexed items deleted from Zotero ────
+        # ``zotero_items`` excludes trashed items (deletedItems), so moving
+        # an item to the Zotero trash removes it from the index too. Guard
+        # against an empty snapshot as in the Calibre scanner.
+        if zotero_items:
+            orphan_ids = [k for k in indexed_hashes if k not in zotero_items]
+            _cleanup_orphaned_books(self.db_path, orphan_ids, dry_run, results)
 
         # ── Phase 2: apply delta updates ─────────────────────────
         books_to_update = set(results['metadata_changed']) | set(results['annotations_changed'])
@@ -1375,6 +1441,9 @@ class ZoteroWatchdogScanner:
             + (f" completed in {results['delta_time']}s" if results['delta_updates'] else ""),
             f"  new_indexed: {results.get('new_indexed', 0)}"
             + (f" completed in {results.get('new_indexed_time', 0)}s" if results.get('new_indexed') else ""),
+            f"  orphans_removed: {results.get('orphans_removed', 0)}"
+            + (f" of {len(results.get('orphans_found', []))} {results.get('orphans_found', [])}"
+               if results.get('orphans_found') else ""),
             "",
         ]
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
