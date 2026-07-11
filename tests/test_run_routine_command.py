@@ -45,3 +45,19 @@ class TestCalibreZoteroUnaffected:
         cmd = _build_command("calibre")
 
         assert "watchdog.py" in cmd[1]
+
+
+class TestZoteroIndexNew:
+    """Zotero has no A/B stub phase — the routine must index new items
+    immediately (today it passes no index flag, so new_indexed stays 0)."""
+
+    def test_build_command_zotero_indexes_new(self):
+        cmd = _build_command("zotero", max_new=None)
+        assert "--index-new" in cmd
+        assert "--index-metadata-only" not in cmd
+        assert "--index-fulltext-pending" not in cmd
+
+    def test_build_command_zotero_passes_max_new(self):
+        cmd = _build_command("zotero", max_new=25)
+        assert "--max-new" in cmd
+        assert "25" in cmd

@@ -1144,6 +1144,7 @@ class ZoteroWatchdogScanner:
         dry_run: bool = False,
         queue_new: bool = True,
         index_new: bool = False,
+        max_new: int | None = None,
     ) -> dict[str, Any]:
         """Run a full scan and return a results dict."""
         t0 = time.time()
@@ -1290,8 +1291,18 @@ class ZoteroWatchdogScanner:
                 # existing content never flatten it.
                 mark_pending = not self._resolve_plan().embed_local
                 ni0 = time.time()
-                total_p3 = len(new_keys)
-                for j, entry in enumerate(results['new_books'], 1):
+                # Recency-first: Zotero itemID is the rowid, monotonic with add
+                # order, so -item_id puts the newest item first (exact analog of
+                # Calibre's -calibre_id). max_new bounds a run so a large first
+                # backlog drains over several runs, newest-first.
+                pending = sorted(
+                    results['new_books'],
+                    key=lambda e: -zotero_items.get(e['doc_id'], {}).get('item_id', 0),
+                )
+                if max_new is not None:
+                    pending = pending[:max_new]
+                total_p3 = len(pending)
+                for j, entry in enumerate(pending, 1):
                     if self._shutdown_requested:
                         print(f"\n⏸️  Shutdown requested — phase 3 stopped after {j-1}/{total_p3} items.")
                         break

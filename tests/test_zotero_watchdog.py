@@ -334,6 +334,56 @@ class TestZoteroWatchdogScan:
         assert "SEED1" in results['unchanged']
 
 
+# ── index_new: new items are indexed, capped and ordered newest-first ──
+
+
+class TestZoteroIndexNew:
+    """The routine passes --index-new for Zotero; scan() must index new items,
+    cap the run at max_new, and process the newest (highest item_id) first."""
+
+    def _run(self, tmp_path, monkeypatch, *, max_new=None):
+        lib = tmp_path / "lib"
+        lib.mkdir()
+        # Three new items; item_id encodes add order (30 = newest).
+        _build_zotero_db(lib, [
+            {"itemID": 10, "key": "key10", "title": "Oldest"},
+            {"itemID": 20, "key": "key20", "title": "Middle"},
+            {"itemID": 30, "key": "key30", "title": "Newest"},
+        ])
+        scanner = _make_scanner(lib, tmp_path)
+        scanner._load_indexed_hashes = lambda: {}  # everything is new
+
+        # Local plan: embed_local True → no pending_external marking.
+        plan = MagicMock()
+        plan.embed_local = True
+        plan.mode = "balanced"
+        scanner._resolve_plan = lambda: plan
+
+        indexed_calls: list[dict] = []
+
+        class RecordingRAG:
+            def index_book(self, path, key, force=False):
+                indexed_calls.append({"key": key})
+                return {}
+
+        scanner._load_rag = lambda: RecordingRAG()
+        monkeypatch.setattr(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf"))
+
+        results = scanner.scan(index_new=True, queue_new=False, max_new=max_new)
+        return results, indexed_calls
+
+    def test_index_new_caps_and_orders_newest_first(self, tmp_path, monkeypatch):
+        results, indexed_calls = self._run(tmp_path, monkeypatch, max_new=2)
+        assert results['new_indexed'] == 2
+        # Newest two by item_id (30, 20); oldest (10) skipped this run.
+        assert [c['key'] for c in indexed_calls] == ["key30", "key20"]
+
+    def test_index_new_without_cap_indexes_all_newest_first(self, tmp_path, monkeypatch):
+        results, indexed_calls = self._run(tmp_path, monkeypatch, max_new=None)
+        assert results['new_indexed'] == 3
+        assert [c['key'] for c in indexed_calls] == ["key30", "key20", "key10"]
+
+
 # ── Finding 4.3: annotation cache commits per successful Phase-2 update ──
 
 

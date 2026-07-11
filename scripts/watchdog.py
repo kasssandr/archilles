@@ -285,6 +285,8 @@ def main() -> None:
         scan_kwargs['first_authors'] = args.first_authors
         scan_kwargs['first_tags'] = args.first_tags
         scan_kwargs['first_titles'] = args.first_titles
+    elif scanner_type == "zotero":
+        scan_kwargs['max_new'] = args.max_new
 
     results = scanner.scan(**scan_kwargs)
 

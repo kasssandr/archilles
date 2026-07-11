@@ -95,6 +95,14 @@ def _build_command(
                     cmd += ["--max-new", str(max_new)]
                 if rating is not None:
                     cmd += ["--rating", str(rating)]
+        elif adapter == "zotero":
+            # Zotero has no A/B stub phase — a new item is either fully indexed
+            # or "new". Index new items immediately; --max-new bounds a run so a
+            # large first backlog (e.g. 500+ items) drains over several runs,
+            # newest-first, instead of one marathon.
+            cmd += ["--index-new"]
+            if max_new is not None:
+                cmd += ["--max-new", str(max_new)]
         return cmd
     # No --profile: it bypasses resolve_indexing_plan's mode/config
     # resolution entirely, pinning these libraries to flat/minimal forever
