@@ -116,11 +116,21 @@ Weitere geplante Arbeiten: Umfassende Dokumentation einschließlich Installation
 
 Viele geisteswissenschaftliche Bibliotheken enthalten gescannte PDFs — ältere Fachbücher, Dissertationen, historische Quelleneditionen. Ohne OCR bleiben diese unsichtbar.
 
-**Vision-Language-OCR (primär):** Moderne Modelle wie LightOnOCR-2 oder olmOCR-2 verstehen Layout, Lesereihenfolge und Dokumentstruktur — nicht nur einzelne Zeichen. Ideal für akademische Dokumente mit Fußnoten, Tabellen und mehrspaltigem Layout. Vollständig lokal betreibbar.
+Für gewöhnlich bringt der größere Teil der PDFs eines gewachsenen Bestands jedoch bereits einen Textlayer mit, gesetzt von FineReader, Acrobat Paper Capture, LuraDocument oder Google Books. Der Regelfall ist deshalb **kein OCR-Problem**, sondern die Frage, wie gut dieser fremde Layer ist. Drei Zustände sind zu unterscheiden, und nur der dritte verlangt eine Engine:
 
-**Tesseract (Fallback):** Für einfache Dokumente als schneller und ressourcenschonender Fallback. Die OCR-Schnittstelle ist als austauschbares Modul im Extractors Layer angelegt; der `ArchillesService` exponiert bereits die `ocr_backend`-Konfiguration (auto/tesseract/lighton/olmocr).
+1. **Brauchbarer Textlayer.** Er wird gelesen, nicht ersetzt. Nachmessung an neun Bänden (Juli 2026) zeigte, dass Bibliotheken hier stillschweigend Schaden anrichten: PyMuPDF4LLM erkennt eine Scanseite mit sichtbarem Textlayer, OCRt das Seitenbild zusätzlich und liefert jeden Absatz doppelt; bei unsichtbarem Layer löscht es ihn und liest ihn neu — mit der Standardsprache, über einen französischen Text. Scriptor liest den Layer seit Juli 2026 direkt über `page.get_text("dict")` und OCRt nie von sich aus.
+2. **Schlechter, aber vorhandener Textlayer.** Erneutes OCR ist die Ausnahme, nicht die Regel — es lohnt bei einzelnen Bänden, nicht beim Erschließen einer Bibliothek.
+3. **Kein Textlayer.** Hier, und nur hier, wird eine Engine gebraucht.
 
-Die strategische Entscheidung: Die OCR-Landschaft entwickelt sich rasant. Die Schnittstelle wird sauber definiert, das beste verfügbare Modell zum Implementierungszeitpunkt eingesetzt.
+**Die Ausgabe entscheidet die Engine, nicht die Zeichengenauigkeit.** Was Archilles von einem OCR-Backend braucht, ist nicht Markdown, sondern Messwerte: Bounding Boxes je Zeile und, wo möglich, Konfidenz je Zeichen. Ohne Boxen lassen sich die Druckzeilen nicht rekonstruieren, die manche Textlayer in Wortfragmente zerlegen; ohne Seitenzahl kein `page_label`, und damit kein zitierfähiger Anker (siehe [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md) §II.5). Genau diese Messwerte liefert das Seitenmodell, das Scriptor im Juli 2026 als Backend-Schnittstelle definiert hat (`SourcePage`/`Line`/`Span`, eine JSON-Datei pro Seite). Sie wird einmal entworfen und in beiden Repos benutzt.
+
+**Tesseract (primär):** hOCR liefert Boxen und Konfidenzen, lokal, schnell, ressourcenschonend — und als einzige der verbreiteten Engines direkt auf das Seitenmodell abbildbar. Deutsch und Englisch tragen den Bestand; `fra` folgt mit deutlichem Abstand und ist dennoch Bedingung, weil dort Kernquellen liegen, nicht Beiwerk. Italienisch und Spanisch sind ein Modell-Download, kein Architekturthema. Griechisch, Hebräisch und Latein erscheinen fast nie als eigene Bände, sondern als Zitatpassagen innerhalb deutscher und englischer Werke — sie verlangen keine andere Engine, sondern allenfalls Tesseracts Mehrsprachenmodus, und Hebräisch zusätzlich die RTL-Behandlung, die Scriptor aus dem Zuckerman-Referenzfall bereits kennt. Fraktur (`deu_latf` aus `tessdata_best`) ist ebenfalls ein Modell-Download, kein Architekturargument: nice to have, und kein Grund, die Engine-Wahl daran auszurichten.
+
+**Vision-Language-OCR (Sonderfall, nicht Primärpfad):** Modelle wie olmOCR-2 oder LightOnOCR-2 lesen Layout und Lesereihenfolge beeindruckend gut — und liefern Markdown. Keine Boxen, keine Zeichenkonfidenz. olmOCR-2 führt olmOCR-Bench mit 82,4 Punkten, fällt auf allgemeinen historischen Scans aber auf 47,7 %; und der Benchmark prüft in der Kategorie *Headers & Footers* ausdrücklich, ob Kopf- und Fußzeilen im Ergebnis **fehlen**. Dort steht die Seitenzahl. Was die Benchmark-Konstruktion belohnt, kostet Archilles den Zitationsanker. VLM-OCR bleibt deshalb der Kanal für Bände, die anders keinen lesbaren Text hergeben — mit dem ausdrücklichen Vermerk, dass Seitenanker und Fußnotenmarker dabei verloren gehen.
+
+Die `ocr_backend`-Konfiguration des `ArchillesService` (heute `auto/tesseract/lighton/olmocr`) spiegelt noch die frühere Annahme und wird mit der Implementierung nachgezogen.
+
+Die strategische Entscheidung: Die OCR-Landschaft entwickelt sich rasant, die Anforderung an ihre *Ausgabe* nicht. Die Schnittstelle wird sauber definiert — als Seitenmodell, nicht als Markdown-Kanal — und das beste Modell zum Implementierungszeitpunkt dahinter gehängt.
 
 ---
 
