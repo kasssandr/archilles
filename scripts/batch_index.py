@@ -1412,8 +1412,6 @@ def batch_index(
         if result.get('status') == 'metadata_updated':
             print(f"         📝 Metadata updated in {result.get('total_time', 0):.1f}s (content unchanged)")
             stats['indexed'] += 1
-            if safe_indexer:
-                safe_indexer.note_indexed()
             stats['books_processed'].append({
                 'id': book_id,
                 'title': book['title'],
@@ -1429,9 +1427,6 @@ def batch_index(
             print(f"         ✅ Indexed {result['chunks_indexed']} chunks in {elapsed:.1f}s")
         if format_type != best['format']:
             print(f"         ↩️  Used fallback format: {format_type} (primary {best['format']} failed)")
-
-        if safe_indexer:
-            safe_indexer.note_indexed()
 
         stats['indexed'] += 1
         if result.get('needs_ocr'):
@@ -1972,15 +1967,11 @@ def main():
                     sys.exit(1)
                 return
 
-            # Initialize SafeIndexer for signal handling + backup only
+            # Initialize SafeIndexer for signal handling only
             safe_indexer = None
             phase = 'phase1' if args.phase1_only else 'phase2'
             if not args.dry_run:
-                safe_indexer = SafeIndexer(
-                    db_path=Path(args.db_path),
-                    backup_interval=50,
-                    max_backups=2,
-                )
+                safe_indexer = SafeIndexer(db_path=Path(args.db_path))
 
             # Run batch indexing
             log_file = Path(args.log) if args.log else None
