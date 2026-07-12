@@ -98,6 +98,14 @@ Chunkers and embedders are selected directly (chunker by frontmatter strategy in
 
 Non-obvious default: sections are filtered to `section_type == "main"` by default, which excludes front matter, bibliography and index noise from search results.
 
+## Session Reports
+
+When the user asks for a closing report ("Bericht schreiben"), write it to
+`D:\Archilles-Lab\CLAUDE\CC-Sessions\`. That directory's `CLAUDE.md` holds the
+mandatory format (filename, YAML frontmatter, structure) — read it first, and read
+nothing else there: it is an Obsidian vault, and old reports are not a template.
+Reports are written in German. No commit needed; the Lab routine indexes the vault.
+
 ## Important Docs
 
 - `docs/ARCHITECTURE.md` — Technical deep-dive
