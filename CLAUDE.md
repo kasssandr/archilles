@@ -37,13 +37,6 @@ streamlit run scripts/web_ui.py
 python mcp_server.py
 ```
 
-### Code Quality
-```bash
-black src/ scripts/    # formatting
-flake8 src/ scripts/   # linting
-pytest                 # tests
-```
-
 ## Conventions
 
 ### Language in code: English only
@@ -58,35 +51,12 @@ Note: parts of the codebase still carry German comments/docstrings from before t
 
 ## Architecture
 
-The system follows a layered pipeline:
-
-```
-Calibre Library (read-only SQLite)
-    ↓
-Extractors (PDF/EPUB/TXT/HTML/MOBI/DJVU/OCR)
-    ↓
-Modular Pipeline: ParserRegistry → Chunker → Embedder
-    ↓
-LanceDB (hybrid: dense vectors + BM25 FTS)
-    ↓
-Retriever (RRF fusion + optional cross-encoder reranking)
-    ↓
-ArchillesService (central facade)
-    ↓
-Consumers: MCP Server | Web UI (Streamlit) | CLI
-```
-
-### Key Modules
+Non-obvious constraints and entry points (the rest of the layout is best read from the code):
 
 - **`src/calibre_db.py`** — Read-only access to Calibre's `metadata.db` (SQLite). This is an absolute boundary: never write to the Calibre library.
-- **`src/extractors/`** — Format-specific extractors. PDF uses PyMuPDF primary with pdfplumber fallback. EPUB uses ebooklib with TOC-based section classification.
-- **`src/archilles/pipeline.py`** — `ModularPipeline` orchestrates Parser → Chunker → Embedder. Parsers are selected via `ParserRegistry` (dispatch by file format); chunkers and embedders are selected directly (frontmatter strategy / profile).
-- **`src/storage/lancedb_store.py`** — LanceDB backend. Stores 1024-dim BGE-M3 vectors with rich metadata. Two tables: `chunks` (main content) and `annotations` (user highlights/notes).
 - **`src/service/archilles_service.py`** — Single facade used by MCP server, web UI, and CLI. Start here when adding new features.
-- **`src/calibre_mcp/server.py`** — MCP server exposing 10 tools (search, metadata, citations, annotations, stats). Carefully manages stdout/stderr to avoid JSON-RPC protocol corruption.
-- **`mcp_server.py`** — Entry point for Claude Desktop MCP integration.
-- **`src/archilles/engine/`** — Core RAG engine: `ArchillesRAG` facade (`core.py`) composing `Indexer` (`indexing.py`), `Searcher` (`search.py`) and `PromptBuilder` (`prompting.py`). Start here for engine changes.
-- **`scripts/rag_demo.py`** — Primary CLI, thin wrapper around the engine. Index, query, stats, list-indexed.
+- **`src/archilles/engine/`** — Core RAG engine (`ArchillesRAG` facade composing `Indexer`, `Searcher`, `PromptBuilder`). Start here for engine changes.
+- **`src/calibre_mcp/server.py`** — MCP server. Carefully manages stdout/stderr: any stray write corrupts the JSON-RPC protocol.
 
 ### Search Architecture (Two-Stage)
 
@@ -94,10 +64,6 @@ Consumers: MCP Server | Web UI (Streamlit) | CLI
 2. **Optional Cross-Encoder Reranking**: BAAI bge-reranker-v2-m3 rescores top-k candidates; gracefully disabled if not configured
 
 Search modes: `hybrid` (default), `semantic`, `keyword`.
-
-### Embeddings
-
-BGE-M3 via sentence-transformers: 1024 dimensions, multilingual (75+ languages). Three hardware profiles in `src/archilles/profiles.py`: `minimal` (batch=8), `balanced` (batch=16), `maximal` (batch=32).
 
 ### Configuration
 
@@ -130,7 +96,7 @@ Chunkers and embedders are selected directly (chunker by frontmatter strategy in
 
 ## Chunk Schema
 
-Each chunk stored in LanceDB includes: calibre_id, title, author, tags, language, page_number, page_label, section_type (`main`/`front_matter`/`back_matter`), section_title, window_text (for Small-to-Big retrieval), and metadata_hash for deduplication. Sections are filtered to `main` by default to exclude bibliography/index noise.
+Non-obvious default: sections are filtered to `section_type == "main"` by default, which excludes front matter, bibliography and index noise from search results.
 
 ## Important Docs
 
