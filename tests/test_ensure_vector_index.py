@@ -7,6 +7,9 @@ brute-force-scans the vector column (~5 min at 1.5M chunks on CPU), which
 is what broke MCP clients with 60 s tool-call timeouts.
 """
 
+from datetime import timedelta
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -86,3 +89,16 @@ class TestOptimizeIndexes:
 
     def test_no_table_returns_false(self, store):
         assert store.optimize_indexes() is False
+
+    def test_requests_cleanup_of_superseded_versions(self, store):
+        # Merging rewrites the vector index in full and LanceDB keeps the
+        # superseded copy until an explicit cleanup drops it. Routines call
+        # optimize after every run, so an optimize() without cleanup_older_than
+        # grows _indices by a full index copy per day — the production DB hit
+        # 208 GB of _indices (123 dirs, ~16 GB each) behind a single live index.
+        calls = []
+        store.table = SimpleNamespace(optimize=lambda **kw: calls.append(kw))
+
+        assert store.optimize_indexes(retain_days=7) is True
+
+        assert calls == [{"cleanup_older_than": timedelta(days=7)}]

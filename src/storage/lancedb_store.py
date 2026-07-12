@@ -6,7 +6,7 @@ Designed for scalability to 1M+ chunks with IVF-PQ indexing.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -244,7 +244,7 @@ class LanceDBStore:
             logger.warning(f"Could not create vector index: {e}")
             return False
 
-    def optimize_indexes(self) -> bool:
+    def optimize_indexes(self, retain_days: int = 7) -> bool:
         """Merge rows added since the last index build into existing indexes.
 
         Incremental (unlike the full rebuilds in create_indexes/
@@ -252,12 +252,19 @@ class LanceDBStore:
         every query, so paths that add data without refreshing indexes
         degrade search from milliseconds to minutes as the backlog grows.
 
+        Merging rewrites the vector index in full, and LanceDB keeps the
+        superseded copy until an explicit cleanup drops it. Callers run this
+        after every routine, so without ``cleanup_older_than`` the daily
+        rewrites accumulate (a 1.5M-chunk IVF-PQ index is ~16 GB per copy).
+        Versions younger than ``retain_days`` survive so that a concurrent
+        reader holding an older manifest is not pulled out from under.
+
         Returns True on success.
         """
         if self.table is None:
             return False
         try:
-            self.table.optimize()
+            self.table.optimize(cleanup_older_than=timedelta(days=retain_days))
             return True
         except Exception as e:
             logger.warning(f"Index optimize failed: {e}")
