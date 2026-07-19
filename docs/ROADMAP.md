@@ -5,6 +5,16 @@
 
 **Last updated:** Juli 2026
 
+> **Spiegel-Notiz (Familie), 2026-07-19:** Scriptor S1 ist umgesetzt — das
+> Übergabeformat der Familie ist als versionierte Spezifikation normiert:
+> [PREPARED_FORMAT_SPEC v0.1](https://github.com/kasssandr/archilles-scriptor/blob/main/docs/PREPARED_FORMAT_SPEC.md)
+> (Seitenlabel-Syntax, Fußnoten-Anker, Sidecars, `<dnt>`, Zitations-Spans,
+> Robustheitsregeln). Betrifft hier den künftigen Scriptor-Import: Der Pfad
+> wird gegen die Spec getestet — Abnahme ist ein Scriptor-aufbereiteter Band,
+> dessen Treffer gedruckte Seitenlabels zitieren (Spec §12). Benennungshinweis:
+> „prepared" ist in Archilles bereits durch die Zwei-Phasen-Pipeline
+> (prepare/embed) belegt; der Import sollte als „scriptor"-Format laufen.
+
 ---
 
 ## Vision

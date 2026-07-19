@@ -401,6 +401,22 @@ We're actively seeking beta testers from diverse research disciplines. If you ha
 
 ---
 
+## The Archilles Family
+
+Scriptor prepares, Archilles retrieves, Archillator translates — three tools,
+one path: from the printed apparatus to a citable answer, in any language, on
+your own machine. Each tool stands alone; none requires the others. All three
+are developed under one fixed charter: **local-first, source-true, the scholar
+as the acting subject**. Contributions are welcome within that charter; beyond
+it, the license invites forks.
+
+- **[archilles-scriptor](https://github.com/kasssandr/archilles-scriptor)** — turns scholarly PDFs into Markdown whose footnotes stay anchored to their sentences and whose printed page labels survive as citation addresses.
+- **[archillator](https://github.com/kasssandr/archillator)** — browser-based translation of books and academic texts that keeps the scholarly apparatus intact.
+
+The interchange contract of the family — the *prepared document* — is specified in [PREPARED_FORMAT_SPEC](https://github.com/kasssandr/archilles-scriptor/blob/main/docs/PREPARED_FORMAT_SPEC.md).
+
+---
+
 ## Legal & Privacy
 
 ### License

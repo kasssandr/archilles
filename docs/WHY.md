@@ -10,6 +10,6 @@ Beneath this lies one design decision. A curated library already contains the st
 
 Documents and index stay on the machine; indexing and retrieval run entirely locally. The reasoning goes to the model the scholar chooses — a cloud assistant by deliberate decision, or a local model. There is no account, no subscription, no telemetry, no training on your material. Archilles is model-agnostic via MCP: it runs natively with clients that launch local servers (Claude Desktop, Claude Code, Cursor, Codex CLI, Windsurf, Cline, Cherry Studio); ChatGPT and Gemini connect through an SSE bridge, documented in the MCP guide.
 
-Archilles is open source under the MIT license, written by a single maintainer for his own library, and developed under a fixed charter: local-first, source-true, the scholar as the acting subject. Contributions are welcome within that charter; beyond it, the license invites forks.
+Archilles is open source under the MIT license, built by a single maintainer around his own library, and developed under a fixed charter: local-first, source-true, the scholar as the acting subject. Contributions are welcome within that charter; beyond it, the license invites forks.
 
 A library is years of judgement made explicit. Archilles treats that judgement as signal.
