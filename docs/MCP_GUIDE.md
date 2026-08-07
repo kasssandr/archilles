@@ -106,6 +106,28 @@ Archilles exposes the following tools to Claude:
 
 That is the full set of 13 tools exposed by the single-library server. You don't need to call these tools directly — just ask Claude in natural language and it will use the right tool automatically.
 
+### The bundled agent skill
+
+The repository ships a skill at `skills/archilles-search/` that teaches an agent
+how to use these tools well: which tool answers which kind of question, when to
+override the search mode, how to turn the `[doc_N]` markers into citations a
+reader can follow, and what an empty result actually means. Install it by
+copying (or symlinking) the directory into your skills folder:
+
+```bash
+# Claude Code / Claude Desktop
+cp -r skills/archilles-search ~/.claude/skills/
+```
+
+```powershell
+# Windows
+Copy-Item -Recurse skills\archilles-search $HOME\.claude\skills\
+```
+
+It is plain Markdown with YAML frontmatter, so any agent runtime that reads
+skills can use it. Nothing else needs to change — the skill only affects how
+the tools get called, not what they do.
+
 ---
 
 ## Usage Examples
