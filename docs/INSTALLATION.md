@@ -230,3 +230,29 @@ You can create a configuration file at `.archilles/config.json` inside your Cali
 | `enable_reranking` | auto | Cross-encoder reranking for better result quality. Downloads ~560 MB model on first use. Unset: enabled on GPUs with ≥8 GB VRAM, disabled otherwise. |
 | `reranker_device` | `"cpu"` | `"cpu"` or `"cuda"`. CPU is usually better since the GPU is busy with embeddings. |
 | `rag_db_path` | `.archilles/rag_db` | Custom path for the vector database, if you want to store it elsewhere. |
+| `exclude_patterns` | `[]` | Folder and Obsidian sources only: glob patterns for files to keep out of the index. |
+
+### Keeping operational files out of the corpus
+
+If you index a folder or an Obsidian vault, it likely also holds notes *about* your work — meeting notes, drafts, tool configuration, AI chat logs. Those match on almost any query, carry no research content, and can surface private context in a search result. Exclude them:
+
+```json
+{
+  "exclude_patterns": [
+    "Admin/*",
+    "*.draft.md",
+    "scratch-*"
+  ]
+}
+```
+
+Patterns are matched case-insensitively against both the path relative to the library root (`Admin/notes.md`) and the bare filename (`notes.md`). `.git/`, `.obsidian/`, `.trash/` and similar directories are always skipped and need no pattern.
+
+Excluding a file does not remove what is already indexed. Run the cleanup afterwards — an excluded document counts as an orphan:
+
+```bash
+python scripts/batch_index.py --cleanup-orphans --dry-run   # preview
+python scripts/batch_index.py --cleanup-orphans             # apply
+```
+
+Your files are never touched; only index entries are removed.

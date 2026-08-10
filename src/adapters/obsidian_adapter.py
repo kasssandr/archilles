@@ -10,7 +10,6 @@ Extends FolderAdapter with Obsidian-specific intelligence:
 """
 
 import logging
-import os
 import re
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from src.adapters.base import DocumentMetadata, DocumentTimestamps
 from src.adapters.folder_adapter import (
     FolderAdapter,
     IGNORED_DIRS,
-    SUPPORTED_EXTENSIONS,
     _stable_doc_id,
     _file_timestamps,
     _parse_filename,
@@ -145,19 +143,10 @@ class ObsidianAdapter(FolderAdapter):
         except Exception:
             return None
 
-    def _scan(self) -> dict[str, DocumentMetadata]:
-        """Scan vault, additionally excluding ``.trash/``."""
-        effective_ignored = IGNORED_DIRS | OBSIDIAN_EXTRA_EXCLUDED
-        result = {}
-        for dirpath, dirnames, filenames in os.walk(self._library_path):
-            dirnames[:] = [d for d in dirnames if d not in effective_ignored]
-            for fname in filenames:
-                fp = Path(dirpath) / fname
-                if fp.suffix.lower() not in SUPPORTED_EXTENSIONS:
-                    continue
-                rel_posix = fp.relative_to(self._library_path).as_posix()
-                result[rel_posix] = self._build_metadata(fp)
-        return result
+    @property
+    def _ignored_dirs(self) -> set[str]:
+        """Vault scan additionally skips ``.trash/``."""
+        return IGNORED_DIRS | OBSIDIAN_EXTRA_EXCLUDED
 
     def _build_metadata(self, file_path: Path) -> DocumentMetadata:
         """Build metadata, enriched with frontmatter for ``.md`` files."""

@@ -683,6 +683,91 @@ class TestFolderAdapter:
         assert adapter.get_file_path("any") is None
 
 
+# ── Exclude patterns (corpus hygiene) ───────────────────────────
+
+
+def _titles(adapter):
+    return {d.title for d in adapter.list_documents()}
+
+
+class TestExcludePatterns:
+    """Operational files must stay out of the research corpus.
+
+    Housekeeping notes match on any query, carry no scholarly content, and
+    can surface private context in a search result.
+    """
+
+    def _write_config(self, library, patterns):
+        config_dir = library / ".archilles"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.json").write_text(
+            json.dumps({"exclude_patterns": patterns}), encoding="utf-8"
+        )
+
+    def test_no_patterns_indexes_everything(self, folder_library):
+        adapter = create_adapter(folder_library, "folder")
+        assert "my hypothesis" in _titles(adapter)
+
+    def test_filename_pattern_excludes_file(self, folder_library):
+        self._write_config(folder_library, ["my-hypothesis.txt"])
+        adapter = create_adapter(folder_library, "folder")
+        assert "my hypothesis" not in _titles(adapter)
+        assert "An Important Paper" in _titles(adapter)
+
+    def test_glob_pattern_excludes_by_prefix(self, folder_library):
+        (folder_library / "Claude Memory_de.md").write_text("ops notes", encoding="utf-8")
+        self._write_config(folder_library, ["claude memory*"])
+        adapter = create_adapter(folder_library, "folder")
+        assert not any(t.lower().startswith("claude memory") for t in _titles(adapter))
+
+    def test_directory_pattern_excludes_subtree(self, folder_library):
+        self._write_config(folder_library, ["chats/*"])
+        adapter = create_adapter(folder_library, "folder")
+        assert "josephus context" not in _titles(adapter)
+        assert "An Important Paper" in _titles(adapter)
+
+    def test_matching_is_case_insensitive(self, folder_library):
+        self._write_config(folder_library, ["MY-HYPOTHESIS.TXT"])
+        adapter = create_adapter(folder_library, "folder")
+        assert "my hypothesis" not in _titles(adapter)
+
+    def test_extension_pattern(self, folder_library):
+        self._write_config(folder_library, ["*.md"])
+        adapter = create_adapter(folder_library, "folder")
+        assert _titles(adapter) == {"my hypothesis", "An Important Paper"}
+
+    def test_explicit_argument_overrides_config(self, folder_library):
+        self._write_config(folder_library, ["*.md"])
+        from src.adapters.folder_adapter import FolderAdapter
+
+        adapter = FolderAdapter(folder_library, exclude_patterns=[])
+        assert "josephus context" in _titles(adapter)
+
+    def test_excluded_file_is_not_retrievable_by_id(self, folder_library):
+        adapter = create_adapter(folder_library, "folder")
+        doc_id = next(
+            d.doc_id for d in adapter.list_documents() if d.title == "my hypothesis"
+        )
+        self._write_config(folder_library, ["my-hypothesis.txt"])
+        excluded_adapter = create_adapter(folder_library, "folder")
+        # Orphan cleanup relies on the document disappearing from the adapter
+        # entirely, not merely from the listing.
+        assert excluded_adapter.get_metadata(doc_id) is None
+        assert excluded_adapter.get_file_path(doc_id) is None
+
+    def test_malformed_config_does_not_break_scanning(self, folder_library):
+        config_dir = folder_library / ".archilles"
+        config_dir.mkdir(exist_ok=True)
+        (config_dir / "config.json").write_text("{not json", encoding="utf-8")
+        adapter = create_adapter(folder_library, "folder")
+        assert "my hypothesis" in _titles(adapter)
+
+    def test_non_list_patterns_are_ignored(self, folder_library):
+        self._write_config(folder_library, "everything")
+        adapter = create_adapter(folder_library, "folder")
+        assert "my hypothesis" in _titles(adapter)
+
+
 # ── ObsidianAdapter ─────────────────────────────────────────────
 
 
@@ -811,6 +896,23 @@ class TestObsidianAdapter:
         docs = adapter.list_documents()
         paths = [str(d.file_path) for d in docs]
         assert not any(".obsidian" in p for p in paths)
+
+    def test_exclude_patterns_apply_to_vaults(self, obsidian_vault):
+        # The vault is where operational notes actually live, so the filter
+        # has to survive the Obsidian adapter's own scanning rules.
+        (obsidian_vault / "Claude Memory_de.md").write_text(
+            "---\ntitle: Claude Memory\n---\nops notes", encoding="utf-8"
+        )
+        (obsidian_vault / ".archilles").mkdir(exist_ok=True)
+        (obsidian_vault / ".archilles" / "config.json").write_text(
+            json.dumps({"exclude_patterns": ["claude memory*"]}), encoding="utf-8"
+        )
+
+        adapter = create_adapter(obsidian_vault)
+
+        assert "Claude Memory" not in {d.title for d in adapter.list_documents()}
+        # .trash must still be excluded alongside the configured patterns
+        assert not any(".trash" in str(d.file_path) for d in adapter.list_documents())
 
     def test_non_md_file_indexed(self, obsidian_vault):
         adapter = create_adapter(obsidian_vault)
