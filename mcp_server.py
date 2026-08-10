@@ -41,11 +41,39 @@ import threading
 # Repo-Wurzel auf den Pfad — kanonische Import-Wurzel ist `src.*` (Review 5.14)
 sys.path.insert(0, str(Path(__file__).parent))
 
+from src import __version__ as ARCHILLES_VERSION
 from src.calibre_mcp.server import CalibreMCPServer, create_mcp_tools
 from src.calibre_mcp.unified_server import UnifiedMCPServer, create_unified_tools
 
 # Restore stdout for JSON-RPC communication
 sys.stdout = _original_stdout
+
+
+# ── Protocol versions ─────────────────────────────────────────────────────
+# MCP 2026-07-28 dropped the initialize/initialized handshake: "modern"
+# clients declare protocol version, client info and capabilities in ``_meta``
+# on *every* request, so a request carries everything needed to serve it.
+# "Legacy" clients (2025-11-25 and earlier) still open with ``initialize``.
+#
+# ARCHILLES is dual-era — it answers both on the same stdio process, as the
+# spec permits. This costs us nothing: the server never held session state to
+# begin with (tool calls read config and files, never prior requests).
+MODERN_PROTOCOL_VERSIONS = ("2026-07-28",)
+LEGACY_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+SUPPORTED_PROTOCOL_VERSIONS = MODERN_PROTOCOL_VERSIONS + LEGACY_PROTOCOL_VERSIONS
+LATEST_LEGACY_PROTOCOL_VERSION = LEGACY_PROTOCOL_VERSIONS[0]
+
+# Reserved ``_meta`` keys (spec 2026-07-28, "General fields")
+META_PROTOCOL_VERSION = "io.modelcontextprotocol/protocolVersion"
+META_CLIENT_CAPABILITIES = "io.modelcontextprotocol/clientCapabilities"
+META_CLIENT_INFO = "io.modelcontextprotocol/clientInfo"
+META_SERVER_INFO = "io.modelcontextprotocol/serverInfo"
+
+# JSON-RPC and MCP error codes
+ERR_METHOD_NOT_FOUND = -32601
+ERR_INTERNAL = -32603
+ERR_INVALID_PARAMS = -32602
+ERR_UNSUPPORTED_PROTOCOL_VERSION = -32022
 
 
 TOOL_MAP = {
@@ -124,9 +152,158 @@ def _dispatch_tool(server, tool_name: str, params: dict) -> dict:
         return {'error': str(e)}
 
 
-async def handle_request(server, method: str, params: dict) -> dict:
-    """Handle an MCP request by dispatching to the appropriate server method."""
-    return _dispatch_tool(server, method, params)
+def request_meta(request: dict) -> dict:
+    """Return the ``_meta`` object of a request, or an empty dict."""
+    params = request.get("params")
+    if not isinstance(params, dict):
+        return {}
+    meta = params.get("_meta")
+    return meta if isinstance(meta, dict) else {}
+
+
+def is_modern_request(request: dict) -> bool:
+    """True when the client speaks a handshake-free (2026-07-28+) revision.
+
+    The presence of a protocol version in ``_meta`` is the era marker: only
+    modern clients send one per request. Everything else — including a bare
+    ``tools/list`` from a legacy client that skipped ``initialize`` — is
+    served under legacy semantics, which are a superset here.
+    """
+    return META_PROTOCOL_VERSION in request_meta(request)
+
+
+def negotiate_protocol_version(requested: str | None) -> str:
+    """Pick the version to answer a legacy ``initialize`` with.
+
+    Echoes the client's version when we support it, otherwise offers our
+    newest legacy revision. A legacy client can never be answered with a
+    modern version: those have no handshake for it to complete.
+    """
+    if requested in LEGACY_PROTOCOL_VERSIONS:
+        return requested
+    return LATEST_LEGACY_PROTOCOL_VERSION
+
+
+def _validate_modern_meta(meta: dict) -> dict | None:
+    """Return a JSON-RPC error object if per-request metadata is unusable."""
+    version = meta.get(META_PROTOCOL_VERSION)
+    if version not in MODERN_PROTOCOL_VERSIONS:
+        return {
+            "code": ERR_UNSUPPORTED_PROTOCOL_VERSION,
+            "message": "Unsupported protocol version",
+            "data": {
+                "supported": list(SUPPORTED_PROTOCOL_VERSIONS),
+                "requested": version,
+            },
+        }
+    # clientCapabilities is required on every modern request; a missing one is
+    # a malformed request, not an empty capability set.
+    if not isinstance(meta.get(META_CLIENT_CAPABILITIES), dict):
+        return {
+            "code": ERR_INVALID_PARAMS,
+            "message": f"Missing required _meta field: {META_CLIENT_CAPABILITIES}",
+        }
+    return None
+
+
+def _server_info(server) -> dict:
+    return {"name": server.instance_name, "version": ARCHILLES_VERSION}
+
+
+def _result(payload: dict, server, modern: bool) -> dict:
+    """Shape a result payload for the era the client speaks.
+
+    Modern results declare a ``resultType`` and identify the server in
+    ``_meta``; legacy results carry neither, since clients on those revisions
+    learned the server's identity once, from ``initialize``.
+    """
+    if not modern:
+        return payload
+    return {
+        "resultType": "complete",
+        **payload,
+        "_meta": {META_SERVER_INFO: _server_info(server)},
+    }
+
+
+def _tools_call_payload(server, params: dict) -> dict:
+    """Run a tool call and wrap its outcome as MCP tool content."""
+    tool_name = params.get("name")
+    result = _dispatch_tool(server, tool_name, params.get("arguments") or {})
+    payload = {
+        "content": [
+            {"type": "text", "text": json.dumps(result, indent=2, ensure_ascii=False)}
+        ]
+    }
+    if isinstance(result, dict) and "error" in result:
+        payload["isError"] = True
+    return payload
+
+
+def build_response(server, tools: list[dict], request: dict) -> dict | None:
+    """Turn one JSON-RPC request into its response.
+
+    Returns ``None`` for notifications, which take no reply. Free of I/O so
+    the stdio loop and the tests can both drive it directly.
+    """
+    request_id = request.get("id")
+    method = request.get("method")
+    params = request.get("params") if isinstance(request.get("params"), dict) else {}
+    modern = is_modern_request(request)
+
+    if request_id is None:
+        if method == "notifications/initialized":
+            logger.info("Client sent initialized notification")
+        else:
+            logger.warning(f"Received notification: {method}")
+        return None
+
+    def _ok(payload: dict) -> dict:
+        return {"jsonrpc": "2.0", "id": request_id, "result": _result(payload, server, modern)}
+
+    def _fail(code: int, message: str, data: dict | None = None) -> dict:
+        error = {"code": code, "message": message}
+        if data is not None:
+            error["data"] = data
+        return {"jsonrpc": "2.0", "id": request_id, "error": error}
+
+    if modern and (err := _validate_modern_meta(request_meta(request))):
+        logger.warning(f"Rejecting {method}: {err['message']}")
+        return {"jsonrpc": "2.0", "id": request_id, "error": err}
+
+    if method == "server/discover":
+        # Mandatory in 2026-07-28, and the probe dual-era clients use on stdio
+        # to tell a modern server from a legacy one.
+        return _ok({
+            "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
+            "capabilities": {"tools": {}},
+        })
+
+    if method == "initialize":
+        if modern:
+            # No handshake exists in modern revisions — an initialize carrying
+            # modern _meta is a contradiction, not a request we can serve.
+            return _fail(ERR_METHOD_NOT_FOUND, "Method not found: initialize")
+        version = negotiate_protocol_version(params.get("protocolVersion"))
+        logger.info(
+            "Legacy initialize: client requested %r, answering %r",
+            params.get("protocolVersion"), version,
+        )
+        return _ok({
+            "protocolVersion": version,
+            "capabilities": {"tools": {}},
+            "serverInfo": _server_info(server),
+        })
+
+    if method == "tools/list":
+        return _ok({"tools": tools})
+
+    if method == "tools/call":
+        if not params.get("name"):
+            return _fail(ERR_INVALID_PARAMS, "Missing required parameter: name")
+        return _ok(_tools_call_payload(server, params))
+
+    return _fail(ERR_METHOD_NOT_FOUND, f"Method not found: {method}")
 
 
 async def stdio_server(server, tools: list[dict]):
@@ -145,78 +322,37 @@ async def stdio_server(server, tools: list[dict]):
     for tool in tools:
         logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
 
-    request_id = None
     while True:
+        line = sys.stdin.readline()
+        if not line:
+            break
+        if not line.strip():
+            continue
+
         try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-
-            request = json.loads(line.strip())
-            request_id = request.get('id')
-            method = request.get('method')
-            logger.info(f"Received request: {method or 'unknown'}")
-
-            # Notifications have no id and need no response
-            if request_id is None:
-                if method != 'notifications/initialized':
-                    logger.warning(f"Received notification: {method}")
-                else:
-                    logger.info("Client sent initialized notification")
-                continue
-
-            if method == 'initialize':
-                response = {
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'result': {
-                        'protocolVersion': '2024-11-05',
-                        'capabilities': {'tools': {}},
-                        'serverInfo': {'name': server.instance_name, 'version': '1.0.0'}
-                    }
-                }
-            elif method == 'tools/list':
-                response = {
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'result': {'tools': tools}
-                }
-            elif method == 'tools/call':
-                tool_name = request['params']['name']
-                tool_params = request['params'].get('arguments', {})
-                result = await handle_request(server, tool_name, tool_params)
-
-                is_error = isinstance(result, dict) and 'error' in result
-                content = [{'type': 'text', 'text': json.dumps(result, indent=2, ensure_ascii=False)}]
-                result_payload = {'content': content}
-                if is_error:
-                    result_payload['isError'] = True
-
-                response = {'jsonrpc': '2.0', 'id': request_id, 'result': result_payload}
-            else:
-                response = {
-                    'jsonrpc': '2.0',
-                    'id': request_id,
-                    'error': {'code': -32601, 'message': f'Method not found: {method}'}
-                }
-
-            sys.stdout.write(json.dumps(response) + '\n')
-            sys.stdout.flush()
-            logger.info(f"Sent response for request {request_id}")
-
+            request = json.loads(line)
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
             continue
+
+        request_id = request.get('id') if isinstance(request, dict) else None
+        try:
+            logger.info(f"Received request: {request.get('method') or 'unknown'}")
+            response = build_response(server, tools, request)
         except Exception as e:
             logger.error(f"Error processing request: {e}", exc_info=True)
-            error_id = request_id if request_id is not None else -1
-            error_response = {
+            response = {
                 'jsonrpc': '2.0',
-                'id': error_id,
-                'error': {'code': -32603, 'message': str(e)}
+                'id': request_id if request_id is not None else -1,
+                'error': {'code': ERR_INTERNAL, 'message': str(e)},
             }
-            sys.stdout.write(json.dumps(error_response) + '\n')
-            sys.stdout.flush()
+
+        if response is None:
+            continue
+
+        sys.stdout.write(json.dumps(response) + '\n')
+        sys.stdout.flush()
+        logger.info(f"Sent response for request {request_id}")
 
 
 async def sse_server(

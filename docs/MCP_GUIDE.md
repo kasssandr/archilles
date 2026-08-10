@@ -218,6 +218,26 @@ Check this file if something isn't working — it captures all startup errors, s
 
 ---
 
+## Protocol Versions
+
+MCP revision **2026-07-28** removed the `initialize` handshake and session IDs. Clients on that revision declare their protocol version, identity and capabilities in `_meta` on every request, so each request stands on its own. Earlier revisions ("legacy") open with `initialize` instead.
+
+Over stdio, Archilles speaks **both**:
+
+| Client revision | How it connects | Supported |
+|---|---|---|
+| 2026-07-28 | No handshake; `_meta` on every request; `server/discover` | ✅ |
+| 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05 | `initialize` handshake | ✅ |
+| Anything else | — | Rejected with `-32022` and a list of supported versions |
+
+You do not need to configure this. Whichever revision your client speaks, it is served — a client sending `initialize` gets the version it asked for, a client sending none gets served anyway.
+
+**Statelessness.** Archilles holds no state between tool calls and never did: every call reads configuration and files, never a previous request. Nothing about your library outlives the call that touched it, and no server needs to route you back to the same process. Where something genuinely has to span calls — research interests, for instance — it lives in a file you own, not in a session.
+
+**Scope.** This applies to the stdio transport, which is what Claude Desktop and Claude Code use. The SSE and Streamable HTTP transports below still run on MCP SDK 1.x and speak legacy revisions; they will be migrated when there is real demand for them (see ADR-031 in `DECISIONS.md`).
+
+---
+
 ## Remote MCP Clients (SSE Transport)
 
 Claude Desktop spawns the MCP server as a subprocess and communicates over **stdio**. Other clients — ChatGPT Desktop, OpenAI Codex, Cursor, VS Code, and any tool that expects a URL rather than a command — communicate over **HTTP/SSE** instead.
@@ -348,13 +368,13 @@ On first start, Windows may show a firewall dialog asking whether to allow Pytho
 
 | Client | Transport | URL |
 |--------|-----------|-----|
-| Claude Desktop | **stdio** (keep existing config) | — |
+| Claude Desktop / Claude Code | **stdio** (keep existing config) | — |
 | Cursor / VS Code MCP extension | SSE or Streamable HTTP | `http://127.0.0.1:8765/sse` or `/mcp` |
 | OpenAI Codex CLI | Streamable HTTP | `http://127.0.0.1:8765/mcp` |
 | ChatGPT Desktop | ⚠ not supported (local servers blocked) | — |
 | Any HTTP-based client | SSE or Streamable HTTP | see above |
 
-`--transport sse` uses the classic SSE transport (`/sse` + `/messages/`). `--transport streamable-http` uses the modern Streamable HTTP transport (`/mcp`, single endpoint for GET and POST) per MCP spec March 2025.
+`--transport sse` uses the classic SSE transport (`/sse` + `/messages/`). `--transport streamable-http` uses the Streamable HTTP transport (`/mcp`, single endpoint for GET and POST) per MCP spec March 2025. Both run on MCP SDK 1.x and speak legacy revisions — the handshake-free 2026-07-28 revision is currently stdio-only (see [Protocol Versions](#protocol-versions)).
 
 Do **not** switch Claude Desktop to SSE — it only supports stdio and will stop working if you change its config.
 

@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 24. Juni 2026 (ADR-028: Hardware-Stufen 2.0 — „Ein Ziel, mehrere Wege")
+**Letzte Überarbeitung:** 10. August 2026 (ADR-031: Dual-era MCP — stdio spricht 2026-07-28)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -490,6 +490,34 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 - Bei Port-Konflikt: klare Fehlermeldung mit Lösungshinweis, kein stummes Scheitern
 - Windows-Firewall-Dialog erscheint beim ersten Start — für localhost kein Sicherheitsrisiko
 - Event-Loop-Blocking bei langen RAG-Queries wird durch `run_in_executor()` verhindert
+
+---
+
+### ADR-031: Dual-era MCP — stdio spricht 2026-07-28 und alle Vorgängerversionen (August 2026)
+
+**Kontext:** Die MCP-Spezifikation 2026-07-28 (final seit 28. Juli 2026) entfernt den `initialize`/`initialized`-Handshake und die `Mcp-Session-Id`. Protokollversion, Client-Identität und Capabilities reisen stattdessen in `_meta` bei *jedem* Request; das Protokoll ist damit ausdrücklich zustandslos definiert („A server processes each request independently; no state should be inferred from previous requests"). Zusätzlich wird `server/discover` für Server verpflichtend, Results tragen ein `resultType`, und es gibt neue Fehlercodes (`-32022` UnsupportedProtocolVersion, `-32021` MissingRequiredClientCapability); `-32002` ist zugunsten von `-32602` zurückgezogen.
+
+Eine Bestandsaufnahme am 10. August 2026 ergab, dass ARCHILLES von den Deprecations praktisch nicht betroffen ist: weder Roots noch Sampling, MCP-Logging oder die experimentelle Tasks-API werden genutzt, `-32002` kommt im Code nicht vor, und es existiert kein Zustand über Call-Grenzen hinweg — Tools lesen Konfiguration und Dateien, nie vorangegangene Requests. Der Server ist also seit jeher zustandslos, ohne dass das je eine Entscheidung gewesen wäre. Zwei echte Lücken fanden sich dennoch: Der handgeschriebene stdio-Loop meldete eine fest verdrahtete `protocolVersion` `2024-11-05` ohne jede Verhandlung, und `server/discover` fehlte vollständig.
+
+Der stdio-Pfad benutzt — anders als SSE und Streamable HTTP (ADR-024) — kein SDK, sondern spricht JSON-RPC direkt über stdin/stdout. Protokollkonformität ist dort Eigenverantwortung.
+
+**Entscheidung:** Der stdio-Server wird **dual-era**: Ein Request mit `io.modelcontextprotocol/protocolVersion` in `_meta` wird nach 2026-07-28 bedient, ein `initialize` nach der ausgehandelten Legacy-Revision. Beides auf demselben Prozess, wie die Spec es unter „Backward Compatibility" vorsieht. Ein SDK-Upgrade auf `mcp` 2.0 unterbleibt vorerst.
+
+**Implementierungsdetails:**
+- `build_response()` als reine Funktion aus dem I/O-Loop herausgezogen — vorher war die Protokolllogik nicht testbar
+- `negotiate_protocol_version()` echot die Client-Version, sonst die neueste Legacy-Revision; einem Legacy-Client wird nie eine moderne Version angeboten, weil er deren Handshake-Losigkeit nicht bedienen kann
+- Moderne Results tragen `resultType: "complete"` (MUST) und `io.modelcontextprotocol/serverInfo` in `_meta` (SHOULD), Legacy-Results bewusst keins von beidem
+- `server/discover` meldet alle unterstützten Versionen und `capabilities: {tools: {}}`
+- Validierung: unbekannte Version → `-32022` samt `data.supported`, fehlende `clientCapabilities` → `-32602`; unbekannte `_meta`-Keys (`traceparent`, Vendor-Präfixe) werden ignoriert
+- `tests/test_stdio_protocol.py` (34 Fälle) fixiert beide Ären
+
+**Warum kein SDK-Upgrade auf `mcp` 2.0:** Der produktive Transport ist stdio, und der benutzt das SDK nicht — ein Upgrade würde dort nichts ändern. Die 1.x-Linie wird weiter gepflegt (1.29.0 erschien am selben Tag wie 2.0.0). Der handgeschriebene Loop ist hier ein Vorteil: Er ist von SDK-Breaking-Changes entkoppelt und übersteht den Wegfall des Handshakes, ohne dass eine Migration den produktiven Pfad gefährdet. Die Portierung von SSE/Streamable HTTP auf 2.0 bleibt aufgeschoben, bis der HTTP-Transport realen Bedarf hat (ChatGPT blockiert lokale Server weiterhin).
+
+**Konsequenzen:**
+- Claude Desktop und Claude Code funktionieren unverändert; verifiziert am 10.08.2026 gegen den laufenden Prozess in beiden Ären
+- Die Kommunikationsaussage „built for stateless MCP" ist ab sofort belegbar — **für stdio**. SSE und Streamable HTTP sprechen weiter Legacy; jede öffentliche Aussage muss das qualifizieren, solange ADR-024s Pfade nicht nachgezogen sind
+- Statelessness wird von einer stillschweigenden Eigenschaft zu einer zugesagten: Künftige Features dürfen keinen Zustand zwischen Tool-Calls aufbauen. Was über Requests hinweg leben muss, braucht einen expliziten Identifier im Tool-Parameter (Spec: „MUST be referenced by an explicit identifier the client passes on each request")
+- Für ein perspektivisch gehostetes ARCHILLES entfällt der Session-Store als Architekturproblem — eine offengehaltene Option, keine Zusage
 
 ---
 
