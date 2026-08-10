@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.archilles.constants import SectionType
 from src.extractors.epub_extractor import EPUBExtractor
 
 
@@ -115,3 +116,113 @@ class TestBuildTocMap:
         result = self.build(toc)
         assert 'ch01.html' in result
         assert 'ch02.html' in result
+
+
+class TestSectionTypeFromFilename:
+    """Paratext must be recognised when the EPUB gives it no readable title.
+
+    Many EPUBs carry no <h1> and no TOC entry for their index, notes or
+    front matter. Those sections used to fall through to `main_content`,
+    which put index entries and footnote apparatus into search results as
+    if they were prose. The filename is the only identifier left, and it
+    usually carries the convention (`index_split_033.html`,
+    `Footnote_570.xhtml`).
+    """
+
+    detect = staticmethod(EPUBExtractor._detect_section_type)
+
+    @pytest.mark.parametrize("filename", [
+        "Footnote_570.xhtml",
+        "part0012_footnote.html",
+        "notes.xhtml",
+        "OEBPS/endnotes.html",
+        "bibliography.xhtml",
+        "glossary.html",
+        "Text/081_appendix-m.html",
+    ])
+    def test_untitled_back_matter_detected_from_filename(self, filename):
+        assert self.detect("", filename) == SectionType.BACK_MATTER
+
+    @pytest.mark.parametrize("filename", [
+        "index_split_033.html",
+        "Text/index_split_007.xhtml",
+        "xhtml/index.html",
+    ])
+    def test_index_filenames_are_not_trusted(self, filename):
+        """'index' names the converter's source as often as a real index.
+
+        A sample of the live library found `index_split_*.html` files holding
+        ordinary prose, so trusting the name hid main content. Real indexes
+        still get caught by their TOC title.
+        """
+        assert self.detect("", filename) == SectionType.MAIN_CONTENT
+        assert self.detect("Index", filename) == SectionType.BACK_MATTER
+
+    @pytest.mark.parametrize("filename", [
+        "cover.xhtml",
+        "titlepage.xhtml",
+        "OEBPS/toc.ncx.html",
+        "copyright.html",
+    ])
+    def test_untitled_front_matter_detected_from_filename(self, filename):
+        assert self.detect("", filename) == SectionType.FRONT_MATTER
+
+    @pytest.mark.parametrize("filename", [
+        "chapter_005.html",
+        "part0003_split_012.html",
+        "Text/84A8F77B79B542889A3D37D0A416DF59.xhtml",
+        "ch12.xhtml",
+        "content_0021.html",
+        "text00007.html",
+        "chapter-title-page-3.html",
+    ])
+    def test_ordinary_chapters_stay_main_content(self, filename):
+        assert self.detect("", filename) == SectionType.MAIN_CONTENT
+
+    def test_readable_title_wins_over_filename(self):
+        # A real heading is stronger evidence than a filename convention:
+        # a chapter that merely lives in index_split_*.html is still a chapter.
+        assert (self.detect("Chapter 7: The Origin of Species", "index_split_033.html")
+                == SectionType.MAIN_CONTENT)
+
+    def test_title_still_detected_without_filename(self):
+        assert self.detect("Bibliography") == SectionType.BACK_MATTER
+        assert self.detect("Preface") == SectionType.FRONT_MATTER
+
+    def test_no_title_and_no_filename_is_main_content(self):
+        assert self.detect("", "") == SectionType.MAIN_CONTENT
+
+
+class TestFilenameSignalsUsable:
+    """A filename marker means nothing when every file carries it.
+
+    Conversion tools routinely name every document after the source file
+    (`index_split_000.html` … `index_split_412.html`). Taking that literally
+    filed whole books under back matter — one lost 1088 of its 1090 chunks.
+    """
+
+    usable = staticmethod(EPUBExtractor._filename_signals_usable)
+
+    def test_mixed_names_keep_the_signal(self):
+        assert self.usable([
+            "part0001_split_000.html",
+            "part0002_split_000.html",
+            "index_split_033.html",
+        ]) is True
+
+    def test_uniform_paratext_names_discard_the_signal(self):
+        # Every file carries the same marker: it describes the converter's
+        # naming scheme, not a section boundary.
+        assert self.usable(
+            [f"notes_{i:03d}.html" for i in range(50)]
+        ) is False
+
+    def test_footnote_heavy_book_keeps_the_signal(self):
+        # 570 footnote files alongside real chapters is a legitimate book,
+        # not a naming convention — the chapters are what save it.
+        names = [f"part0012_footnote_{i}.xhtml" for i in range(570)]
+        names += ["chapter_001.xhtml", "chapter_002.xhtml"]
+        assert self.usable(names) is True
+
+    def test_empty_book_has_no_signal(self):
+        assert self.usable([]) is False

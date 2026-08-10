@@ -38,6 +38,41 @@ _SECTION_NUM_LABEL = re.compile(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', re.IGN
 _FRONT_MATTER_PATTERNS = get_toc_front_matter_keywords()
 _BACK_MATTER_PATTERNS = get_toc_back_matter_keywords()
 
+# Filename conventions for sections that carry no heading and no TOC entry.
+# Deliberately narrow and English-only: these are EPUB packaging conventions
+# produced by conversion tools, not prose titles, so the multilingual TOC
+# vocabulary above does not apply. Only closed compounds are listed —
+# 'title page' as two words would swallow 'chapter-title-page-3.html'.
+# 'index' is deliberately absent: in EPUB filenames it means the book's
+# index about as often as it means the converter's source document, and a
+# sampled check found `index_split_*.html` files carrying ordinary prose.
+# Hiding main content is worse than leaving an index visible, and real
+# indexes are usually caught by their TOC title anyway.
+_FILENAME_BACK_MATTER = frozenset({
+    'note', 'notes', 'footnote', 'footnotes',
+    'endnote', 'endnotes', 'bibliography', 'biblio', 'references',
+    'glossary', 'appendix', 'colophon',
+})
+_FILENAME_FRONT_MATTER = frozenset({
+    'cover', 'titlepage', 'halftitle', 'frontmatter',
+    'toc', 'copyright', 'imprint', 'dedication',
+})
+_FILENAME_PARATEXT = _FILENAME_BACK_MATTER | _FILENAME_FRONT_MATTER
+
+
+def _normalize_item_name(filename: str) -> str:
+    """Reduce an EPUB item name to bare words for keyword matching.
+
+    ``Text/index_split_033.html`` becomes ``index split``. Digits and
+    separators go because they carry the sequence, not the meaning, and
+    word-boundary matching would otherwise fail on ``index_split``.
+    """
+    if not filename:
+        return ""
+    stem = filename.rsplit('/', 1)[-1].rsplit('\\', 1)[-1]
+    stem = re.sub(r'\.(x?html?|ncx|xml)$', '', stem, flags=re.IGNORECASE)
+    return re.sub(r'[\d_\-.]+', ' ', stem).strip().lower()
+
 
 class EPUBExtractor(BaseExtractor):
     """
@@ -102,10 +137,14 @@ class EPUBExtractor(BaseExtractor):
 
         _sub_heading_re = re.compile(r'^h[2-6]$')
 
-        for item in book.get_items():
-            if item.get_type() != ebooklib.ITEM_DOCUMENT:
-                continue
+        doc_items = [
+            i for i in book.get_items() if i.get_type() == ebooklib.ITEM_DOCUMENT
+        ]
+        use_filenames = self._filename_signals_usable(
+            [i.get_name() for i in doc_items]
+        )
 
+        for item in doc_items:
             content = item.get_content()
 
             # Parse HTML once — extract text, h1, and sub-headings
@@ -123,11 +162,13 @@ class EPUBExtractor(BaseExtractor):
             item_name = item.get_name()
             toc_info = toc_map.get(item_name, {})
 
-            # Section type determined at chapter level — sub-sections inherit
+            # Section type determined at chapter level — sub-sections inherit.
+            # Untitled items fall back to the filename: index and note files
+            # routinely ship without a heading or TOC entry, and assuming
+            # main content for those puts index entries into search results.
             display_title = chapter_title or toc_info.get('title') or ''
-            chapter_section_type = (
-                self._detect_section_type(display_title) if display_title
-                else SectionType.MAIN_CONTENT
+            chapter_section_type = self._detect_section_type(
+                display_title, item_name if use_filenames else ''
             )
 
             # Split by sub-sections.  Prefer anchor-based splitting (uses
@@ -358,9 +399,36 @@ class EPUBExtractor(BaseExtractor):
         return None
 
     @staticmethod
-    def _detect_section_type(title: str) -> str:
+    def _filename_signals_usable(item_names: List[str]) -> bool:
+        """True when paratext filenames actually distinguish anything.
+
+        Some conversion tools name every file after the source document, so a
+        whole book arrives as ``index_split_000.html`` … ``index_split_412.html``.
+        There the word describes the converter, not the section, and honouring
+        it would file the entire book under back matter — measured against the
+        live library, that was 45 books, one of them losing 1088 of 1090 chunks.
+
+        Paratext is a demarcation: where no file lacks the marker, nothing is
+        being demarcated, so the signal is discarded for that book.
+        """
+        if not item_names:
+            return False
+        return any(
+            not contains_keyword(_normalize_item_name(name), _FILENAME_PARATEXT)
+            for name in item_names
+        )
+
+    @staticmethod
+    def _detect_section_type(title: str, filename: str = "") -> str:
         """
         Detect if section is front matter, main content, or back matter.
+
+        Args:
+            title: Chapter heading or TOC title. Authoritative when present.
+            filename: EPUB item name, used only when there is no title —
+                many EPUBs ship their index, notes and front matter without
+                a heading or TOC entry, and the filename is then the only
+                identifier left (``index_split_033.html``).
 
         Returns:
             'front_matter', 'main_content', or 'back_matter'
@@ -370,6 +438,16 @@ class EPUBExtractor(BaseExtractor):
         if contains_keyword(title, _FRONT_MATTER_PATTERNS):
             return SectionType.FRONT_MATTER
         if contains_keyword(title, _BACK_MATTER_PATTERNS):
+            return SectionType.BACK_MATTER
+        if title:
+            # A readable heading outranks a packaging convention: a chapter
+            # that merely lives in index_split_*.html is still a chapter.
+            return SectionType.MAIN_CONTENT
+
+        normalized = _normalize_item_name(filename)
+        if contains_keyword(normalized, _FILENAME_FRONT_MATTER):
+            return SectionType.FRONT_MATTER
+        if contains_keyword(normalized, _FILENAME_BACK_MATTER):
             return SectionType.BACK_MATTER
         return SectionType.MAIN_CONTENT
 
