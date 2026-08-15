@@ -4,7 +4,7 @@
 |---|---|
 | **Status Teil I (Watchdog)** | Dokumentation des Ist-Stands — produktiv seit April 2026; beschreibt den Code-Stand `e944349` (2026-07-08) |
 | **Status Teil II (Wiki-Generator)** | Ausgelagert (2026-07-11) → `archilles-scriptor/docs/internal/KONZEPT_wiki_zitatgraph_v1.md`; hier nur Kontrakt-Kurzfassung |
-| **Stand** | 2026-07-11 (Teil II ausgelagert, inkl. §II.12 Hypertext-Ausbaustufe) |
+| **Stand** | 2026-08-15 (§II.6 Herkunft eines Seitenlabels ergänzt; Teil II ausgelagert am 2026-07-11, inkl. §II.12 Hypertext-Ausbaustufe) |
 | **Bezüge** | ROADMAP.md (v1.0 Watchdog, v1.5 Wiki), ADR-011 (metadata_hash), ADR-025 (Scheduled Routines), ADR-028 (Hardware-Tiers / full-external) |
 
 ---
@@ -135,3 +135,56 @@ Teil den Ist-Stand nicht schöner beschreibt, als er ist:
   `chunk_index` verschoben ist); ein Verifikationspass (`verify_citation`)
   kann veraltete Anker über Buch + Seite + Textabgleich re-lokalisieren,
   statt sie nur als tot zu melden.
+
+## II.6 Herkunft eines Seitenlabels (Nachzug aus Scriptor, 2026-08-15)
+
+§II.5 legt fest, *was* eine Seite ist. Scriptor sagt seit August 2026
+zusätzlich, **woher** die Seitenangabe stammt — und das ist für den Zitier­
+kontrakt kein Beiwerk: Ein `[p. 47]`, das die Seite selbst gedruckt hat, und
+eines, das aus der Zahlenfolge erschlossen wurde, sehen im Liefertext identisch
+aus. Ein Konsument, der eine Zitatangabe gewichten will, kann den Unterschied
+aus dem Marker nicht zurückgewinnen.
+
+**Der Import ist noch nicht gebaut** (ROADMAP: „künftiger Scriptor-Import").
+Dieser Abschnitt hält den Kontrakt fest, damit er beim Bau nicht neu erfunden
+oder stillschweigend verworfen wird.
+
+### Drei Kanäle
+
+| Kanal | Inhalt |
+|---|---|
+| `[p. NN]` im Text | unverändert, §II.5 gilt weiter |
+| Frontmatter des Masters | eine Zeile `pagination: <Kante>, <N>% of pages attested` |
+| `<master>.pagination.json` | Segmenttabelle, je Position `(label, source, confidence)`, überstimmte Lesungen mit Klassifikation |
+
+### `label_source` — der stärkste Zeuge, der das Label bestätigt hat
+
+| Wert | Bedeutung |
+|---|---|
+| `printed` | die Seite hat die Zahl selbst gedruckt |
+| `link` | ein vom Hersteller gesetzter Verzeichnis-Link zeigt hierher und die Verzeichniszeile druckt die Zahl |
+| `toc` | das Inhaltsverzeichnis nennt die Seite, und der Titel wurde hier gefunden |
+| `catalogue` | die PageLabels des PDF-Katalogs |
+| `computed` | niemand hat es beobachtet; es folgt allein aus der Segmentfolge |
+
+`printed` und `link` **bezeugen**, die übrigen **behaupten**. Nur die ersten
+beiden zählen in die Kennzahl `attested`. Der Unterschied ist gemessen und nicht
+theoretisch: Bei einem Korpusband stimmen die PageLabels mit 4 % der gedruckten
+Seiten überein und sind trotzdem über den ganzen Band richtig; bei einem anderen
+sind sie durchgehend um eins verschoben.
+
+**Für den Import gilt:** `label_source` gehört ins Chunk-Schema, nicht in den
+Papierkorb. Ein Anker auf ein `computed`-Label ist zitierfähig, aber er ist
+schwächer, und `verify_citation` sollte das wissen. Neue Werte sind möglich —
+`toc` kam mit Etappe 3 dazu, `link` im August 2026 —, ein Importer darf an einem
+unbekannten Wert also nicht scheitern, sondern behandelt ihn als „behauptet".
+
+### Bandweite Kennzahl
+
+`attested` ist der Anteil der Positionen mit bezeugtem Label, **nicht** der
+Anteil gelabelter Seiten. Der Unterschied ist der Punkt: Ein Band kann
+durchgehend gelabelt sein, indem von einer einzigen Lesung weitergezählt wird.
+Gemessen reicht die Zahl über neunzehn Bände von 0 % bis 100 %.
+
+**Quelle:** `archilles-scriptor/docs/internal/2026-08-13-quellen-verbund-design.md`
+(§6.1 `label_source`, §7.1 Ausgabe, §7.2 Konfidenz, §4.6 ToC-Link).

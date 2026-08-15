@@ -15,6 +15,15 @@
 > „prepared" ist in Archilles bereits durch die Zwei-Phasen-Pipeline
 > (prepare/embed) belegt; der Import sollte als „scriptor"-Format laufen.
 
+> **Spiegel-Notiz (Familie), 2026-08-15:** Scriptor liefert zum Seitenlabel
+> jetzt auch dessen **Herkunft** — `label_source` je Seite (`printed`, `link`,
+> `toc`, `catalogue`, `computed`), eine Frontmatter-Zeile `pagination:` je Band
+> und ein Sidecar `<master>.pagination.json` als maschinenlesbaren Kanal. Für
+> den Scriptor-Import heißt das: `label_source` gehört ins Chunk-Schema, und ein
+> unbekannter Wert darf den Importer nicht scheitern lassen. Der Kontrakt steht
+> normativ in [WATCHDOG_AND_WIKI.md §II.6](WATCHDOG_AND_WIKI.md); Begründung und
+> Messwerte in Scriptors `docs/internal/2026-08-13-quellen-verbund-design.md`.
+
 ---
 
 ## Vision
