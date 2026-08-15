@@ -109,6 +109,7 @@ Reports are written in German. No commit needed; the Lab routine indexes the vau
 ## Important Docs
 
 - `docs/ARCHITECTURE.md` — Technical deep-dive
-- `docs/internal/IMPLEMENTATION_STATUS.md` — Current implementation state
-- `docs/internal/HANDOVER_2026-02-06.md` — Session handover notes
-- `SETUP_GUIDE_FOR_WINDOWS.md` — Windows-specific setup
+- `docs/DECISIONS.md` — Decision archive (German): why the system is built the way it is. Read the relevant ADR before revisiting a settled design question.
+- `docs/ROADMAP.md` — Planned work and, more importantly, its sequencing and the gates between stages
+- `docs/WATCHDOG_AND_WIKI.md` — Watchdog spec; §II.5/§II.6 carry the cross-repo citation contract (page markers and their provenance) shared with `archilles-scriptor`
+- `docs/INSTALLATION.md` — Setup, including the Windows path
