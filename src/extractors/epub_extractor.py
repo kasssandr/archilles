@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 # Compiled patterns for section number extraction
 _SECTION_NUM_START = re.compile(r'^(\d+(?:\.\d+)*)\s+')
 _SECTION_NUM_LABEL = re.compile(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', re.IGNORECASE)
+# Marks the place of a nav anchor in the stream of strings (_split_html_by_anchors).
+_SENTINEL_OPEN, _SENTINEL_CLOSE = chr(0xE000), chr(0xE001)  # private use, never in a book
+_SENTINEL_RE = re.compile(re.escape(_SENTINEL_OPEN) + r"(\d+)" + re.escape(_SENTINEL_CLOSE))
 
 # Section type classification patterns — sourced from the central corpus-
 # language data (i18n); not language-filtered. This also gives EPUBs German
@@ -523,22 +526,37 @@ class EPUBExtractor(BaseExtractor):
             text = self._clean_text(soup.get_text(separator='\n\n'))
             return [{'heading': None, 'text': text}]
 
-        # Walk the body's descendants in document order.  For each marker
-        # element, record where it appears so we can split the flat text.
-        body = soup.find('body') or soup
-        all_strings = list(body.stripped_strings)
-        full_text = '\n\n'.join(all_strings)
+        # Place each anchor where it stands in the document, not by its words.
+        # A nav sub-entry often targets an empty <a id="sec1"/>: its text is
+        # '', which a search "finds" at every offset, so every split fell on
+        # one point and the whole file went to the last sub-section (Le Goff
+        # [4031]). And a heading's words may stand earlier in the prose. A
+        # sentinel string put into each anchor element marks its place in the
+        # stream of strings; the sentinels are taken out again afterwards.
+        from bs4 import NavigableString
 
-        # Build character offsets for each marker in the joined text.
-        # We find each marker's text content and locate it sequentially.
-        marker_texts = [(el.get_text(strip=True), title) for el, title in markers]
+        sentinels = []
+        for k, (el, _title) in enumerate(markers):
+            sentinel = NavigableString(f"{_SENTINEL_OPEN}{k}{_SENTINEL_CLOSE}")
+            el.insert(0, sentinel)
+            sentinels.append(sentinel)
+        body = soup.find('body') or soup
+        parts: List[str] = []
+        length = 0
         split_points: List[tuple] = []  # (char_offset, title)
-        search_from = 0
-        for marker_text, title in marker_texts:
-            idx = full_text.find(marker_text, search_from)
-            if idx >= 0:
-                split_points.append((idx, title))
-                search_from = idx + len(marker_text)
+        for string in body.stripped_strings:
+            hit = _SENTINEL_RE.fullmatch(string)
+            if hit:
+                split_points.append((length, markers[int(hit.group(1))][1]))
+                continue
+            if parts:
+                length += 2  # the '\n\n' that joins the strings
+            parts.append(string)
+            length += len(string)
+        for sentinel in sentinels:
+            sentinel.extract()
+        full_text = '\n\n'.join(parts)
+        split_points.sort(key=lambda point: point[0])
 
         if not split_points:
             return [{'heading': None, 'text': self._clean_text(full_text)}]
