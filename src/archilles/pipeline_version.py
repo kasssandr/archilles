@@ -44,8 +44,13 @@ History
          has no ``<h1>``, instead of its file name (Gliederung B1). The
          embedded text is unchanged; the stored field is not, and the marker
          is how rows with a file name as chapter stay findable.
+``3``    EPUB sub-sections are split where the nav anchor stands, not where
+         its words are first found. An empty anchor (``<a id="sec1"/>``) had
+         put a whole file into its last sub-section, so every chunk of the
+         file named that section (Le Goff [4031]; about 8 % of EPUBs). Both
+         ``section_title`` and the chunk boundaries change for those books.
 """
 
 from __future__ import annotations
 
-PIPELINE_VERSION = "2"
+PIPELINE_VERSION = "3"
