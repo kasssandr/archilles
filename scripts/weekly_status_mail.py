@@ -43,6 +43,11 @@ sys.path.insert(0, str(REPO_ROOT))
 from src.archilles import runtime_lock
 from src.archilles.config import load_master_config
 from src.archilles.orphan_guard import ORPHAN_COUNT_LIMIT
+from src.archilles.watchdog import (
+    COMPLETED_EXIT_CODES,
+    EXIT_OK,
+    EXIT_PARTIAL,
+)
 
 
 SMTP_HOST = "smtp.gmail.com"
@@ -178,9 +183,17 @@ def _format_source_block(name: str, adapter: str, library: Path, rows: list[dict
         lines.append("    Keine Läufe in den letzten 7 Tagen.")
         return "\n".join(lines) + "\n"
 
-    successes = [r for r in rows if r.get("exit_code") == 0]
-    failures  = [r for r in rows if r.get("exit_code") != 0]
-    lines.append(f"    Läufe: {len(rows)}  (erfolg: {len(successes)}, fehler: {len(failures)})")
+    # A run that finished with unusable books is not a failed run (see the
+    # exit codes in src/archilles/watchdog.py). Counting it as one hid the
+    # difference that matters here: whether the routine ran at all.
+    successes = [r for r in rows if r.get("exit_code") == EXIT_OK]
+    partials  = [r for r in rows if r.get("exit_code") == EXIT_PARTIAL]
+    failures  = [r for r in rows
+                 if r.get("exit_code") not in COMPLETED_EXIT_CODES]
+    lines.append(
+        f"    Läufe: {len(rows)}  (erfolg: {len(successes)}, "
+        f"mit Einzelfehlern: {len(partials)}, abgebrochen: {len(failures)})"
+    )
 
     agg = lambda k: sum((r.get("stats", {}) or {}).get(k, 0) or 0 for r in rows)
     # Queue sizes are per-run snapshots of the *same* backlog, so summing them
@@ -245,7 +258,7 @@ def _format_source_block(name: str, adapter: str, library: Path, rows: list[dict
     )
 
     if failures:
-        lines.append("    Fehler-Läufe (max. letzte 3):")
+        lines.append("    Abgebrochene Läufe (max. letzte 3):")
         for r in failures[-3:]:
             err = r.get("error") or f"exit_code={r.get('exit_code')}"
             lines.append(f"      - {r.get('timestamp')}: {err}")

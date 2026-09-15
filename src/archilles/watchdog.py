@@ -49,6 +49,30 @@ from src.archilles.orphan_guard import (  # noqa: E402
 from src.archilles.sqlite_ro import connect_readonly  # noqa: E402
 
 
+# ── exit codes ───────────────────────────────────────────────────────────────
+# A scan that finished and a scan that died are different events, and callers
+# have to tell them apart: run_routine.py writes its "ran today" marker for
+# the first and withholds it for the second.  Both used to leave exit 1, so a
+# completed Phase A with three unreadable .azw3 files was indistinguishable
+# from a crashed one — the marker never advanced and the routine re-ran on
+# every logon of the same day (observed 2026-09-15).
+#
+# A book that cannot be extracted is a property of that book, not a failure of
+# the scan: it gets its own code so it stays visible without being fatal.
+EXIT_OK = 0        # scan completed, nothing failed
+EXIT_ABORTED = 1   # scan died — Python's own code for an unhandled exception
+EXIT_USAGE = 2     # bad invocation; nothing ran
+EXIT_PARTIAL = 3   # scan completed, individual books failed
+
+#: Codes that mean the scan ran to its end, whatever it found on the way.
+COMPLETED_EXIT_CODES = frozenset({EXIT_OK, EXIT_PARTIAL})
+
+
+def exit_code_for(results: dict[str, Any]) -> int:
+    """The exit code a finished scan deserves, given what it collected."""
+    return EXIT_PARTIAL if results.get('errors') else EXIT_OK
+
+
 def _clean_html(html_text: str) -> str:
     """Strip HTML from Calibre comments -- delegiert an CalibreDB.clean_html (7.15)."""
     from src.calibre_db import CalibreDB
@@ -559,6 +583,36 @@ def _cleanup_orphaned_books(
             continue
         print(f"   [{book_id}] {deleted} chunks removed")
         results['orphans_removed'] += 1
+
+
+def _merge_into_queue(queue_file: Path, ids, cast) -> None:
+    """Merge ``ids`` into the queue file, coercing every entry to one type.
+
+    The queue has more than one writer — ``scripts/scriptor_prepare.py`` also
+    appends to it — and the two used to disagree about the type of an id.  A
+    file holding both ints and strings makes ``sorted()`` raise and takes the
+    whole scan down with it, so whoever writes last settles the type here:
+    ints for Calibre ids, strings for Zotero keys.  Entries that survive
+    neither cast are dropped rather than carried along as a future crash.
+    """
+    existing: list = []
+    if queue_file.exists():
+        try:
+            existing = json.loads(queue_file.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+    if not isinstance(existing, list):
+        existing = []
+    merged = set()
+    for raw in (*existing, *ids):
+        if not isinstance(raw, (str, int)) or isinstance(raw, bool):
+            continue
+        try:
+            merged.add(cast(raw))
+        except (TypeError, ValueError):
+            continue
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text(json.dumps(sorted(merged), indent=2), encoding='utf-8')
 
 
 class WatchdogScanner:
@@ -1175,15 +1229,8 @@ class WatchdogScanner:
         return current_hash != stored_hash
 
     def _queue_new_books(self, calibre_ids: list[int]) -> None:
-        existing: list[int] = []
-        if self.queue_file.exists():
-            try:
-                existing = json.loads(self.queue_file.read_text(encoding='utf-8'))
-            except Exception:
-                pass
-        merged = sorted(set(existing) | set(calibre_ids))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+        _merge_into_queue(self.queue_file, calibre_ids, int)
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
@@ -1774,15 +1821,8 @@ class ZoteroWatchdogScanner:
             logger.warning("Could not save Zotero annotation cache: %s", exc)
 
     def _queue_new_items(self, keys: list[str]) -> None:
-        existing: list[str] = []
-        if self.queue_file.exists():
-            try:
-                existing = json.loads(self.queue_file.read_text(encoding='utf-8'))
-            except Exception:
-                pass
-        merged = sorted(set(existing) | set(keys))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+        _merge_into_queue(self.queue_file, keys, str)
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')

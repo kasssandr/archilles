@@ -386,9 +386,24 @@ def test_the_queue_the_ids_go_to_belongs_to_the_source(tmp_path):
 
 def test_queued_ids_are_merged_not_replaced(tmp_path):
     path = tmp_path / "index_queue.json"
+    path.write_text(json.dumps([10593]), encoding="utf-8")
+    sp._queue(path, ["8081", "10593"], numeric=True)
+    assert json.loads(path.read_text(encoding="utf-8")) == [8081, 10593]
+
+
+def test_a_calibre_queue_holds_numbers_the_watchdog_can_sort(tmp_path):
+    """The watchdog reads this file as ints; strings there abort its scan."""
+    path = tmp_path / "index_queue.json"
     path.write_text(json.dumps(["10593"]), encoding="utf-8")
-    sp._queue(path, ["8081", "10593"])
-    assert json.loads(path.read_text(encoding="utf-8")) == ["10593", "8081"]
+    sp._queue(path, ["8081"], numeric=True)
+    assert json.loads(path.read_text(encoding="utf-8")) == [8081, 10593]
+
+
+def test_a_zotero_queue_holds_keys(tmp_path):
+    path = tmp_path / "zotero_index_queue.json"
+    path.write_text(json.dumps(["ABCD1234"]), encoding="utf-8")
+    sp._queue(path, ["EFGH5678"], numeric=False)
+    assert json.loads(path.read_text(encoding="utf-8")) == ["ABCD1234", "EFGH5678"]
 
 
 def test_the_library_chunking_setting_is_read(tmp_path):
@@ -486,7 +501,7 @@ def test_without_indexing_the_id_goes_to_the_queue(tmp_path, monkeypatch):
     assert sp.run(_args(index=False)) == 0
     assert indexed == []
     queue = json.loads((tmp_path / ".archilles" / "index_queue.json").read_text(encoding="utf-8"))
-    assert queue == ["10593"]
+    assert queue == [10593]
 
 
 def test_a_dry_run_runs_nothing_and_writes_nothing(tmp_path, monkeypatch, capsys):

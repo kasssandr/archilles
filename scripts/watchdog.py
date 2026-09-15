@@ -24,6 +24,16 @@ Environment
     ARCHILLES_LIBRARY_PATH   Path to Calibre library (required)
     CALIBRE_LIBRARY_PATH     Legacy alias (also accepted)
     RAG_DB_PATH              Override LanceDB path
+
+Exit codes
+----------
+    0  scan completed, nothing failed
+    1  scan aborted (unhandled exception) — its results are unreliable
+    2  bad invocation; nothing ran
+    3  scan completed, individual books failed (see watchdog.log)
+
+Callers that only want to know whether the scan ran should test against
+``COMPLETED_EXIT_CODES`` (0 and 3), not against 0.
 """
 
 import argparse
@@ -46,8 +56,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.archilles.config import get_library_path, get_rag_db_path
 from src.archilles.watchdog import (
+    EXIT_ABORTED,
+    EXIT_USAGE,
     WatchdogScanner,
     ZoteroWatchdogScanner,
+    exit_code_for,
     log_crash,
 )
 
@@ -91,7 +104,8 @@ def _install_shutdown_handler(scanner) -> None:
         else:
             print("\n⚠️  HARD ABORT — current book may be incomplete.")
             print("   It will be retried via the checkpoint on the next run.\n")
-            sys.exit(1)
+            # Nothing ran to its end here, so the run must not count as done.
+            sys.exit(EXIT_ABORTED)
 
     signal.signal(signal.SIGINT, handler)
     if hasattr(signal, 'SIGTERM'):
@@ -292,7 +306,7 @@ def main() -> None:
     if getattr(args, 'index_metadata_only', False) and args.index_new:
         print("ERROR: --index-metadata-only and --index-new are mutually exclusive.",
               file=sys.stderr)
-        sys.exit(2)
+        sys.exit(EXIT_USAGE)
 
     scan_kwargs: dict = {
         'dry_run': args.dry_run,
@@ -333,8 +347,10 @@ def main() -> None:
 
     _print_results(results, json_mode=args.json_mode)
 
-    # Exit with non-zero code if there were errors
-    sys.exit(1 if results['errors'] else 0)
+    # The scan reached its end: whatever it could not extract is reported as
+    # EXIT_PARTIAL, which callers read as "ran, with findings" rather than as
+    # the EXIT_ABORTED a re-raised crash above leaves behind.
+    sys.exit(exit_code_for(results))
 
 
 if __name__ == '__main__':
