@@ -43,6 +43,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from src.archilles import process_lifetime, runtime_lock
 from src.archilles.config import load_master_config
+from src.archilles.watchdog import COMPLETED_EXIT_CODES
 
 
 def _should_skip(marker: Path, frequency: str, now: datetime) -> tuple[bool, str | None]:
@@ -459,7 +460,11 @@ def main() -> int:
         }
         _append_history(history_file, record)
 
-        if returncode == 0:
+        # "Has it run today?" is a question about the run reaching its end,
+        # not about every book in it being usable: a scan that reports three
+        # unreadable files did its work and must not re-run on the next logon
+        # (EXIT_PARTIAL). A scan that died did not, and has to come back.
+        if returncode in COMPLETED_EXIT_CODES:
             marker.write_text(end.isoformat(), encoding="utf-8")
 
         return returncode

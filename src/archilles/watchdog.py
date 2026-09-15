@@ -49,6 +49,30 @@ from src.archilles.orphan_guard import (  # noqa: E402
 from src.archilles.sqlite_ro import connect_readonly  # noqa: E402
 
 
+# ── exit codes ───────────────────────────────────────────────────────────────
+# A scan that finished and a scan that died are different events, and callers
+# have to tell them apart: run_routine.py writes its "ran today" marker for
+# the first and withholds it for the second.  Both used to leave exit 1, so a
+# completed Phase A with three unreadable .azw3 files was indistinguishable
+# from a crashed one — the marker never advanced and the routine re-ran on
+# every logon of the same day (observed 2026-09-15).
+#
+# A book that cannot be extracted is a property of that book, not a failure of
+# the scan: it gets its own code so it stays visible without being fatal.
+EXIT_OK = 0        # scan completed, nothing failed
+EXIT_ABORTED = 1   # scan died — Python's own code for an unhandled exception
+EXIT_USAGE = 2     # bad invocation; nothing ran
+EXIT_PARTIAL = 3   # scan completed, individual books failed
+
+#: Codes that mean the scan ran to its end, whatever it found on the way.
+COMPLETED_EXIT_CODES = frozenset({EXIT_OK, EXIT_PARTIAL})
+
+
+def exit_code_for(results: dict[str, Any]) -> int:
+    """The exit code a finished scan deserves, given what it collected."""
+    return EXIT_PARTIAL if results.get('errors') else EXIT_OK
+
+
 def _clean_html(html_text: str) -> str:
     """Strip HTML from Calibre comments -- delegiert an CalibreDB.clean_html (7.15)."""
     from src.calibre_db import CalibreDB
