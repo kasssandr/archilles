@@ -23,6 +23,7 @@ import pytest
 from src.archilles.watchdog import (
     DEFAULT_EXCLUDED_TAGS,
     WatchdogScanner,
+    ZoteroWatchdogScanner,
     _calibre_metadata_for_hash,
     _clean_html,
     _compute_metadata_hash,
@@ -469,6 +470,46 @@ class TestQueueFile:
         )
         scanner._queue_new_books([3, 4, 5])
         assert json.loads(scanner.queue_file.read_text()) == [1, 2, 3, 4, 5]
+
+    def test_queue_coerces_ids_written_by_another_tool(self, tmp_path: Path):
+        """scriptor_prepare shares this file; its string ids must not break the sort."""
+        archilles_dir = tmp_path / ".archilles"
+        archilles_dir.mkdir()
+        (archilles_dir / "index_queue.json").write_text('["10593", "8081"]')
+
+        scanner = WatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=archilles_dir,
+        )
+        scanner._queue_new_books([10593, 7])
+        assert json.loads(scanner.queue_file.read_text()) == [7, 8081, 10593]
+
+    def test_queue_drops_entries_that_are_no_id_at_all(self, tmp_path: Path):
+        archilles_dir = tmp_path / ".archilles"
+        archilles_dir.mkdir()
+        (archilles_dir / "index_queue.json").write_text('[1, "zwei", null]')
+
+        scanner = WatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=archilles_dir,
+        )
+        scanner._queue_new_books([3])
+        assert json.loads(scanner.queue_file.read_text()) == [1, 3]
+
+    def test_zotero_queue_coerces_ids_to_keys(self, tmp_path: Path):
+        archilles_dir = tmp_path / ".archilles"
+        archilles_dir.mkdir()
+        (archilles_dir / "zotero_index_queue.json").write_text('[123]')
+
+        scanner = ZoteroWatchdogScanner(
+            library_path=tmp_path,
+            db_path=str(tmp_path / "rag_db"),
+            archilles_dir=archilles_dir,
+        )
+        scanner._queue_new_items(["ABCD1234"])
+        assert json.loads(scanner.queue_file.read_text()) == ["123", "ABCD1234"]
 
     def test_queue_handles_corrupt_file(self, tmp_path: Path):
         archilles_dir = tmp_path / ".archilles"

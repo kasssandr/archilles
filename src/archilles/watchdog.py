@@ -561,6 +561,36 @@ def _cleanup_orphaned_books(
         results['orphans_removed'] += 1
 
 
+def _merge_into_queue(queue_file: Path, ids, cast) -> None:
+    """Merge ``ids`` into the queue file, coercing every entry to one type.
+
+    The queue has more than one writer — ``scripts/scriptor_prepare.py`` also
+    appends to it — and the two used to disagree about the type of an id.  A
+    file holding both ints and strings makes ``sorted()`` raise and takes the
+    whole scan down with it, so whoever writes last settles the type here:
+    ints for Calibre ids, strings for Zotero keys.  Entries that survive
+    neither cast are dropped rather than carried along as a future crash.
+    """
+    existing: list = []
+    if queue_file.exists():
+        try:
+            existing = json.loads(queue_file.read_text(encoding='utf-8'))
+        except Exception:
+            pass
+    if not isinstance(existing, list):
+        existing = []
+    merged = set()
+    for raw in (*existing, *ids):
+        if not isinstance(raw, (str, int)) or isinstance(raw, bool):
+            continue
+        try:
+            merged.add(cast(raw))
+        except (TypeError, ValueError):
+            continue
+    queue_file.parent.mkdir(parents=True, exist_ok=True)
+    queue_file.write_text(json.dumps(sorted(merged), indent=2), encoding='utf-8')
+
+
 class WatchdogScanner:
     """
     Idempotent scanner: safe to run multiple times; hash comparison skips
@@ -1175,15 +1205,8 @@ class WatchdogScanner:
         return current_hash != stored_hash
 
     def _queue_new_books(self, calibre_ids: list[int]) -> None:
-        existing: list[int] = []
-        if self.queue_file.exists():
-            try:
-                existing = json.loads(self.queue_file.read_text(encoding='utf-8'))
-            except Exception:
-                pass
-        merged = sorted(set(existing) | set(calibre_ids))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+        _merge_into_queue(self.queue_file, calibre_ids, int)
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')
@@ -1774,15 +1797,8 @@ class ZoteroWatchdogScanner:
             logger.warning("Could not save Zotero annotation cache: %s", exc)
 
     def _queue_new_items(self, keys: list[str]) -> None:
-        existing: list[str] = []
-        if self.queue_file.exists():
-            try:
-                existing = json.loads(self.queue_file.read_text(encoding='utf-8'))
-            except Exception:
-                pass
-        merged = sorted(set(existing) | set(keys))
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
-        self.queue_file.write_text(json.dumps(merged, indent=2), encoding='utf-8')
+        _merge_into_queue(self.queue_file, keys, str)
 
     def _write_log(self, results: dict[str, Any]) -> None:
         ts = datetime.now().strftime('%Y-%m-%dT%H:%M:%S')

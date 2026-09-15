@@ -379,21 +379,42 @@ def write_report(scriptor_dir: Path, state: dict[str, dict], run: dict[str, Any]
 
 # ── the run ──────────────────────────────────────────────────────────────────
 
+def _is_zotero(adapter) -> bool:
+    return adapter is not None and getattr(adapter, "adapter_type", "") == "zotero"
+
+
 def _queue_file(archilles_dir: Path, adapter) -> Path:
-    zotero = adapter is not None and getattr(adapter, "adapter_type", "") == "zotero"
+    zotero = _is_zotero(adapter)
     return archilles_dir / ("zotero_index_queue.json" if zotero else "index_queue.json")
 
 
-def _queue(path: Path, book_ids: list[str]) -> None:
+def _queue(path: Path, book_ids: list[str], *, numeric: bool) -> None:
+    """Merge ids into the library's index queue.
+
+    The watchdog reads the same file and is the other writer: it expects
+    Calibre ids as ints and Zotero keys as strings.  Writing the wrong type
+    here mixes the file and makes the watchdog's ``sorted()`` raise, which
+    aborts its whole scan — so the ids are cast to what the reader expects.
+    """
+    cast = int if numeric else str
     existing: list = []
     if path.exists():
         try:
             existing = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
-    merged = sorted({str(b) for b in existing} | set(book_ids))
+    if not isinstance(existing, list):
+        existing = []
+    merged = set()
+    for raw in (*existing, *book_ids):
+        if not isinstance(raw, (str, int)) or isinstance(raw, bool):
+            continue
+        try:
+            merged.add(cast(raw))
+        except (TypeError, ValueError):
+            continue
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(sorted(merged), indent=2), encoding="utf-8")
 
 
 def run(args) -> int:
@@ -567,7 +588,7 @@ def run(args) -> int:
 
     if queued:
         path = _queue_file(archilles_dir, adapter)
-        _queue(path, queued)
+        _queue(path, queued, numeric=not _is_zotero(adapter))
         print(f"\n📋 {len(queued)} volumes written to {path.name} for later indexing")
 
     if checkpoint and not args.dry_run:
