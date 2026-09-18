@@ -4,7 +4,7 @@
 |---|---|
 | **Status Teil I (Watchdog)** | Dokumentation des Ist-Stands — produktiv seit April 2026; beschreibt den Code-Stand `e944349` (2026-07-08) |
 | **Status Teil II (Wiki-Generator)** | Ausgelagert (2026-07-11) → `archilles-scriptor/docs/internal/KONZEPT_wiki_zitatgraph_v1.md`; hier nur Kontrakt-Kurzfassung |
-| **Stand** | 2026-08-15 (§II.6 Herkunft eines Seitenlabels ergänzt; Teil II ausgelagert am 2026-07-11, inkl. §II.12 Hypertext-Ausbaustufe) |
+| **Stand** | 2026-09-18 (§II.5 nach dem Adresskontrakt neu gefasst, §II.6 um Überschriften und Kapitelebene ergänzt — beides Spec 0.4.0; §II.6 Herkunft eines Seitenlabels 2026-08-15; Teil II ausgelagert am 2026-07-11, inkl. §II.12 Hypertext-Ausbaustufe) |
 | **Bezüge** | ROADMAP.md (v1.0 Watchdog, v1.5 Wiki), ADR-011 (metadata_hash), ADR-025 (Scheduled Routines), ADR-028 (Hardware-Tiers / full-external) |
 
 ---
@@ -121,24 +121,44 @@ Teil den Ist-Stand nicht schöner beschreibt, als er ist:
 
 ## II.5 Zitier-Kontrakt (normative Kurzfassung)
 
-- Beleganker-Syntax: `[src: <chunk_id> · p. <seite>]`; mehrere Anker mit
-  `; ` in einer Klammer; greppbar über `\[src: `.
-- `<seite>` ist das `page_label` des Chunks — das **gedruckte** Seitenlabel,
-  zitierfähig, römisch erlaubt (`xiv`) —, Fallback `page_number` (physische
+*Neu gefasst am 2026-09-18 nach dem Adresskontrakt (Scriptor-Spec 0.4.0 §4.7;
+Befund `archilles-scriptor/docs/internal/PERSPEKTIVEN_2026-09.md` §1.3). Die
+Chunk-ID ist seitdem Cache, nicht mehr Anker.*
+
+- Eine Stelle hat die Adresse **(Band, Seite, Vorkommen, Wortlaut)**, eine
+  Note **(Band, Seite, gedruckte Nummer)**. Beleganker-Syntax:
+  `[src: <book_id> · p. <seite> · „<wortlaut>"]`, für eine Note
+  `[src: <book_id> · p. <seite> · n. <nummer>]`; wo der Band dasselbe Label
+  mehrfach druckt, zusätzlich `· occ. <n>` (das n-te `[p. <seite>]` des
+  Masters). Optional `· c: <chunk_id>` als Cache. Mehrere Anker mit `; ` in
+  einer Klammer; greppbar über `\[src: `.
+- `<seite>` ist das **gedruckte** Seitenlabel, zitierfähig, römisch erlaubt
+  (`xiv`) — bei Chunks das `page_label`, Fallback `page_number` (physische
   PDF-Seite); ohne Seitenbezug trägt der Anker die Sektion. Das ist exakt
   die `[p. NN]`-Semantik des Scriptor-Liefertexts: Scriptor und Wiki sind
   die beiden Enden derselben Zitierbarkeits-Pipeline und dürfen bei
   »was heißt Seite« nicht auseinanderdriften.
+- `<wortlaut>` ist ein Ausschnitt des Belegs (Startwert mindestens acht
+  Wörter; die Konstante legt die Messung P-M2 fest), normalisiert wie
+  Scriptors `find_snippet` und **nur innerhalb der Seite** gesucht. Er ist die
+  Prüfsumme, nicht der Zeiger: Fehlt er auf der Seite, ist der Anker *stale*
+  und wird gemeldet, nie durch Suche anderswo repariert; ein Vorschlag für die
+  nächste Seite, die ihn trägt, ist erlaubt, als Vorschlag gekennzeichnet.
+- Band, Seite, Vorkommen und Note überstehen eine Übersetzung, der Wortlaut
+  nicht: Er gehört zur Quelle.
+- Chunk-ID, `char_start`/`char_end` und die physische Seite sind Caches. Ihr
+  Verlust — ein Reindex, eine Neuerzeugung, ein anderes Chunking — macht keine
+  Adresse ungültig.
 - Bei Chunks aus einem Scriptor-Bündel reist die physische Seite nicht im
   Text, sondern über den Sidecar: `<master>.pagination.json` `pages[].pos`
   (keine eigene Markerform, Naht-Befund §3.2). Der `ScriptorExtractor` führt
   sie als `page_number`; ohne Sidecar ist sie 0.
-- Chunk-IDs (`{book_id}_chunk_{i}`) sind index-basiert und können bei
-  Reindex verschieben; Anker sind deshalb redundant angelegt (book_id +
-  Seite/Sektion bleiben menschlich und maschinell auflösbar, auch wenn der
-  `chunk_index` verschoben ist); ein Verifikationspass (`verify_citation`)
-  kann veraltete Anker über Buch + Seite + Textabgleich re-lokalisieren,
-  statt sie nur als tot zu melden.
+- Chunk-IDs (`{book_id}_chunk_{i}`) sind index-basiert und verschieben bei
+  jedem Reindex; deshalb trägt der Anker sie höchstens als Cache. Der
+  Verifikationspass (`verify_citation`, geplant als Perspektiven-Schritt P-B2)
+  prüft Band und Seite, dann den Wortlaut auf der Seite, und antwortet mit
+  *confirmed*, *relocated* (Vorschlag) oder *stale* — nie mit einer stillen
+  Reparatur.
 
 ## II.6 Herkunft eines Seitenlabels (Nachzug aus Scriptor, 2026-08-15)
 
@@ -195,3 +215,29 @@ Gemessen reicht die Zahl über neunzehn Bände von 0 % bis 100 %.
 
 **Quelle:** `archilles-scriptor/docs/internal/2026-08-13-quellen-verbund-design.md`
 (§6.1 `label_source`, §7.1 Ausgabe, §7.2 Konfidenz, §4.6 ToC-Link).
+
+### Überschriften und Kapitelebene (Nachzug Spec 0.4.0, 2026-09-18)
+
+Seit Spec 0.4.0 (§4.4, §6.5) gilt für die Überschriften eines Masters:
+
+- **Tiefe ist Verschachtelung, nicht Rang.** `#` ist die gröbste Ebene, auf der
+  der Band seinen Text teilt — Teile, wo er Teile hat, sonst Kapitel. `#` heißt
+  also nicht „Kapitel". Welche Tiefe die Kapitel trägt, deklariert der Band: in
+  der Blockzeile `structure:` und im Sidecar `<master>.structure.json`
+  (`chapter_level`, dazu jede Überschrift mit ihrer wahren Tiefe — auch unter
+  der sechsten, die im Master `######` heißt —, Bezeichner, Seite und Zeuge).
+- **Der gedruckte Bezeichner gehört zum Überschriftentext** (`A.`, `II.`,
+  `Erstes Kapitel:`), verbatim. Ein Produzent fügt keine Überschrift ein und
+  löscht keine.
+- **Für Archilles** heißt das: `chapter` ist der Vorfahr auf der Kapitelebene,
+  `section_title` der innerste tiefere Knoten — eine Ableitung für Bündel,
+  EPUB und PDF (`scriptor.structure`, Gliederungsschritte B6–B8). Bis B6
+  liest der `ScriptorExtractor` noch „`#` = chapter, tiefer = section".
+- **Stellenangabe ohne Seite** (EPUB ohne Page-List): der innerste
+  Gliederungsknoten mit Bezeichner plus ein wörtliches Zitat — für einen
+  Menschen über Verzeichnis und Suche nachschlagbar, stabil über Ausgaben
+  hinweg. Ob `section` dafür die Bezeichnerkette trägt („A.II.1"), entscheidet
+  der Nutzer vor B6.
+
+**Quelle:** `archilles-scriptor/docs/internal/GLIEDERUNGSMODELL_2026-09.md`
+(§3.2 Ableitung, §6.2 Stellenangabe, Anhang A Spec-Text).

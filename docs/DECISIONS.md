@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 11. September 2026 (ADR-032 Naht Scriptor → Archilles; Nachtrag zu ADR-004)
+**Letzte Überarbeitung:** 18. September 2026 (ADR-033 Gliederungsmodell, ADR-034 Adresse einer Stelle; zuvor 11. September: ADR-032 Naht Scriptor → Archilles, Nachtrag zu ADR-004)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -692,7 +692,48 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
 - **Die Gliederung.** Durch die Naht gehen nur zwei flache Felder (`chapter`, `section_title`), und der EPUB-Pfad füllt sie nicht besser als der PDF-Pfad. Das gemeinsame Regionsvokabular für den EPUB-Rückfall (S7) geht deshalb in einem Gliederungsmodell auf, das seit dem 11. September 2026 entworfen wird (Messung `docs/internal/naht-2026-09/G1_ERGEBNIS_2026-09-11.md`).
 - **OCR:** Das Tesseract-Backend auf Scriptors Seitenmodell (S8), danach Scans zu Scriptor (S9).
 - **Seitenbereich je Chunk:** Ein Chunk zitiert die Seite seines ersten Zeichens; ob der Ausgang einen Bereich zeigen soll, entscheidet der Nutzer.
-- **Spec-Sätze:** die Regel „Überschrift vor Marker" und `pages[].pos` als Kanal der physischen Seite gehen mit der nächsten Spec-Version.
+- ~~**Spec-Sätze:** die Regel „Überschrift vor Marker" und `pages[].pos` als Kanal der physischen Seite gehen mit der nächsten Spec-Version.~~ Erledigt in Spec 0.4.0 (§4.2, §6.3), 18. September 2026.
+
+---
+
+### ADR-033: Das Gliederungsmodell — Tiefe ist Verschachtelung, die Kapitelebene deklariert der Band (September 2026)
+
+**Kontext:** Durch die Naht (ADR-032) gehen nur zwei flache Felder, `chapter` und `section_title`. Die Messung G1 vom 11. September 2026 (`docs/internal/naht-2026-09/G1_ERGEBNIS_2026-09-11.md`) zeigte, dass keiner der drei Pfade die Gliederung eines Bandes kennt. Der EPUB-Pfad nahm `chapter` nur aus `<h1>`, obwohl 66 % des EPUB-Texts in Dateien liegt, deren Titel das Inhaltsverzeichnis nennt. Scriptor schrieb Überschriften nur aus Outline-Ebene 1, und am Kapitelanfang löschte der Kolumnentitel-Filter den Titel. Bauers Master platzierte 73 von 221 gedruckten Überschriften, 8 davon auf der richtigen Tiefe. Das Modell hat Fable 5.1 entworfen (`archilles-scriptor/docs/internal/GLIEDERUNGSMODELL_2026-09.md`, Umsetzung nach `BRIEFING_GLIEDERUNG_2026-09.md`).
+
+**Entscheidung:**
+- **Tiefe ist Verschachtelung, nicht Rang.** `#` ist die gröbste Ebene, auf der der Band teilt: Teile, wo er Teile hat, sonst Kapitel. Welche Tiefe die Kapitel trägt (`chapter_level`), ist eine Eigenschaft des Bandes. Sie steht im Struktur-Sidecar `<master>.structure.json` und in der Blockzeile `structure:`.
+- **Der gedruckte Bezeichner gehört zum Überschriftentext**, verbatim (`A.`, `II.`, `Erstes Kapitel:`). Die Schematabelle „Nummerierungsschema → Tiefe" wird je Band aus der Reihenfolge seines Verzeichnisses gelernt, nie fest vorgegeben.
+- **Löschverbot.** Ein Produzent fügt keine Überschrift ein, deren Wortlaut die Quelle an dieser Stelle nicht druckt, und löscht keine Zeile, die einen Überschriftentitel druckt. Der schlimmste stille Fehler ist der gelöschte Titel. Die Kolumnentitel-Filter heben eine titeltragende Kopfzeile deshalb heraus, statt sie zu löschen.
+- **Das Verzeichnis platziert die Überschriften**, zusammen mit der Outline als eigenem Zeugen: Es nennt die erwartete Seite, und dort ist das Vorkommen außerhalb des Kopfbereichs die Überschrift. Die Regel „erstes Vorkommen" ist widerlegt: Bei Bauer steht auf S. 23 der Kolumnentitel im Lesefluss vor der Überschrift.
+- **Eine Ableitung für alle drei Pfade.** `chapter` ist der Vorfahr auf der Kapitelebene, `section_title` der innerste tiefere Knoten. Die Funktion liegt in `scriptor.structure`, und Archilles importiert sie für Bündel, EPUB und PDF-Rückfall.
+- **Eine siebte Tiefe** heißt im Master `######`; ihre wahre Tiefe trägt der Sidecar (Entscheidung des Nutzers vom 12. September 2026).
+- Die Regionen bleiben eine zweite, unabhängige Achse.
+
+**Umsetzung (bis 18. September 2026):** B1 im EPUB-Pfad: `chapter` = `<h1>`, sonst der Verzeichnistitel (`5e1babf`). Dazu der Fix für leere Sprungmarken, durch den jeder Chunk einer Datei den letzten Unterabschnitt der Datei trug (`482470d`, 261 von 2.852 EPUBs betroffen); `PIPELINE_VERSION` 3. In Scriptor das Modul `structure.py` (B2), der Erste Schnitt (B3: Bauer 73 → 217 von 221 Überschriften bei byteidentischer Paginierung), der Struktur-Sidecar mit `scriptor headings` für bereits bearbeitete Master (B4) und Spec 0.4.0 (B5). Ein bearbeiteter Master wird nie neu erzeugt, nur über `scriptor headings` nachgezogen.
+
+**Offen:**
+- `section` als Bezeichnerkette („A.II.1"), Entscheidung des Nutzers vor B6. Bei seitenlosen Texten ist sie die Stellenangabe.
+- Die Chunk-Grenze (jede Überschrift oder nur die Kapitelebene) wird nach der Messung G5 entschieden, zusammen mit dem Kontextkopf „Kapitel › Abschnitt" im eingebetteten Text (Perspektiven-Messung P-M1), und zwar vor dem Massen-Embed.
+- B6: `ScriptorExtractor` liest den Baum. B7/B8: EPUB-Pfad und PDF-Rückfall auf dem Modell; darin geht Naht-Schritt S7 auf.
+
+**Verworfen:** Eine `structure`-Spalte im Index (`chapter`, `section_title` und `section` genügen). Pandoc-Attribute an Überschriften (`{#…}` bleibt reserviert). Verzeichnis-Links auf Überschriften statt auf Seitenanker. Eine feste Tabelle Schema → Tiefe.
+
+### ADR-034: Die Adresse einer Stelle — Seite und Wortlaut, die Chunk-ID ist Cache (September 2026)
+
+**Kontext:** Vier Abnehmer brauchen dieselbe stabile Adresse einer Stelle: der Index, die Beleganker des Wikis, die Hypertext-Sicht und der Archillator. Der Wiki-Kontrakt (`WATCHDOG_AND_WIKI.md` §II.5) hing an `{book_id}_chunk_{i}`, einer Nummer, die bei jedem Reindex verrutscht. Vor dem Massen-Embed, einem einmaligen Monatslauf, muss feststehen, was eine Adresse ist. Den Befund hat Fable 5.1 geschrieben (`archilles-scriptor/docs/internal/PERSPEKTIVEN_2026-09.md` §1, Umsetzung nach `BRIEFING_PERSPEKTIVEN_2026-09.md`).
+
+**Entscheidung (Nutzer, 18. September 2026):**
+- **Eine Stelle hat die Adresse (Band, gedruckte Seite, Vorkommen, Wortlaut), eine Note die Adresse (Band, Seite, gedruckte Nummer).** Das Vorkommen braucht es nur, wo der Band dasselbe Label mehrfach druckt: das n-te `[p. LABEL]` des Masters.
+- **Der Wortlaut ist die Prüfsumme, nicht der Zeiger.** Gesucht wird er nur innerhalb der Seite. Fehlt er dort, ist die Adresse *stale* und wird gemeldet, nie durch eine Suche anderswo repariert; ein Vorschlag ist erlaubt, als Vorschlag gekennzeichnet.
+- **Chunk-ID, Zeichen-Offsets und physische Seite sind Caches.** Ihr Verlust macht keine Adresse ungültig.
+- **Übersetzungsinvarianz:** Band, Seite, Vorkommen und Note überstehen eine Übersetzung, der Wortlaut gehört zur Quelle. In dieser Form kann der Satz „eine Zitatadresse übersteht die Übersetzung" wahr sein.
+- **Kein neues Master-Element.** Spec 0.4.0 §4.7 spricht die Schlüsselregel der Sidecars (§6, §9) als Konsumentengarantie aus; §6.6 reserviert einen Noten-Sidecar für die gedruckte Nummer hinter `[^N]`.
+- **Keine Absatznummer**, weder sichtbar noch als leerer Span. Diese Option ist geschlossen.
+- **Tor 5:** Die Bündel-Population muss vor dem Massen-Embed stehen. Ein Band, der ohne Bündel eingebettet wird, kostet mit seinem späteren Bündel einen zweiten Embed-Lauf (Embed ≈ 27 GPU-Tage auf der T1000).
+
+**Umsetzung:** Kontrakt und Beleganker-Syntax stehen in §II.5 der `WATCHDOG_AND_WIKI.md`, die Spec-Sätze in 0.4.0. Gebaut ist noch nichts. Die Reihenfolge laut Briefing: Messung P-M2 (Adress-Stabilität, legt die Mindestlänge des Wortlauts fest), dann `Bundle.locate` in Scriptor (P-B1; `find_snippet` zieht dafür nach `scriptor.document`), dann `verify_citation` in Archilles (P-B2).
+
+**Verworfen:** Die Chunk-ID als Anker. Zeichen-Offsets, weil sie niemand liest: `expand_chunk_context` nimmt `parent_id` oder `window_text`, `expansion_chars` ist unbenutzt. `text_match.py` für den Wortlautabgleich, weil es ein Schlüsselwortvergleich ist; der gemeinte Textabgleich ist Scriptors `find_snippet`.
 
 ---
 

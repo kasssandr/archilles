@@ -265,6 +265,32 @@ def test_every_chunk_names_the_format_and_the_spec_version(tmp_path):
             for c in result.chunks} == {("scriptor", "0.3.0")}
 
 
+def test_a_0_4_0_master_with_its_structure_reads_as_before(tmp_path):
+    """Spec 0.4.0 adds the ``structure`` field and the structure sidecar; a
+    reader that knows neither gets the same chunks (spec §11, Gliederung B5)."""
+    old_dir, new_dir = tmp_path / "old", tmp_path / "new"
+    old_dir.mkdir()
+    new_dir.mkdir()
+    old = _extract(_master(old_dir))
+    master = _master(new_dir, version="0.4.0")
+    text = master.read_text(encoding="utf-8")
+    master.write_text(text.replace("---\n\n", "structure: 2 levels, chapters on level 1, "
+                                             "3 headings (3 contents)\n---\n\n", 1),
+                      encoding="utf-8")
+    sidecar = {"version": 1, "chapter_level": 1, "schemes": [], "headings": [],
+               "unplaced": [], "rejected": []}
+    (new_dir / "book.md.structure.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    new = _extract(master)
+
+    def without_version(chunks):
+        return [(c["text"], {k: v for k, v in c["metadata"].items()
+                             if k not in ("producer_version", "source_file")})
+                for c in chunks]
+
+    assert without_version(new.chunks) == without_version(old.chunks)
+    assert {c["metadata"]["producer_version"] for c in new.chunks} == {"0.4.0"}
+
+
 def test_a_major_version_this_reader_does_not_know_is_refused(tmp_path):
     with pytest.raises(ExtractionError, match="1.0.0"):
         _extract(_master(tmp_path, version="1.0.0"))

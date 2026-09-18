@@ -35,6 +35,16 @@
 > Gliederungsmodell, in dem das gemeinsame Regionsvokabular für den EPUB-Pfad
 > (S7) aufgeht.
 
+> **Spiegel-Notiz (Familie), 2026-09-18:** Spec 0.4.0. Die Tiefe einer
+> Überschrift ist Verschachtelung, nicht Rang: `#` heißt nicht „Kapitel", die
+> Kapitelebene deklariert der Band im Struktur-Sidecar
+> `<master>.structure.json` ([ADR-033](DECISIONS.md)). Neu ist außerdem die
+> Adresse einer Stelle, bestehend aus Band, gedruckter Seite, Vorkommen und
+> Wortlaut; die Chunk-ID ist nur noch Cache ([ADR-034](DECISIONS.md),
+> [WATCHDOG_AND_WIKI.md §II.5](WATCHDOG_AND_WIKI.md)). Ein 0.4.0-Master läuft
+> unverändert durch den `ScriptorExtractor` (Major 0). Den Baum liest der
+> Extraktor erst mit Gliederungsschritt B6.
+
 ---
 
 ## Vision
