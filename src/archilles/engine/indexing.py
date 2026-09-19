@@ -16,6 +16,7 @@ from tqdm import tqdm
 from src.archilles.book_files import bundle_master, prepared_jsonl_name  # noqa: F401 -- re-exported
 from src.archilles.comment_chunks import build_comment_chunks
 from src.archilles.constants import ChunkType
+from src.archilles.context_head import embed_text_for
 from src.archilles.indexer import IndexingCheckpoint
 from src.calibre_db import CalibreDB
 from src.calibre_mcp.annotations import get_combined_annotations
@@ -145,6 +146,15 @@ class Indexer:
 
             if chunk.get('parent_id') is not None:
                 chunk_data['parent_id'] = chunk['parent_id']
+
+            # The context head travels with the chunk so that the two-phase
+            # path embeds what the live path embeds: prepare_book writes it
+            # into the JSONL, embed_prepared reads it. It is no column of the
+            # store -- add_chunks composes its records field by field -- so the
+            # row is the same either way.
+            embed_text = embed_text_for(chunk, self._rag.recipe.context_head)
+            if embed_text:
+                chunk_data['embed_text'] = embed_text
 
             self._apply_book_metadata_to_chunk(chunk_data, book_metadata)
 
@@ -1063,7 +1073,12 @@ class Indexer:
         # Step 2: Generate embeddings
         start_time = time.time()
 
-        texts = [chunk['text'] for chunk in extracted.chunks]
+        # What is embedded is the text, or -- where the recipe asks for it --
+        # the text with its context head in front (``context_head``). The head
+        # never reaches the stored row; see that module for why.
+        head_on = self._rag.recipe.context_head
+        texts = [embed_text_for(chunk, head_on) or chunk['text']
+                 for chunk in extracted.chunks]
         embedding_batches = []
 
         # Batch process for speed (batch_size determined by profile)
@@ -1454,7 +1469,10 @@ class Indexer:
             # Embed. Failures here (e.g. remote server down) abort the run —
             # deliberately BEFORE any delete, so the existing chunks stay
             # intact and the checkpoint resumes the run later (2.1).
-            texts = [c['text'] for c in chunks]
+            # prepare_book put the context head in the JSONL where the recipe
+            # asked for one; embedding the text alone here would produce a
+            # different vector than the live path for the same book.
+            texts = [c.get('embed_text') or c['text'] for c in chunks]
             start = time.time()
 
             if mode == 'remote':

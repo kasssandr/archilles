@@ -31,6 +31,7 @@ import numpy as np
 import pytest
 
 from src.archilles.constants import ChunkType
+from src.archilles.recipe import default_recipe
 
 
 class _RecordingStore:
@@ -91,6 +92,7 @@ def _indexer(store, extractor=None, metadata=None):
         device="cpu",
         _prepare_chunk_size=512,
         _prepare_overlap=64,
+        recipe=default_recipe(),
         embedding_model=SimpleNamespace(
             encode=lambda texts, **kw: np.zeros((len(texts), 8), dtype=np.float32)
         ),

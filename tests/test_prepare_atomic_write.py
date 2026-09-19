@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from src.archilles.recipe import default_recipe
+
 import pytest
 
 from scripts.batch_index import batch_prepare
@@ -112,6 +114,7 @@ def _prepare_rag():
         _prepare_overlap=64,
         _adapter=None,
         _CHUNK_META_KEYS=[],
+        recipe=default_recipe(),
     )
 
 
