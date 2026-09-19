@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+from src.archilles.recipe import default_recipe
+
 import numpy as np
 
 from src.archilles.engine.indexing import Indexer, prepared_jsonl_name
@@ -80,6 +82,7 @@ def _prepare_rag():
         _prepare_overlap=64,
         _adapter=None,
         _CHUNK_META_KEYS=[],
+        recipe=default_recipe(),
     )
 
 

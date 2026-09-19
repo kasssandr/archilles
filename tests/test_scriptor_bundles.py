@@ -140,6 +140,7 @@ class _Store:
 def _indexer(extracted_from, metadata_from):
     from src.archilles.engine.core import ArchillesRAG
     from src.archilles.engine.indexing import Indexer
+    from src.archilles.recipe import default_recipe
 
     def extract(path):
         extracted_from.append(Path(path))
@@ -149,7 +150,7 @@ def _indexer(extracted_from, metadata_from):
         _CHUNK_META_KEYS=ArchillesRAG._CHUNK_META_KEYS, store=_Store(), _adapter=None,
         extractor=SimpleNamespace(extract=extract), use_modular_pipeline=False,
         hierarchical=False, batch_size=8, device="cpu", _prepare_chunk_size=512,
-        _prepare_overlap=64, languages=None,
+        _prepare_overlap=64, languages=None, recipe=default_recipe(),
         embedding_model=SimpleNamespace(
             encode=lambda texts, **kw: np.zeros((len(texts), 8), dtype=np.float32)),
     )

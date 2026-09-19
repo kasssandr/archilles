@@ -33,6 +33,11 @@ class IndexRecipe:
         child_chunk_size: Child chunk size in tokens.
         child_overlap: Child chunk overlap in tokens.
         parent_size: Parent budget in tokens (children grouped up to this size).
+        context_head: Whether a chunk is embedded with ``Chapter › Section`` in
+            front of it (``src.archilles.context_head``). Part of the identity
+            layer, not of throughput: it changes the vector, so an index built
+            with it cannot be compared to one built without. Off until P-M1 has
+            measured whether the head helps.
     """
 
     embedding_model: str = "BAAI/bge-m3"
@@ -41,6 +46,7 @@ class IndexRecipe:
     child_chunk_size: int = 512
     child_overlap: int = 64
     parent_size: int = 2048
+    context_head: bool = False
 
 
 def default_recipe() -> IndexRecipe:

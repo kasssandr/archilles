@@ -92,7 +92,9 @@ def test_the_indexer_carries_them_from_the_extractor_to_the_row(tmp_path):
         encoding="utf-8")
     extracted = ScriptorExtractor().extract(master)
 
-    indexer = Indexer(SimpleNamespace(_CHUNK_META_KEYS=ArchillesRAG._CHUNK_META_KEYS))
+    from src.archilles.recipe import default_recipe
+    indexer = Indexer(SimpleNamespace(_CHUNK_META_KEYS=ArchillesRAG._CHUNK_META_KEYS,
+                                      recipe=default_recipe()))
     chunks = indexer._build_chunk_dicts(extracted, "b1", {}, "2026-09-11T00:00:00", "")
     store = _store(tmp_path)
     store.add_chunks(chunks, _vectors(len(chunks)))
