@@ -807,6 +807,37 @@ class CalibreMCPServer:
                 'query': query
             }
 
+    def verify_citation_tool(
+        self,
+        book_id: str,
+        page: str,
+        quote: str,
+        occurrence: int = 1,
+        note: Optional[int] = None,
+        chunk_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """MCP Tool: check a citation against the volume it names.
+
+        Answers ``confirmed``, ``relocated`` (the passage stands near by --
+        offered, never applied), ``stale`` (it is gone from that page) or
+        ``unknown_volume``. The bundle answers where the volume has one, the
+        index otherwise, and the answer says which.
+        """
+        if not self._ensure_rag_initialized():
+            return {
+                'error': 'RAG system not available',
+                'help': 'verify_citation reads the chunk store to know the volume',
+            }
+        try:
+            return self.service.verify_citation(
+                book_id=str(book_id), page=str(page), quote=quote,
+                occurrence=occurrence, note=note, chunk_id=chunk_id,
+            )
+        except Exception as e:
+            logger.error(f"verify_citation failed: {e}", exc_info=True)
+            return {'error': f'verify_citation failed: {str(e)}',
+                    'address': {'book_id': str(book_id), 'page': str(page),
+                                'occurrence': occurrence, 'quote': quote}}
 
     def watchdog_scan_tool(
         self,
@@ -1206,6 +1237,55 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     }
                 },
                 'required': ['query']
+            }
+        },
+        {
+            'name': 'verify_citation',
+            'description': (
+                'Check a citation against the volume it names: does that page still '
+                'carry that wording? Answers confirmed, relocated (the passage stands '
+                'on a nearby page — offered as a proposal, never applied), stale (it is '
+                'gone from that page) or unknown_volume. Use before quoting a passage '
+                'you did not just retrieve, and whenever a citation comes from an '
+                'earlier session: page numbers and wording survive a re-indexing, chunk '
+                'ids do not.'
+            ),
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'book_id': {
+                        'type': 'string',
+                        'description': 'The volume, as the index knows it (the book_id of a search result)'
+                    },
+                    'page': {
+                        'type': 'string',
+                        'description': 'The printed page label the citation names, as printed ("88", "xiv")'
+                    },
+                    'quote': {
+                        'type': 'string',
+                        'description': ('At least eight words of the passage, copied from it. '
+                                        'The wording is the check, not the pointer: keep it inside '
+                                        'one paragraph and one page.')
+                    },
+                    'occurrence': {
+                        'type': 'integer',
+                        'description': ('Which page with that label is meant, counted from the start '
+                                        'of the volume. Only a volume in parts repeats a label; '
+                                        'default 1.'),
+                        'default': 1
+                    },
+                    'note': {
+                        'type': 'integer',
+                        'description': 'The printed number of the footnote, where the citation is to one. Accepted, not yet checked.'
+                    },
+                    'chunk_id': {
+                        'type': 'string',
+                        'description': ('The chunk a search result came from, if you still have it. '
+                                        'A cache: it is reported as stale when it no longer holds the '
+                                        'quotation, and the address is checked regardless.')
+                    }
+                },
+                'required': ['book_id', 'page', 'quote']
             }
         },
         {

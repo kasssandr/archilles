@@ -410,6 +410,36 @@ class ArchillesService:
             return None
         return self._rag.store.get_by_id(chunk_id)
 
+    # ── Citations ───────────────────────────────────────────────
+
+    def verify_citation(
+        self,
+        book_id: str,
+        page: str,
+        quote: str,
+        occurrence: int = 1,
+        note: int | None = None,
+        chunk_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Does the quotation still stand where the citation says it does?
+
+        The address is the one the prepared-format spec states in §4.7: volume,
+        printed page, occurrence where a label repeats, and a run of the
+        passage's own wording. Answered against the volume's Scriptor bundle
+        where it has one and against the index otherwise; never repaired
+        silently. See :mod:`src.archilles.citation_check`.
+        """
+        from src.archilles.citation_check import verify_citation as check
+
+        if not self._ensure_initialized():
+            return {
+                "error": "RAG system not available",
+                "help": "verify_citation reads the chunk store to know the volume",
+            }
+        return check(self._rag.store, self._archilles_dir, book_id=book_id,
+                     page=page, quote=quote, occurrence=occurrence, note=note,
+                     chunk_id=chunk_id)
+
     # ── Internal helpers ────────────────────────────────────────
 
     @staticmethod
