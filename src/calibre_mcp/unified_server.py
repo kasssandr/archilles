@@ -115,7 +115,8 @@ _AGGREGATION_TOOLS = {
     "export_bibliography",
 }
 # Tools that take an optional `source` parameter (default = master default_source).
-_SOURCE_OPTIONAL = _AGGREGATION_TOOLS | {"get_book_details", "set_research_interests"}
+_SOURCE_OPTIONAL = _AGGREGATION_TOOLS | {"get_book_details", "set_research_interests",
+                                         "verify_citation"}
 
 
 class UnifiedMCPServer:
@@ -712,6 +713,51 @@ class UnifiedMCPServer:
             res["source"] = source if source is not None else self.default_source
         return res
 
+    def verify_citation_tool(
+        self,
+        book_id: str,
+        page: str,
+        quote: str,
+        occurrence: int = 1,
+        note: Optional[int] = None,
+        chunk_id: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Check a citation, in one source or in whichever source has the volume.
+
+        A ``book_id`` names a volume in one library; a client that read it off
+        a merged search result cannot be expected to know which. Without
+        ``source`` every source is asked in turn, the default one first, and
+        the first answer that is not ``unknown_volume`` is the answer. Where no
+        source knows the volume, the last ``unknown_volume`` stands.
+        """
+        if source is not None:
+            try:
+                srv = self.resolve_source(source)
+            except KeyError as e:
+                return {"error": str(e), "available_sources": self.source_names}
+            res = srv.verify_citation_tool(
+                book_id=book_id, page=page, quote=quote, occurrence=occurrence,
+                note=note, chunk_id=chunk_id)
+            if isinstance(res, dict):
+                res["source"] = source
+            return res
+
+        order = sorted(self.servers, key=lambda n: n != self.default_source)
+        answer: dict[str, Any] = {"error": "no source could be asked",
+                                  "available_sources": self.source_names}
+        for name in order:
+            res = self.servers[name].verify_citation_tool(
+                book_id=book_id, page=page, quote=quote, occurrence=occurrence,
+                note=note, chunk_id=chunk_id)
+            if not isinstance(res, dict):
+                continue
+            res["source"] = name
+            answer = res
+            if res.get("status") not in (None, "unknown_volume"):
+                return res
+        return answer
+
     # ── Global state ─────────────────────────────────────────────────────
 
     def set_research_interests_tool(
@@ -934,6 +980,14 @@ def create_unified_tools(server: UnifiedMCPServer) -> list[dict]:
                     "at <master_dir>/research_interests.json, which applies as "
                     "a baseline to every source's searches via the effective "
                     "merge layer."
+                )
+            elif name == "verify_citation":
+                # A book_id belongs to one library, and a client that got it
+                # from a merged search result has no reason to know which.
+                description = (
+                    f"Optional: the library the volume lies in. Available: "
+                    f"{source_names}. Omit to ask each source in turn, the "
+                    f"default one first."
                 )
             else:
                 default = server.default_source

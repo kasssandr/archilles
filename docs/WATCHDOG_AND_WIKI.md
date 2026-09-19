@@ -155,10 +155,21 @@ Chunk-ID ist seitdem Cache, nicht mehr Anker.*
   sie als `page_number`; ohne Sidecar ist sie 0.
 - Chunk-IDs (`{book_id}_chunk_{i}`) sind index-basiert und verschieben bei
   jedem Reindex; deshalb trägt der Anker sie höchstens als Cache. Der
-  Verifikationspass (`verify_citation`, geplant als Perspektiven-Schritt P-B2)
-  prüft Band und Seite, dann den Wortlaut auf der Seite, und antwortet mit
-  *confirmed*, *relocated* (Vorschlag) oder *stale* — nie mit einer stillen
-  Reparatur.
+  Verifikationspass prüft Band und Seite, dann den Wortlaut auf der Seite, und
+  antwortet mit *confirmed*, *relocated* (Vorschlag) oder *stale* — nie mit
+  einer stillen Reparatur.
+
+**Gebaut am 2026-09-19** (Perspektiven-Schritt P-B2): Das MCP-Werkzeug
+`verify_citation` beantwortet genau diese Frage — `src/archilles/citation_check.py`,
+`ArchillesService.verify_citation`, Schema in `create_mcp_tools`, quellenoptional
+im Unified-Server. Die Auflösung ist Scriptors `Bundle.locate` (P-B1), nicht
+eine zweite Fassung der Grammatik: ein Band mit Bündel wird gegen den Master
+geprüft (`checked_against: bundle`, mit `label_source` aus dem Sidecar), ein
+Band ohne gegen die Chunks seiner Seite (`index`, der schwächere Zeuge — eine
+Chunkgrenze kann einen Wortlaut zerschneiden). `ambiguous` meldet eine Seite,
+die den Wortlaut zweimal druckt; `chunk_stale` meldet den verschobenen Cache,
+ohne die Adresse anzutasten. Der Notenzweig (`note`) wartet auf den
+Noten-Sidecar (P-B6) und antwortet solange `note_checked: false`.
 
 ## II.6 Herkunft eines Seitenlabels (Nachzug aus Scriptor, 2026-08-15)
 

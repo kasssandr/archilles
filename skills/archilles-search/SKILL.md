@@ -23,6 +23,7 @@ they are for.
 | Which tags exist, before filtering | `list_tags` |
 | A bibliography file (BibTeX, RIS, …) | `export_bibliography` |
 | Annotations from one specific file | `get_book_annotations` |
+| To check a citation they already have | `verify_citation` |
 | The index brought up to date | `watchdog_scan` |
 
 The common mistake is reaching for `search_books_with_citations` to answer
@@ -61,6 +62,28 @@ numerals as roman (`p. xiv`). Where the excerpt carries a chapter or section
 title, name it; in a work without stable pagination it is the only locator
 there is. An answer whose citations cannot be followed has failed at the one
 job this library exists for.
+
+## A citation you did not just retrieve is unchecked
+
+`verify_citation` asks the volume whether a page still carries a wording. It is
+for the citations that did not come out of the search you just ran: one the
+user brings along, one from an earlier session, one you carried through a long
+conversation. Give it `book_id`, the printed `page`, and at least eight words
+of the passage, copied from it and kept inside one paragraph.
+
+- `confirmed` — quote it.
+- `relocated` — the passage sits on a nearby page, named in `proposal`. Say
+  that the citation is wrong and what the page appears to be. Do not print the
+  new number as though it had always been there.
+- `stale` — that page does not carry those words any more. Do not hunt for
+  them elsewhere in the volume: the same sentence in another chapter is
+  another passage, and a citation you cannot stand behind is worth less than
+  none.
+- `unknown_volume` — the library does not have it indexed.
+
+A `chunk_id` from an old result is worth passing and worth nothing as an
+anchor: `chunk_stale: true` says the chunk moved, not that the citation is
+wrong. Page and wording survive a re-indexing; chunk ids do not.
 
 ## Search modes
 

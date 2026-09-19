@@ -52,7 +52,7 @@ Parameters:
 
 This tool searches only main text by default (`section_filter: main`), excluding bibliographies, indexes, and front matter. This is intentional.
 
-**Important limitation:** `search_books_with_citations` is a *full-text and semantic search*, not a metadata query. An author is only found if their name appears in an indexed text chunk. For short texts (articles, book chapters in anthologies), the author name often appears only on the title page — which may not be a separate chunk in the index. For metadata queries (all books by an author, all titles with a tag), use the tools in section 3.3.
+**Important limitation:** `search_books_with_citations` is a *full-text and semantic search*, not a metadata query. An author is only found if their name appears in an indexed text chunk. For short texts (articles, book chapters in anthologies), the author name often appears only on the title page — which may not be a separate chunk in the index. For metadata queries (all books by an author, all titles with a tag), use the tools in section 3.4.
 
 ### 3.2 Searching annotations
 
@@ -65,7 +65,29 @@ Parameters:
 
 Annotations are often the most revealing entry point: they show what the user has found relevant, and can inform the direction of a full-text search — without predetermining it.
 
-### 3.3 Library navigation and metadata
+### 3.3 Checking a citation
+
+**`verify_citation`**
+
+Asks one volume whether a passage still stands where a citation says it does. Use it before quoting a passage you did not just retrieve — a citation from an earlier session, one the user brings along, one you carried across a long conversation.
+
+Parameters:
+- `book_id` (required): The volume, as a search result names it.
+- `page` (required): The printed page label, as printed (`"88"`, `"xiv"`).
+- `quote` (required): At least eight words of the passage, copied from it. Keep them inside one paragraph and one page — a quotation that runs over either boundary cannot be found again.
+- `occurrence`: Which page with that label is meant, counted from the start of the volume. Only a volume in parts repeats a label; default 1.
+- `note`: The printed footnote number, where the citation is to a note. Accepted, not yet checked.
+- `chunk_id`: The chunk a search result came from, if you still have it.
+
+Answers:
+- `confirmed` — that page carries that wording. `label_source` says who placed the label: `printed` (read off the page), `computed` (counted to), and so on.
+- `relocated` — the wording stands on a nearby page, named in `proposal`. This is an offer, not a correction: the citation is still wrong as it stands, and you say so rather than quietly printing the new number.
+- `stale` — that page no longer carries the wording. Do not go looking for it elsewhere in the volume; the same words in another chapter are another passage.
+- `unknown_volume` — the index does not have that volume.
+
+`ambiguous: true` means the page prints the wording more than once (common in legal and scholarly citation), so the position within the page is not decided. `checked_against` says which witness answered: `bundle` (the volume's prepared text, with its page markers — the strong answer) or `index` (the chunks, where a chunk boundary can cut a passage in half). `chunk_stale: true` means the chunk id you passed no longer holds the quotation, which says nothing about the citation itself — page and wording survive a re-indexing, chunk ids do not.
+
+### 3.4 Library navigation and metadata
 
 These tools work directly against Calibre metadata, not the vector index. For questions like "all books by author X" or "all titles with tag Y" they are the right approach — not `search_books_with_citations`.
 
@@ -87,7 +109,7 @@ Parameters:
 
 **`get_book_details`** — Complete Calibre metadata for a title given its Calibre ID. Useful when a Calibre ID is known from another search result.
 
-### 3.4 System utilities
+### 3.5 System utilities
 
 **`detect_duplicates`** — Finds duplicate titles in the library.
 
