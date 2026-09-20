@@ -252,3 +252,37 @@ Seit Spec 0.4.0 (§4.4, §6.5) gilt für die Überschriften eines Masters:
 
 **Quelle:** `archilles-scriptor/docs/internal/GLIEDERUNGSMODELL_2026-09.md`
 (§3.2 Ableitung, §6.2 Stellenangabe, Anhang A Spec-Text).
+
+## II.7 Welcher Zweifel überquert die Naht (normative Kurzfassung, 2026-09-20)
+
+§II.5 sagt, was eine Adresse ist, §II.6, woher ein Seitenlabel stammt. Dieser
+Abschnitt sagt, **welche Unsicherheit überhaupt in den Index gehört** — und
+welche nicht. Ausführlich: [ADR-035](DECISIONS.md); Befund:
+`archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md` §3.
+
+- **Die Regel: Ein Konfidenzfeld entsteht nur dort, wo eine Adresse unmöglich
+  ist. Wo eine Adresse existiert, wird geprüft statt geschätzt.** Nie eine
+  Abstimmung, wo ein Zeuge existiert. `verify_citation` ist die gebaute Form
+  dieser Regel; ein Vertrauenswert wäre ihr Gegenteil, weil ein Leser ihn nicht
+  nachprüfen kann.
+- **Der Zweifel bleibt aus dem Liefertext heraus und reist im Sidecar.** Der
+  Master ist die saubere Datei (Scriptor-Spec §4.6) — das ist die Bedingung
+  dafür, dass er Pandoc-gültig und übersetzbar bleibt, und sie wird nicht
+  aufgeweicht. Was der Konsument wissen muss, steht im Sidecar und kommt von
+  dort ins Chunk-Schema, so wie `label_source` aus §6.3 der Spec.
+- **Zwei Unsicherheiten, ein Muster.** Die Paginierung hat den Kanal seit
+  August 2026 (§II.6). Die **Ankerkonfidenz einer Fußnote** bekommt ihn:
+  Chunk-Feld `anchor_confidence` (Arbeitstitel), Vokabular aus Spec §5
+  (`certain`, `suggested`, `guessed`, `orphan`); ein Chunk trägt die schwächste
+  Klasse unter den Ankern, die in ihm stehen; ein unbekannter Wert lässt den
+  Importer nicht scheitern, sondern gilt als „nicht bezeugt". Der
+  maschinenlesbare Kanal auf Scriptor-Seite ist der Noten-Sidecar (Spec §6.6),
+  auf den ohnehin schon der Notenzweig von `verify_citation` wartet
+  (`note_checked: false`).
+- **Wirkung an genau einer Stelle:** Zitiert eine Antwort eine Fußnote, deren
+  Anker geraten war, muss sie das sagen können — so wie sie heute bei einem
+  erschlossenen Seitenlabel „(inferred)" sagt. Ein Wort, kein Score.
+- **Umsetzungsstand:** `anchor_confidence` ist entschieden, nicht gebaut. Vor
+  dem Bau wird gezählt, wie viele Bände des Bestands `suggested`/`guessed`
+  tragen (Audit-Sidecars, Spec §6.1); die Zahl entscheidet die Reihenfolge, nicht
+  das Ob.
