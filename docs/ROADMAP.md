@@ -45,6 +45,31 @@
 > unverändert durch den `ScriptorExtractor` (Major 0). Den Baum liest der
 > Extraktor erst mit Gliederungsschritt B6.
 
+> **Evidenzkette, 2026-09-20.** Aus einem Industrie-Befund zur Belegkette
+> (`archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md`)
+> stehen fünf Arbeitspakete an, keines davon begonnen. Die Leitplanke, die
+> sie zusammenhält: **nie eine Abstimmung einführen, wo ein Zeuge existiert**
+> ([ADR-035](DECISIONS.md)).
+> **A — `weak-evidence` und Abstinenzrate** ([ADR-036](DECISIONS.md)): klein,
+> aber terminiert — muss vor Schritt 1 des Benchmark-Harness entschieden sein,
+> sonst kostet die Kategorie eine Schemaversion. Steht in v1.0.
+> **B — Regel 2 des System-Prompts schärfen**: sehr klein, hängt an A, weil A
+> die Metrik liefert, an der die Schärfung sich zeigen muss. Ebenfalls v1.0.
+> **C — Welcher Zweifel überquert die Naht**: entschieden als
+> [ADR-035](DECISIONS.md); daraus folgt `anchor_confidence` als Chunk-Feld
+> analog zu `label_source`, gebaut wird es, sobald gezählt ist, wie viele
+> Bände geratene Anker tragen. Der Kanal ist Scriptors Noten-Sidecar (Spec
+> §6.6), auf den auch `verify_citation` schon wartet.
+> **D — `[region: table]` ins gemeinsame Vokabular**: mittel, zwei Repos,
+> rückwärtskompatibel, Tor ist C. Heute deklariert `PyMuPDFParser` kein
+> `extracts_tables`, und `region_to_section_type` kennt keine Tabelle — eine
+> von Scriptor gefaltete Tabelle kommt als mehrzeiliger Block an und wird wie
+> Prosa behandelt: Zahlen ohne Spalten im Embedding, Chunkgrenzen quer durch
+> die Tabelle. Das erzeugt Rauschen mit Belegcharakter.
+> **E — Konfliktflag ohne Auflösung**: nur als Anforderung notiert, gekoppelt
+> an v1.5/v2.0 (siehe [DECISIONS.md](DECISIONS.md), Abschnitt IV,
+> „Uncertainty Quantification").
+
 ---
 
 ## Vision
@@ -123,6 +148,8 @@ Scheduled Routines (Mai 2026): Eine Orchestrierungsschicht über die bestehenden
 Die verbleibende Arbeit für v1.0 betrifft weniger neue Features als Konsolidierung — mit einer Ausnahme, die an die erste Stelle rückt:
 
 **Benchmark-Harness für Bibliotheks-Retrieval (erste Priorität):** ARCHILLES braucht quantitative Belege für seine Retrieval-Qualität. Nicht LongMemEval (misst Konversations-Memory), sondern ein eigenes, reproduzierbares Benchmark auf dem eigenen Problemraum: Precision/Recall über heterogene Bibliotheksbestände, Annotation-Retrieval, Mehrsprachigkeit, Citation-Accuracy. Das Harness ist bewusst minimal gehalten (versioniertes Goldset im JSONL-Format, Metrik-Modul, A/B-Runner — siehe ADR-030) und erfüllt eine Doppelrolle: Es ist die externe Kommunikation des Differenzierers *und* das interne Messinstrument, das die Parent-Child-Entscheidung (v1.1) empirisch statt spekulativ macht. Das Goldset ist Kurationsarbeit des Nutzers und wächst inkrementell; das Harness läuft ab dem ersten Dutzend Fälle. Veröffentlichung vor dem Community-Release.
+
+**Abstinenz messen — `weak-evidence` und die Abstinenzrate (Arbeitspaket A, vor Schritt 1 des Harness):** Das Goldset bekommt eine dritte Kategorie, bevor sein Schema eingefroren wird. `negative` misst heute das Retrieval — liefert der Index nichts, wenn nichts da ist. `weak-evidence` misst die Antwort: Treffer über der Schwelle, thematisch benachbart, und die Frage trotzdem nicht beantwortbar. Das ist der reale Halluzinationsfall in einer geisteswissenschaftlichen Bibliothek, denn dieser Bestand gibt zu jedem Thema irgendetwas Angrenzendes her; die leere Trefferliste ist harmlos, die plausible ist gefährlich. Metrik: Abstinenzrate. Nachträglich kostet die Kategorie eine Schemaversion und macht alle bis dahin gelaufenen Messungen unvergleichbar — deshalb steht sie vor Schritt 1 (ADR-036). Dazu gehört die Schärfung von Regel 2 des System-Prompts (**Arbeitspaket B**): von der Erlaubnis „If the answer is not in the documents, say so clearly" (`prompting.py`, Regel 2) zu einer positiven Handlungsanweisung mit fester Ausgabeform, nach dem Muster von Regel 5, plus goldenem Regressionstest. Die feste Form ist zugleich der Grund, warum die Abstinenzrate ohne LLM-Judge messbar bleibt. Kommunikativ ist das die schärfste Zahl, die das Benchmark tragen kann: nicht „wir finden mehr", sondern „wir schweigen zuverlässiger".
 
 **Annotation-Import: Verankerung und Kontextanreicherung (Phase 5):** Annotations sind derzeit kontextlose Inseln — ein Kindle-Highlight enthält den markierten Text, aber nicht das Kapitel, den Argumentationsgang oder den umgebenden Absatz. Phase 5 verknüpft Annotations mit den Content-Chunks des annotierten Buchs: `anchor_chunk_id` verweist auf den Chunk mit dem größten Textüberlapp, das Embedding wird mit Kapitel/Seite/Kontext aus dem Anchor-Chunk angereichert, und bei der Suche wird der Anchor-Chunk automatisch mitgeliefert. Kobo-Provider als weitere Quelle. Die Annotation-Engine ist der Teil des Stacks, den sonst niemand baut (ADR-022) — sie bleibt auf dem kritischen Pfad. Detailplan: [docs/plans/2026-04-06-annotation-import.md](plans/2026-04-06-annotation-import.md).
 
@@ -278,6 +305,8 @@ Detaillierte Pläne: siehe [EDITIONS.md](EDITIONS.md).
 **Modulare Erweiterbarkeit vor Featurefülle.** Registry-Pattern, Plugin-fähige Schnittstellen und definierte Erweiterungszonen sind wichtiger als jedes einzelne Feature. Die Adapter-Architektur ist das Produkt.
 
 **Akademischer Anspruch als Differenzierung.** Exakte Zitationen mit Seitenangaben, transparentes Retrieval, disziplinspezifische Optimierungen — das unterscheidet ARCHILLES von generischen RAG-Lösungen und von Konversations-Memory-Systemen.
+
+**Ehrliches Scheitern gehört zum Produkt.** Alles, was Halluzination unterdrückt und Ehrlichkeit fördert — auch ehrliches Scheitern —, gehört zum Markenkern. Ein System, das schweigt, wenn es keinen Beleg hat, ist einem überlegen, das zu jeder Frage etwas Plausibles sagt; und eine Adresse, die ein Leser nachschlagen kann, ist jedem Vertrauenswert überlegen, den er nicht nachprüfen kann. Das ist messbar gemeint, nicht rhetorisch: Die Abstinenzrate steht neben der Citation-Accuracy im veröffentlichten Benchmark (ADR-036), und wo eine Adresse existiert, wird geprüft statt geschätzt (ADR-034, ADR-035).
 
 **Aufschub als bewusste Strategie.** Graph RAG, OCR, institutionelle Features und Lab-Schreib-Tools werden zum richtigen Zeitpunkt implementiert. Ein funktionierendes Produkt hat Vorrang vor einer vorzeitig aufgeblähten Architektur.
 

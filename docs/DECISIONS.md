@@ -625,6 +625,8 @@ Der stdio-Pfad benutzt — anders als SSE und Streamable HTTP (ADR-024) — kein
 
 **Umsetzungsstand (August 2026): nicht begonnen.** Es existiert weder `benchmarks/` noch ein Runner. Nicht zu verwechseln mit dem Evaluations-Harness in `archilles-scriptor` (`eval/`, `src/scriptor/eval/`): Der misst die *Aufbereitung* (Seitenlabels, Anker, Regionen, Zitate gegen handausgezeichnete Ground Truth je Band), dieser hier misst die *Abfrage*. Berührungspunkt ist allein die Citation Integrity aus Komponente 2 — dort ist Scriptor der Eigentümer der Wahrheit (siehe `WATCHDOG_AND_WIKI.md` §II.5/§II.6), und Archilles sollte sie konsumieren statt herleiten.
 
+**Nachtrag (20. September 2026): Das Goldset-Schema hat eine dritte Kategorie, bevor es eingefroren wird.** Neben `negative` (misst das Retrieval) tritt `weak-evidence` (misst die Antwort: Treffer über der Schwelle, erwartete Antwort trotzdem „nicht belegt") mit der Metrik `abstention_rate`. Begründung, Abgrenzung und die zugehörige Schärfung von Regel 2 des System-Prompts stehen in **ADR-036**; die Ausführungsnotizen zu Schritt 1 und 2 sind entsprechend nachgezogen (`docs/internal/BRIEFING_BENCHMARK_HARNESS_2026-07-05.md`). Der Satz „das Goldset-Schema ist die eine teure Entscheidung" gilt unverändert — er ist der Grund, warum diese Kategorie jetzt entschieden wurde und nicht, wenn der Antwortpfad steht.
+
 ---
 
 ### ADR-032: Die Naht Scriptor → Archilles — Zulieferer mit reichem Kontrakt, Abhängigkeit in einer Richtung (September 2026)
@@ -737,6 +739,50 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
 
 ---
 
+### ADR-035: Welcher Zweifel überquert die Naht — wo eine Adresse existiert, wird geprüft statt geschätzt (September 2026)
+
+**Kontext:** Ein Befund vom 20. September 2026 (`archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md` §3; Anlass war ein GraphRAG-Artikel aus der Industrie, siehe Abschnitt „Nicht übernommen") hat eine Asymmetrie sichtbar gemacht, die bisher nirgends als Entscheidung stand, sondern sich so ergeben hatte:
+
+- Die **Paginierungs-Unsicherheit überquert die Naht vollständig.** `<master>.pagination.json` trägt je Seite Label, Herkunft und Konfidenz; der `ScriptorExtractor` schreibt `label_source` in jeden Chunk; `lancedb_store.py` führt die Spalte; `engine/core.py` liest sie aus; und Regel 5 des System-Prompts zwingt das Modell, „(inferred)" im selben Atemzug mitzusagen. Das ist Unsicherheitsfortpflanzung von der gescannten Seite bis in die Antwort.
+- Die **Fußnoten-Unsicherheit überquert sie gar nicht.** Aus der Naht kommen `region`, `label_source` und `producer_version` — kein Feld für die Ankerkonfidenz. Ein Chunk, dessen Absatz einen `suggested`- oder `guessed`-Anker trägt (Scriptor-Spec §5), ist im Index von einem sicheren nicht zu unterscheiden. Wer über diese Stelle recherchiert, bekommt eine Fußnote zitiert, deren Zuordnung geraten war, ohne dass es irgendwo steht.
+
+Dass der Zweifel nicht im Liefertext steht, ist richtig und bleibt: Spec §4.6 verlangt einen Master ohne Flags, damit er Pandoc-gültig und übersetzbar bleibt. Die Frage ist nicht, ob der Master Flags trägt, sondern ob es einen zweiten Kanal gibt — und für die Paginierung gibt es ihn seit August 2026, für die Anker nicht.
+
+**Entscheidung (Nutzer, 20. September 2026):**
+
+- **Die Regel: Ein Konfidenzfeld entsteht nur dort, wo eine Adresse unmöglich ist. Wo eine Adresse existiert, wird geprüft statt geschätzt.** Oder kürzer: nie eine Abstimmung einführen, wo ein Zeuge existiert. Eine Adresse (ADR-034) ist kategorial stärker als jeder Vertrauenswert — eine Schwelle von 0,69 kann ein Leser nicht nachprüfen, „S. 88, `label_source = printed`" schon. `verify_citation` (ADR-034, `src/archilles/citation_check.py`) ist die gebaute Form dieser Regel.
+- **Der Zweifel bleibt aus dem Master heraus und reist im Sidecar** — wie bei der Paginierung (Spec §6.3), nicht als Flag im Liefertext. Die Review-Kopie (§5) bleibt, was sie ist: der Kanal für den Menschen, nicht für den Index.
+- **`anchor_confidence` wird gebaut** — ein Chunk-Feld analog zu `label_source`. Arbeitstitel; das Vokabular ist das von Spec §5 (`certain`, `suggested`, `guessed`, `orphan`), und ein Chunk trägt die schwächste Klasse unter den Ankern, die in ihm stehen. Es gilt dieselbe Toleranzregel wie bei `label_source`: Ein unbekannter Wert darf den Importer nicht scheitern lassen, sondern wird als „nicht bezeugt" gelesen. Der maschinenlesbare Kanal auf Scriptor-Seite ist der für genau diesen Zweck reservierte Noten-Sidecar (Spec §6.6).
+- **Wirkung an genau einer Stelle:** Zitiert eine Antwort eine Fußnote, deren Anker geraten ist, muss sie das sagen können — so wie sie heute bei einem erschlossenen Seitenlabel „(inferred)" sagt. Kein Score in der Antwort, ein Wort.
+- **Offen ist das Wann, nicht das Ob.** Vor dem Bau wird gezählt, wie viele Bände des Bestands überhaupt `suggested`/`guessed`-Anker tragen; die Zahl steht in den Audit-Sidecars (Spec §6.1) und entscheidet die Reihenfolge gegenüber den anderen Paketen. Sie entscheidet nicht mehr, ob der Kanal kommt.
+
+**Konsequenzen:** Der Noten-Sidecar (Spec §6.6) wird aus „reserviert" zu „gebraucht" — er trägt ohnehin schon die gedruckte Nummer hinter `[^N]`, auf die der Notenzweig von `verify_citation` wartet (`note_checked: false`). Beide Bedarfe treffen dieselbe Datei; sie sollte einmal geschrieben werden. `[region: table]` (ADR in Vorbereitung, Arbeitspaket D) ist eine Anwendung derselben Regel: Eine Tabelle ist eine Region und damit ein Zeuge, kein Modus und kein Konfidenzfall.
+
+**Verworfen:** Den Vertrauenswert in den Prompt zu geben, wie der Anlass-Artikel es tut — ein Leser kann ihn nicht nachprüfen. Konfidenzflags im Master (verletzt §4.6 und damit die Übersetzbarkeit). Eine stille Reparatur geratener Anker; wo der Anker unsicher ist, steht das dran, wie bei *relocated* in ADR-034.
+
+---
+
+### ADR-036: Abstinenz als Markenkern — die Goldset-Kategorie `weak-evidence` und die Abstinenzrate (September 2026)
+
+**Kontext:** ADR-020 hält seit Februar 2026 fest: *Kein Ergebnis ist informativer als ein falsches Ergebnis* (`min_similarity`, Default 0,5). ADR-030 hat daraus die Goldset-Kategorie `negative` abgeleitet — leeres `expected`, Metrik `false_positive_rate`. Die prüft aber das **Retrieval**: Liefert der Index nichts, wenn nichts da ist?
+
+Die Lücke liegt eine Schicht weiter. Der reale Halluzinationsfall in einer geisteswissenschaftlichen Bibliothek ist nicht die leere Trefferliste — die ist harmlos —, sondern die **plausible**: zehn Chunks über der Schwelle, thematisch benachbart, und die Frage trotzdem nicht beantwortbar. Ein Bestand wie dieser gibt zu jedem Thema irgendetwas Angrenzendes her. Gemessen wird das bisher nirgends.
+
+**Entscheidung (Nutzer, 20. September 2026):**
+
+- **Der Grundsatz zuerst:** Alles, was Halluzination unterdrückt und Ehrlichkeit fördert — auch ehrliches Scheitern —, gehört zum Markenkern von ARCHILLES. Das ist keine Feature-Frage, sondern Positionierung: Wo ein Industriesystem 6,8 % Halluzination als Erfolg meldet, lautet die geisteswissenschaftliche Anforderung nicht „niedrigere Rate", sondern „prüfbarer Beleg" — und ein System, das schweigt, wenn es keinen hat. Nicht „wir finden mehr", sondern **„wir schweigen zuverlässiger"**. Als Leitprinzip steht der Satz in der [ROADMAP](ROADMAP.md).
+- **Dritte Goldset-Kategorie `weak-evidence`:** Anfragen, zu denen das Retrieval legitim Treffer über der Schwelle liefert, deren erwartete Antwort aber „nicht belegt" lautet. Metrik: **Abstinenzrate** (`abstention_rate`).
+- **Das gehört in Schema v1**, entschieden **vor** Schritt 1 des Harness. Das Goldset-Schema ist nach ADR-030 „die eine teure Entscheidung"; eine nachträglich eingezogene Kategorie kostet eine Schemaversion und macht alle bis dahin gelaufenen Messungen unvergleichbar. Der Enum-Wert und die Fallsemantik landen jetzt, die Fälle selbst sind Kurationsarbeit und dürfen nachwachsen.
+- **Drei getrennte Populationen in der Aggregation:** positive Fälle (Recall, MRR, nDCG, Citation-Accuracy), `negative` (`false_positive_rate`, Erfolg = kein Treffer über der Schwelle), `weak-evidence` (`abstention_rate`, Erfolg = Treffer **ja**, Antwort „nicht belegt"). `weak-evidence` hat ein nicht-leeres `expected`-Pendant nur im Retrieval-Sinn; für die Antwortprüfung ist das erwartete Ergebnis die Verweigerung.
+- **Regel 2 des System-Prompts wird geschärft.** Sie lautet heute „Do not use external information. If the answer is not in the documents, say so clearly" (`src/archilles/engine/prompting.py:225`) — der zweite Halbsatz ist eine Erlaubnis. Regel 5 (ebd. Zeile 228) zeigt daneben die Form, die funktioniert: eine positive Handlungsanweisung mit fester Ausgabeform („say in the same breath that the page is inferred"). Regel 2 bekommt dieselbe Form, plus einen goldenen Regressionstest in `tests/test_p0_regressions.py`.
+- **Damit bleibt die Messung LLM-judge-frei.** Das ist der Grund, warum A und B zusammengehören: Gibt Regel 2 eine feste Ausgabeform vor, ist Abstinenz deterministisch prüfbar — der Runner sucht die Form, statt ein zweites Modell urteilen zu lassen. ADR-030s Randbedingung „kein LLM-Judge in v1" bleibt unangetastet. Die Kategorie läuft folglich über den Antwortpfad (ADR-030, Schritt 8, `ask`), nicht über den reinen Retrieval-Pfad; ihr Schema-Platz muss trotzdem jetzt entschieden sein.
+
+**Konsequenzen:** Die Abstinenzrate ist die einzige Zahl aus dem Anlass-Material, die sich in der Kommunikation gegen jedes Second-Brain-System stellen lässt, und sie gehört damit neben die Citation-Accuracy in das veröffentlichte Benchmark (ADR-030: Launch-Asset). Kosten insgesamt: ein Enum-Wert, ein Dutzend Goldset-Fälle, ein Prompt-Absatz, ein Test.
+
+**Verworfen:** Die Kategorie nachträglich einzuziehen, wenn der Antwortpfad steht (Schemabruch). Ein LLM-Judge für die Abstinenzprüfung (Kosten, Reproduzierbarkeit — und unnötig, sobald Regel 2 eine Form hat). `weak-evidence` als Spielart von `negative` zu führen: Die beiden messen verschiedene Schichten, und sie in einen Nenner zu werfen verdeckt genau den Unterschied, auf den es ankommt.
+
+---
+
 ## III. Produktstrategie und Geschäftsmodell
 
 ### Zielgruppe: Individuelle Forscher, keine Institutionen
@@ -808,6 +854,10 @@ Das Risiko: MCP ist ein junger Standard, und seine Durchsetzung hängt von Anthr
 **Entscheidung:** Als langfristiges Forschungsziel (2027+) dokumentiert.
 
 **Begründung:** Technisch ambitioniert (erfordert Natural Language Inference, Entitätsabgleich über Quellen hinweg), möglicherweise als Kooperation mit akademischen Partnern (NFDI-Konsortien) realisierbar. Für den MVP und die erste Produktversion irrelevant.
+
+**Nachtrag (20. September 2026): Der Konflikt wird markiert, nicht aufgelöst** (Arbeitspaket E aus `archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md` §5). Industrielle GraphRAG-Systeme erkennen widersprüchliche Evidenz und *lösen sie auf*, sobald der autoritätsgewichtete Abstand eine Schwelle überschreitet — für ein Stromnetz richtig, weil ein Transformator eine Nennspannung hat. Für diesen Bestand kehrt das den Zweck um: Autoritätsgewichtung ist genau der Mechanismus, der eine heterodoxe Lesart unter die Schwelle drückt, und „Aktualität" ist in den Geisteswissenschaften kein Qualitätsmerkmal, häufig das Gegenteil.
+
+Übernommen wird deshalb nur die Verpackung: **Konflikt erkennen, beide Seiten markiert weiterreichen, den Auflösungsschritt ersatzlos streichen.** Für den Wiki-Generator (v1.5) heißt das konkret: Ein Claim mit zwei Belegen, die sich widersprechen, ist ein eigener Eintragstyp mit **beiden** Ankern nach ADR-034 — kein zu bereinigender Fehler. Das ist jetzt nur als Anforderung notiert, damit die Wiki-Spezifikation (`archilles-scriptor/docs/internal/KONZEPT_wiki_zitatgraph_v1.md`) den Eintragstyp von Anfang an vorsieht; gebaut wird nichts davon vor v1.5. Die Einordnung dieses Abschnitts als Forschungsziel bleibt — was vorgezogen wird, ist die Form, nicht die Erkennungsleistung.
 
 ### Kollaboration: Minimal, aber vorbereitet
 
