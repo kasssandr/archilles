@@ -21,6 +21,7 @@ from unittest.mock import patch
 import pytest
 
 from src.archilles.watchdog import (
+    ANNOTATION_READER_VERSION,
     DEFAULT_EXCLUDED_TAGS,
     WatchdogScanner,
     ZoteroWatchdogScanner,
@@ -526,6 +527,73 @@ class TestQueueFile:
 
 
 # ---------------------------------------------------------------------------
+# Stale annotation cache (books 2389 / 9743 re-scanned daily, 2026-09-21)
+# ---------------------------------------------------------------------------
+
+class TestStaleAnnotationCacheSelfHeals:
+    """A cached hash the indexer disagrees with must not survive the scan.
+
+    The cache key is a (mtime_ns, size) signature, so an entry written by an
+    older annotation reader outlives every scan of an untouched file. The
+    indexer recomputes the hash and sees no change, so it writes nothing --
+    leaving the scan to flag the same book again tomorrow, for good.
+    """
+
+    def _scanner(self, calibre_library: Path, *, indexer_status):
+        scanner = WatchdogScanner(
+            library_path=calibre_library,
+            db_path=str(calibre_library / ".archilles" / "rag_db"),
+            archilles_dir=calibre_library / ".archilles",
+        )
+        scanner._load_indexed_hashes = lambda: {
+            1: {'book_id': '1', 'metadata_hash': _compute_metadata_hash(
+                _calibre_metadata_for_hash(calibre_library)[1]),
+                'annotation_hash': 'hash-in-the-index'}
+        }
+        scanner._annotation_changed = lambda file_path, stored_hash: True
+
+        class FakeRAG:
+            def index_book(self, path, book_id, force=False):
+                return {'book_id': book_id, 'status': indexer_status}
+        scanner._load_rag = lambda: FakeRAG()
+        return scanner
+
+    def _seed_cache(self, scanner, calibre_library: Path) -> str:
+        book_file = str(next((calibre_library / "A" / "T (1)").glob("*.epub")))
+        scanner._annotation_cache = {
+            book_file: {'sig': [1, 2, 0, 0], 'annotation_hash': 'stale-hash'}
+        }
+        return book_file
+
+    def test_entry_dropped_when_indexer_sees_no_change(
+        self, calibre_library: Path,
+    ):
+        _add_book(calibre_library, 1, "T", authors=["A"], with_file="x.epub")
+        scanner = self._scanner(calibre_library, indexer_status='already_indexed')
+        book_file = self._seed_cache(scanner, calibre_library)
+
+        results = scanner.scan(dry_run=False, queue_new=False, index_new=False)
+
+        assert 1 in results['annotations_changed']
+        assert book_file not in scanner._annotation_cache
+        # and the drop is persisted, so the next run recomputes from the book
+        assert book_file not in json.loads(
+            scanner.annotation_cache_file.read_text(encoding='utf-8')
+        )
+
+    def test_entry_kept_when_indexer_applied_the_change(
+        self, calibre_library: Path,
+    ):
+        _add_book(calibre_library, 1, "T", authors=["A"], with_file="x.epub")
+        scanner = self._scanner(calibre_library, indexer_status='metadata_updated')
+        book_file = self._seed_cache(scanner, calibre_library)
+
+        scanner.scan(dry_run=False, queue_new=False, index_new=False)
+
+        assert book_file in scanner._annotation_cache
+
+
+# ---------------------------------------------------------------------------
 # Counter semantics (Issue #5 regression)
 # ---------------------------------------------------------------------------
 
@@ -695,7 +763,55 @@ class TestAnnotationCache:
             assert scanner._annotation_cache == {str(book): {
                 'sig': scanner._annotation_files_signature(book),
                 'annotation_hash': 'x',
+                'v': ANNOTATION_READER_VERSION,
             }}
+
+    def test_entry_from_an_older_reader_is_cold(self, tmp_path: Path, scanner):
+        """An entry without the current version must not be trusted.
+
+        The signature says the file is untouched, but the hash was produced by
+        a reader that no longer exists. Reusing it keeps a wrong hash alive for
+        as long as the file is left alone -- silently, wherever the index
+        agrees with it.
+        """
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+
+        # Seed an entry the way an older version wrote it: no 'v' at all.
+        scanner._annotation_cache = {str(book): {
+            'sig': scanner._annotation_files_signature(book),
+            'annotation_hash': 'hash-from-an-older-reader',
+        }}
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get,              patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": [{"text": "x"}]}
+            mock_hash.return_value = "hash-from-this-reader"
+            changed = scanner._annotation_changed(book, stored_hash="hash-from-an-older-reader")
+
+        assert mock_get.call_count == 1          # book was reopened
+        assert changed is True                   # and the difference surfaced
+        assert scanner._annotation_cache[str(book)] == {
+            'sig': scanner._annotation_files_signature(book),
+            'annotation_hash': 'hash-from-this-reader',
+            'v': ANNOTATION_READER_VERSION,
+        }
+
+    def test_entry_from_a_superseded_version_is_cold(self, tmp_path: Path, scanner):
+        book = tmp_path / "book.pdf"
+        book.write_bytes(b"%PDF-1.4 fake")
+        scanner._annotation_cache = {str(book): {
+            'sig': scanner._annotation_files_signature(book),
+            'annotation_hash': 'stale',
+            'v': ANNOTATION_READER_VERSION - 1,
+        }}
+
+        with patch("src.calibre_mcp.annotations.get_combined_annotations") as mock_get,              patch("src.archilles.engine.core.ArchillesRAG._compute_annotation_hash") as mock_hash:
+            mock_get.return_value = {"annotations": []}
+            mock_hash.return_value = "fresh"
+            scanner._annotation_changed(book, stored_hash="fresh")
+
+        assert mock_get.call_count == 1
+        assert scanner._annotation_cache[str(book)]['v'] == ANNOTATION_READER_VERSION
 
     def test_extraction_failure_does_not_poison_cache(self, tmp_path: Path, scanner):
         book = tmp_path / "book.pdf"
