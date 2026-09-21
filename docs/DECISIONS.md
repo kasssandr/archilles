@@ -304,6 +304,30 @@ Entscheidungsbaum in index_book() (force=False, Content-Chunks vorhanden):
 
 **Konsequenz für Batch-Indexierung:** `batch_index.py --skip-existing` überspringt Bücher nicht mehr blind, sondern leitet alle Bücher an `index_book()` weiter, das die Hash-Prüfung durchführt. Ein Batch-Lauf über 670 Bücher, bei dem sich nichts geändert hat, dauert damit ~67 Sekunden statt ~16 Stunden.
 
+**Nachtrag (21. September 2026): Der Watchdog-Cache braucht eine Version, sonst überlebt ein alter Hash jede Code-Änderung.**
+
+Der Watchdog berechnet den `annotation_hash` nicht bei jedem Lauf neu — das hieße, jede PDF der Bibliothek einmal pro Scan zu öffnen. Stattdessen merkt er sich das Ergebnis in `watchdog_annotation_cache.json`, geschlüsselt über die Signatur `(mtime_ns, size)` von Buchdatei und Calibre-Viewer-Sidecar. Diese Signatur beschreibt die *Eingabe*, nicht den *Code*, der daraus den Hash macht. Ändert sich der Leseweg — der Reader, seine Filter (`min_length`, `exclude_toc_markers`) oder die Hash-Funktion selbst —, bleibt ein Eintrag aus der alten Welt für jede Datei gültig, die seitdem nicht angefasst wurde.
+
+Das zerfällt in zwei Fehlerbilder, und nur eines ist sichtbar:
+
+| | Cache vs. Index | Symptom |
+|---|---|---|
+| **laut** | Cache ≠ Index | Der Scan meldet das Buch bei *jedem* Lauf als `annotations_changed`; der Indexer rechnet frisch nach, sieht keine Änderung und schreibt nichts. Der Zustand kann nicht ausheilen, weil nur der Indexer Hashes schreibt und genau er keinen Anlass sieht. |
+| **stumm** | Cache = Index (beide alt) | Der Scan meldet gar nichts. Der Index behält Annotationen, die der heutige Reader nicht mehr so herstellen würde — ohne jede Spur im Log. |
+
+Aufgefallen ist der laute Fall an zwei Büchern (Calibre-ID 2389 und 9743), die täglich erneut geprüft wurden; bei 9743 hielt der Cache einen Hash aus einer früheren Leseweg-Version fest, bei 2389 sogar „keine Annotationen", während die PDF eine Notiz trägt.
+
+**Entscheidung:** Zwei Mechanismen, die verschiedene Hälften abdecken.
+
+1. **`ANNOTATION_READER_VERSION`** (`src/archilles/watchdog.py`) wird im Cache-Eintrag mitgeschrieben. Stimmt sie nicht mit der laufenden Version überein, gilt der Eintrag als kalt und wird aus dem Buch neu berechnet. Eine Erhöhung verwirft damit den gesamten Cache und deckt die stummen Fälle auf — das ist der einzige Hebel, der sie überhaupt sichtbar macht.
+2. **Selbstheilung in Phase 2:** Meldet der Indexer `already_indexed`, obwohl der Scan eine Annotationsänderung gemeldet hat, ist der Cache-Eintrag nachweislich falsch und wird verworfen. Das fängt den lauten Fall auch dann ab, wenn jemand die Version zu erhöhen vergisst.
+
+**Warum die volle Invalidierung vertretbar ist:** Eine Messung am 21. September 2026 über eine Stichprobe von 40 Büchern ergab 0,00 s für EPUB/MOBI (dort wird nur der Sidecar-Pfad geprüft) und im Mittel 0,14 s für PDF — hochgerechnet rund **10 Minuten für ~9.000 Bücher**. Gegen Scans, die regulär 10 Minuten bis über zwei Stunden laufen, fällt das einmalig pro Leseweg-Änderung an. Die ursprünglich erwogene gestaffelte Neuberechnung (ein Budget pro Lauf) wäre dafür unnötige Komplexität gewesen.
+
+**Was die Umstellung zutage fördert:** Eine vollständige Nachrechnung am 21. September 2026 (753 s über 8.991 Cache-Einträge) fand neun Bücher, deren Index still einen veralteten Annotationsstand führt — Cache und Index stimmen überein, beide aber nicht mit dem, was der heutige Reader aus dem Buch holt. Betroffen sind u. a. die Calibre-IDs 733, 7944 und 8048 mit zusammen mehreren hundert Annotationen. Der erste Lauf nach der Versionserhöhung meldet sie als `annotations_changed` und korrigiert sie; er dauert dafür einmalig rund 12 Minuten länger. Nebenbefund derselben Messung: sechs Buchdateien in der Bibliothek sind 0 Byte groß und lassen sich gar nicht öffnen.
+
+**Nicht mitgelöst:** Der Zotero-Scanner cacht mit `att_modified_at` einen externen Zeitstempel statt eines gerechneten Werts. Eine Leseweg-Änderung fällt dort ebenso wenig auf, verlangt aber eine andere Antwort als eine Cache-Version (einen erzwungenen Recheck) und bleibt offen.
+
 ### ADR-012: Annotation-Indexierung in LanceDB (Februar 2026)
 
 **Kontext:** Annotationen – Highlights und Notizen, die der Nutzer in seinen Büchern hinterlässt – sind für Geisteswissenschaftler oft wertvoller als der Rohtext. Sie repräsentieren kuratiertes Wissen: die Passagen, die der Forscher als relevant markiert hat, und seine Gedanken dazu. ARCHILLES extrahierte Annotationen bereits über MCP-Tools (`get_book_annotations`, `search_annotations`), speicherte sie aber in einem separaten ChromaDB-Index mit einem anderen Embedding-Modell (siehe ADR-008).

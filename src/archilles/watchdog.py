@@ -67,6 +67,18 @@ EXIT_PARTIAL = 3   # scan completed, individual books failed
 #: Codes that mean the scan ran to its end, whatever it found on the way.
 COMPLETED_EXIT_CODES = frozenset({EXIT_OK, EXIT_PARTIAL})
 
+# Bumped whenever the way annotations are read changes -- the reader, its
+# filters, or the hash itself. The annotation cache is keyed by a file
+# signature, which cannot notice that the *code* turning that file into a hash
+# has changed, so an entry written by an older reader would otherwise survive
+# every scan of an untouched file. Two ways that goes wrong, and only the first
+# is visible: where the index disagrees with the stale entry, the book is
+# flagged on every run and never settles; where it agrees, nothing is reported
+# and the index simply keeps annotations the current reader would no longer
+# produce. Bumping this discards every entry and recomputes it from the books
+# -- ~10 minutes over ~9,000 books (measured 2026-09-21), paid once per change.
+ANNOTATION_READER_VERSION = 2
+
 
 def exit_code_for(results: dict[str, Any]) -> int:
     """The exit code a finished scan deserves, given what it collected."""
@@ -866,6 +878,7 @@ class WatchdogScanner:
             dt0 = time.time()
             books_to_update_list = sorted(books_to_update)
             total_p2 = len(books_to_update_list)
+            annot_changed_ids = set(results['annotations_changed'])
             for i, cid in enumerate(books_to_update_list, 1):
                 if self._shutdown_requested:
                     print(f"\n⏸️  Shutdown requested — phase 2 stopped after {i-1}/{total_p2} books.")
@@ -885,7 +898,18 @@ class WatchdogScanner:
                         # Refresh phase1 stub with updated metadata — no full indexing
                         rag.index_book(file_path, book_id, phase='phase1')
                     else:
-                        rag.index_book(file_path, book_id, force=False)
+                        res = rag.index_book(file_path, book_id, force=False)
+                        # The scan flagged an annotation change the indexer
+                        # does not see. The indexer recomputes the hash from
+                        # the book, so it is right and the scan's cached hash
+                        # is stale -- and nothing else can correct it: the
+                        # indexer writes hashes only when it does see a
+                        # change, so the book would be re-checked on every
+                        # scan for good (2026-09-21: books 2389 and 9743 had
+                        # been doing exactly that daily).
+                        if (cid in annot_changed_ids
+                                and (res or {}).get('status') == 'already_indexed'):
+                            self._invalidate_annotation_cache(file_path)
                     results['delta_updates'] += 1
                 except Exception as exc:
                     logger.error(f"Delta update failed for calibre_id={cid}: {exc}")
@@ -1188,9 +1212,12 @@ class WatchdogScanner:
         ``stored='abc' → current=''`` (annotations cleared).
 
         Fast path: a (mtime_ns, size) signature for both the book file and the
-        Calibre-Viewer JSON sidecar is cached on disk. When the signature
-        matches the previous scan, the cached annotation hash is reused
-        without opening the book. Cold path opens the book via
+        Calibre-Viewer JSON sidecar is cached on disk, together with the
+        ``ANNOTATION_READER_VERSION`` that produced the hash. When signature
+        *and* version match the previous scan, the cached annotation hash is
+        reused without opening the book; an entry from an older reader is
+        treated as cold, because its hash no longer means what this one would
+        compute. Cold path opens the book via
         ``get_combined_annotations(..., include_pdf=True)``, which matches the
         indexer's hash computation. Failures are logged and treated as
         "unchanged" so a transient error cannot spam the index with
@@ -1201,7 +1228,8 @@ class WatchdogScanner:
         sig = self._annotation_files_signature(file_path)
 
         cached = cache.get(cache_key)
-        if cached and cached.get('sig') == sig:
+        if (cached and cached.get('sig') == sig
+                and cached.get('v') == ANNOTATION_READER_VERSION):
             current_hash = cached.get('annotation_hash', '')
             return current_hash != stored_hash
 
@@ -1224,9 +1252,25 @@ class WatchdogScanner:
             )
             return False
 
-        cache[cache_key] = {'sig': sig, 'annotation_hash': current_hash}
+        cache[cache_key] = {'sig': sig, 'annotation_hash': current_hash,
+                            'v': ANNOTATION_READER_VERSION}
         self._annotation_cache_dirty = True
         return current_hash != stored_hash
+
+    def _invalidate_annotation_cache(self, file_path: Path | str) -> None:
+        """Drop the cached annotation hash for one book file.
+
+        The cache key is the (mtime_ns, size) signature of the book and its
+        viewer sidecar -- it cannot notice that the *code* reading annotations
+        has changed since the entry was written. An entry written by an older
+        reader therefore survives every scan of an untouched file, and the book
+        is flagged as changed on each one. The next scan recomputes the hash
+        from the book itself.
+        """
+        cache = self._load_annotation_cache()
+        if cache.pop(str(file_path), None) is not None:
+            self._annotation_cache_dirty = True
+            logger.info("Dropped stale annotation-cache entry: %s", file_path)
 
     def _queue_new_books(self, calibre_ids: list[int]) -> None:
         self.archilles_dir.mkdir(parents=True, exist_ok=True)
