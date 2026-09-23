@@ -45,6 +45,16 @@
 > unverändert durch den `ScriptorExtractor` (Major 0). Den Baum liest der
 > Extraktor erst mit Gliederungsschritt B6.
 
+> **Spiegel-Notiz (Familie), 2026-09-23:** Spec 0.5.0. Neu ist der
+> Regionsname `lists` (Glossar, Abbildungs-, Karten- und Beiträgerverzeichnis),
+> der wie jeder Apparat aus der Standardsuche fällt. `appendix` gehört nicht
+> mehr zum Apparat: Anhänge bleiben suchbar ([DECISIONS.md](DECISIONS.md),
+> Region → `section_type`). Archilles liest die Menge aus Scriptors
+> `APPARATUS` und zieht damit ohne Codeänderung nach. Bis B7/B8 gilt das nur
+> für den Scriptor-Pfad; EPUB- und PDF-Pfad schließen Anhänge noch über ihre
+> eigenen Wortlisten aus. Ein 0.5.0-Master läuft unverändert durch den
+> `ScriptorExtractor` (Major 0).
+
 > **Evidenzkette, 2026-09-20.** Aus einem Industrie-Befund zur Belegkette
 > (`archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md`)
 > stehen fünf Arbeitspakete an, keines davon begonnen. Die Leitplanke, die
