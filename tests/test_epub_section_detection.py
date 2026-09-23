@@ -6,85 +6,50 @@ from src.archilles.constants import SectionType
 from src.extractors.epub_extractor import EPUBExtractor
 
 
-class TestSplitTextByHeadings:
-    split = staticmethod(EPUBExtractor._split_text_by_headings)
+class TestSplitHtmlAt:
+    """Sections begin where their element stands (Gliederung B7): a heading
+    or a nav anchor, found by its place in the tree, never by its words."""
 
-    def test_no_headings_returns_single_section(self):
-        text = "Paragraph one.\n\nParagraph two.\n\nParagraph three."
-        result = self.split(text, [])
+    @staticmethod
+    def _split(html):
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(f"<html><body>{html}</body></html>", "html.parser")
+        markers = [(h, ' '.join(h.get_text().split()), None)
+                   for h in soup.find_all(['h2', 'h3'])]
+        return EPUBExtractor()._split_html_at(soup, markers)
+
+    def test_no_markers_returns_single_section(self):
+        result = self._split("<p>Paragraph one.</p><p>Paragraph two.</p>")
         assert len(result) == 1
         assert result[0]['heading'] is None
-        assert result[0]['text'] == text
+        assert result[0]['text'] == "Paragraph one.\n\nParagraph two."
 
-    def test_single_heading_splits_into_two(self):
-        text = "Intro text here.\n\nSECTION ONE\n\nSection content follows."
-        result = self.split(text, ["SECTION ONE"])
-        assert len(result) == 2
-        assert result[0]['heading'] is None
-        assert "Intro text" in result[0]['text']
-        assert result[1]['heading'] == "SECTION ONE"
-        assert "Section content" in result[1]['text']
-
-    def test_heading_included_in_section_text(self):
-        text = "Intro.\n\nMY HEADING\n\nContent after heading."
-        result = self.split(text, ["MY HEADING"])
-        assert result[1]['text'].startswith("MY HEADING")
-
-    def test_multiple_headings(self):
-        text = (
-            "Intro paragraph.\n\n"
-            "FIRST SECTION\n\nFirst content.\n\n"
-            "SECOND SECTION\n\nSecond content."
-        )
-        result = self.split(text, ["FIRST SECTION", "SECOND SECTION"])
-        assert len(result) == 3
-        assert result[0]['heading'] is None
-        assert result[1]['heading'] == "FIRST SECTION"
-        assert result[2]['heading'] == "SECOND SECTION"
-        assert "First content" in result[1]['text']
-        assert "Second content" in result[2]['text']
+    def test_heading_opens_its_section_and_stays_in_its_text(self):
+        result = self._split("<p>Intro text here.</p><h2>SECTION ONE</h2><p>Content follows.</p>")
+        assert [r['heading'] for r in result] == [None, "SECTION ONE"]
+        assert result[1]['text'].startswith("SECTION ONE")
 
     def test_no_intro_before_first_heading(self):
-        text = "THE HEADING\n\nContent after heading."
-        result = self.split(text, ["THE HEADING"])
-        assert len(result) == 1
-        assert result[0]['heading'] == "THE HEADING"
+        result = self._split("<h2>THE HEADING</h2><p>Content after heading.</p>")
+        assert [r['heading'] for r in result] == ["THE HEADING"]
 
-    def test_whitespace_normalization(self):
-        """Heading with extra whitespace in text should still match."""
-        text = "Intro.\n\nTHE   KNIGHTS   HOSPITALLER\n\nKnight content."
-        result = self.split(text, ["THE KNIGHTS HOSPITALLER"])
-        assert len(result) == 2
-        assert result[1]['heading'] == "THE   KNIGHTS   HOSPITALLER"
-
-    def test_unmatched_heading_ignored(self):
-        """Headings not found in text should not cause splits."""
-        text = "Paragraph one.\n\nParagraph two."
-        result = self.split(text, ["NONEXISTENT HEADING"])
-        assert len(result) == 1
-        assert result[0]['heading'] is None
+    def test_a_heading_s_words_earlier_in_the_prose_do_not_split(self):
+        result = self._split("<p>Of THE KNIGHTS HOSPITALLER more below.</p>"
+                             "<h2>THE KNIGHTS HOSPITALLER</h2><p>Knight content.</p>")
+        assert "more below" in result[0]['text']
+        assert result[1]['text'].startswith("THE KNIGHTS HOSPITALLER\n\nKnight")
 
     def test_churton_style_chapter(self):
-        """Simulate a Churton-style chapter with sub-sections."""
-        text = (
-            "Chapter Two\n\n"
-            "ST. JOHN'S MEN AND THE PASSION OF THE CORN\n\n"
-            "There were three men called John.\n\n"
-            "Some more text about Masonry and history.\n\n"
-            "ST. JOHN THE BAPTIST AS LORD OF THE FEAST\n\n"
-            "We have established that St. John the Baptist was important.\n\n"
-            "THE KNIGHTS HOSPITALLER\n\n"
-            "In 1023, eighteen years after destruction.\n\n"
-            "HERALD OF THE HARVEST\n\n"
-            "Why had John the Baptist been chosen by the church."
-        )
-        headings = [
-            "ST. JOHN'S MEN AND THE PASSION OF THE CORN",
-            "ST. JOHN THE BAPTIST AS LORD OF THE FEAST",
-            "THE KNIGHTS HOSPITALLER",
-            "HERALD OF THE HARVEST",
-        ]
-        result = self.split(text, headings)
+        """A Churton-style chapter with sub-sections."""
+        result = self._split(
+            "<p>Chapter Two</p>"
+            "<h2>ST. JOHN'S MEN AND THE PASSION OF THE CORN</h2>"
+            "<p>There were three men called John.</p>"
+            "<p>Some more text about Masonry and history.</p>"
+            "<h2>ST. JOHN THE BAPTIST AS LORD OF THE FEAST</h2>"
+            "<p>We have established that St. John the Baptist was important.</p>"
+            "<h2>THE KNIGHTS HOSPITALLER</h2><p>In 1023, eighteen years after destruction.</p>"
+            "<h2>HERALD OF THE HARVEST</h2><p>Why had John the Baptist been chosen by the church.</p>")
         assert len(result) == 5  # intro + 4 sections
         assert result[0]['heading'] is None
         assert "Chapter Two" in result[0]['text']

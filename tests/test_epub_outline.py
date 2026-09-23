@@ -106,6 +106,40 @@ def test_two_top_entries_in_one_file_are_two_nodes(tmp_path):
     assert out["W2"]["chapter"] == "Zweites Kapitel"
 
 
+def test_a_heading_the_nav_leaves_out_takes_the_depth_its_tag_has_elsewhere(tmp_path):
+    """The nav lists chapter 1's sections, not chapter 2's. What the nav
+    shows of h2 in chapter 1 -- depth 2 -- holds for the h2 of chapter 2."""
+    one = _doc("one.xhtml",
+               '<h1 id="c1">1 Erstes Kapitel</h1><p>W1 eins.</p>'
+               '<h2 id="s11">1.1 Erster Abschnitt</h2><p>W2 eins eins.</p>')
+    two = _doc("two.xhtml",
+               '<h1 id="c2">2 Zweites Kapitel</h1><p>W3 zwei.</p>'
+               '<h2>2.1 Nicht verzeichnet</h2><p>W4 zwei eins.</p>'
+               '<h4>Kein Abschnitt</h4><p>W5 unter h4.</p>')
+    out = _extract(tmp_path / "learnt.epub", [one, two], [
+        (epub.Link("one.xhtml#c1", "1 Erstes Kapitel", "c1"),
+         [epub.Link("one.xhtml#s11", "1.1 Erster Abschnitt", "s11")]),
+        epub.Link("two.xhtml#c2", "2 Zweites Kapitel", "c2"),
+    ])
+    assert (out["W2"]["section_title"], out["W2"]["section"]) == ("1.1 Erster Abschnitt", "1.1")
+    assert out["W4"]["chapter"] == "2 Zweites Kapitel"
+    assert (out["W4"]["section_title"], out["W4"]["section"]) == ("2.1 Nicht verzeichnet", "2.1")
+    # h4 has no depth in this book: it cuts the text, it is no node
+    assert out["W5"]["section_title"] == "Kein Abschnitt"
+    assert out["W5"]["section"] == "2.1"
+
+
+def test_without_a_nav_the_heading_tag_is_the_depth(tmp_path):
+    doc = _doc("only.xhtml",
+               '<h1>1 Erstes Kapitel</h1><p>W1 eins.</p>'
+               '<h2>1.1 Abschnitt</h2><p>W2 eins eins.</p>'
+               '<h1>2 Zweites Kapitel</h1><p>W3 zwei.</p>')
+    out = _extract(tmp_path / "bare.epub", [doc], [])
+    assert out["W1"]["chapter"] == "1 Erstes Kapitel"
+    assert (out["W2"]["section_title"], out["W2"]["section"]) == ("1.1 Abschnitt", "1.1")
+    assert out["W3"]["chapter"] == "2 Zweites Kapitel"
+
+
 def test_a_node_inside_an_apparatus_keeps_its_region(germanen):
     assert (germanen["W8"]["section_type"], germanen["W8"]["region"]) == (
         SectionType.BACK_MATTER, "notes")
