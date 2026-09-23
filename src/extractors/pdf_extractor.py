@@ -660,38 +660,6 @@ class PDFExtractor(BaseExtractor):
         return chunks
 
     # ------------------------------------------------------------------
-    # Sentence-aligned overlap
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _extract_overlap_tail(cls, text: str, target_tokens: int) -> str:
-        """Extract the last ~target_tokens from text, aligned to a sentence boundary.
-
-        Scans backward from the end of *text* to find a sentence-ending
-        punctuation mark (. ! ? : ») followed by whitespace.  Returns the
-        text from the nearest sentence start that fits within
-        *target_tokens*.  If no sentence boundary is found, falls back to
-        the last *target_tokens* words.
-        """
-        words = text.split()
-        if len(words) <= target_tokens:
-            return text
-
-        # Take roughly target_tokens words from the end
-        tail = ' '.join(words[-target_tokens:])
-
-        # Find the first sentence boundary in the tail to align the start
-        match = cls._SENTENCE_END_RE.search(tail)
-        if match:
-            # Start after the sentence-ending punctuation + space
-            aligned = tail[match.end():].strip()
-            # Only use aligned version if it retains at least 40% of target
-            if len(aligned.split()) >= target_tokens * 0.4:
-                return aligned
-
-        return tail
-
-    # ------------------------------------------------------------------
     # Paragraph break detection
     # ------------------------------------------------------------------
 

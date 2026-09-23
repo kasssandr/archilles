@@ -121,9 +121,13 @@ class BaseExtractor(ABC):
                     'metadata': chunk_meta.__dict__
                 })
 
-                # Overlap: keep last paragraph for context
+                # Overlap: the end of the last paragraph, at most `overlap`
+                # words from a sentence start -- the bound the PDF path always
+                # had. The whole paragraph, as here until 2026-09-23, repeated
+                # nearly half of every chunk once EPUB paragraphs were whole
+                # (20 books: text x1.73 in the chunks).
                 if self.overlap > 0 and current_chunk:
-                    overlap_text = current_chunk[-1]
+                    overlap_text = self._extract_overlap_tail(current_chunk[-1], self.overlap)
                     current_chunk = [overlap_text, para]
                     current_size = len(overlap_text.split()) * 1.3 + para_tokens
                     char_position += len(chunk_text) - len(overlap_text)
@@ -156,6 +160,34 @@ class BaseExtractor(ABC):
         return chunks
 
     _SENTENCE_END_RE = re.compile(r'[.!?;:»"\')\u201d]\s')
+
+    @classmethod
+    def _extract_overlap_tail(cls, text: str, target_tokens: int) -> str:
+        """Extract the last ~target_tokens from text, aligned to a sentence boundary.
+
+        Scans backward from the end of *text* to find a sentence-ending
+        punctuation mark (. ! ? : ») followed by whitespace.  Returns the
+        text from the nearest sentence start that fits within
+        *target_tokens*.  If no sentence boundary is found, falls back to
+        the last *target_tokens* words.
+        """
+        words = text.split()
+        if len(words) <= target_tokens:
+            return text
+
+        # Take roughly target_tokens words from the end
+        tail = ' '.join(words[-target_tokens:])
+
+        # Find the first sentence boundary in the tail to align the start
+        match = cls._SENTENCE_END_RE.search(tail)
+        if match:
+            # Start after the sentence-ending punctuation + space
+            aligned = tail[match.end():].strip()
+            # Only use aligned version if it retains at least 40% of target
+            if len(aligned.split()) >= target_tokens * 0.4:
+                return aligned
+
+        return tail
 
     def _split_para_by_words(self, text: str) -> list[str]:
         """Split a single oversized paragraph into sentence-aligned chunks with overlap.
