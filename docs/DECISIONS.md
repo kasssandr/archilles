@@ -686,7 +686,8 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
   | `front-matter`, `contents` | `front_matter` |
   | `preface` | `main_content` (Entscheidung vom 10.9.2026: Vorworte werden suchbar, Danksagungen darunter hingenommen) |
   | `main`, unmarkiert | `main_content` |
-  | `bibliography`, `index`, `abbreviations`, `notes`, `appendix` | `back_matter` |
+  | `bibliography`, `index`, `abbreviations`, `notes`, `lists` | `back_matter` |
+  | `appendix` | `main_content` (Entscheidung vom 23.9.2026: Anhänge sind oft Quellen oder Daten — Gli Actus druckt dort seine Textedition; `lists` kam mit Spec 0.5.0) |
   | unbekannter Name | `main_content`, der Name verbatim in `region` |
 
 - **Der Ausgang liest `label_source`** (`a7cfcb8`, `a54a1e5`). Keine Warnung bei `printed`, `link`, `toc`, `catalogue` und bei Zeilen ohne Scriptor. Bei `computed` und unbekannten Werten erscheint eine Warnung, im Prompt steht dann `Page: 88 (inferred)`, und der System-Prompt verpflichtet das Abnehmer-LLM, den Umstand weiterzugeben. Beide MCP-Server liefern Seite und `label_source` über eine gemeinsame Funktion. Der tote `printed_page`-Zweig ist entfernt.

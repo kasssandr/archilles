@@ -150,8 +150,9 @@ def test_a_volume_without_page_markers_has_no_address(tmp_path):
     ("index", SectionType.BACK_MATTER),
     ("abbreviations", SectionType.BACK_MATTER),
     ("notes", SectionType.BACK_MATTER),
-    ("appendix", SectionType.BACK_MATTER),
-    ("glossary", SectionType.MAIN_CONTENT),      # unknown is running text (spec §4.4)
+    ("lists", SectionType.BACK_MATTER),          # spec 0.5.0
+    ("appendix", SectionType.MAIN_CONTENT),      # user decision 2026-09-23
+    ("chronology", SectionType.MAIN_CONTENT),    # unknown is running text (spec §4.4)
 ])
 def test_region_to_section_type(region, section_type):
     assert region_to_section_type(region) == section_type
