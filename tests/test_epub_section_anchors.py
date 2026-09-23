@@ -27,18 +27,26 @@ def _book(path, body: str, anchors: tuple[str, ...]) -> None:
     chapter = epub.EpubHtml(title="Kapitel", file_name="ch.xhtml", lang="de")
     chapter.content = f"<html><body>{body}</body></html>"
     book.add_item(chapter)
+    # A second chapter, so that the chapters stand on the top level: with one
+    # alone the outline model declares the level below it the chapter level.
+    other = epub.EpubHtml(title="Kapitel 2", file_name="ch2.xhtml", lang="de")
+    other.content = "<html><body><h1>Kapitel 2</h1><p>Absatz anderes.</p></body></html>"
+    book.add_item(other)
     book.toc = [(epub.Link("ch.xhtml", "Kapitel", "ch"),
-                 [epub.Link(f"ch.xhtml#{a}", t, a) for a, t in zip(anchors, SECTIONS)])]
+                 [epub.Link(f"ch.xhtml#{a}", t, a) for a, t in zip(anchors, SECTIONS)]),
+                epub.Link("ch2.xhtml", "Kapitel 2", "ch2")]
     book.add_item(epub.EpubNcx())
     book.add_item(epub.EpubNav())
-    book.spine = [chapter]
+    book.spine = [chapter, other]
     epub.write_epub(str(path), book)
 
 
 def _section_of(path) -> dict[str, str]:
+    """The section a paragraph names; for text on the chapter level, where
+    the outline model leaves ``section_title`` empty, the chapter."""
     chunks = EPUBExtractor().extract(path).chunks
     return {
-        key: chunk["metadata"]["section_title"]
+        key: chunk["metadata"]["section_title"] or chunk["metadata"]["chapter"]
         for chunk in chunks
         for key in ("vorspann", "eins", "zwei", "drei")
         if f"Absatz {key}" in chunk["text"]

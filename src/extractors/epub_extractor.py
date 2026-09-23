@@ -14,8 +14,10 @@ try:
 except ImportError:
     EBOOKLIB_AVAILABLE = False
 
-from scriptor.reflow.regions import APPARATUS
-from scriptor.structure import region_for_epub_type
+from collections import defaultdict
+
+from scriptor.reflow.regions import APPARATUS, region_of_heading
+from scriptor.structure import Tree, region_for_epub_type
 
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
@@ -58,6 +60,80 @@ _FILENAME_FRONT_MATTER = frozenset({
     'toc', 'copyright', 'imprint', 'dedication',
 })
 _FILENAME_PARATEXT = _FILENAME_BACK_MATTER | _FILENAME_FRONT_MATTER
+
+
+# Elements that end a paragraph. Everything else -- span, i, em, a, small caps,
+# a drop cap -- is inline: its text belongs to the words around it. Joining
+# every string of the tree with a paragraph break instead cut "T<span>HERE"
+# into "T" and "HERE" and made each italic phrase a paragraph of its own
+# (Berlinski, Human Nature [3084]).
+_BLOCK_TAGS = frozenset({
+    'address', 'article', 'aside', 'blockquote', 'body', 'br', 'caption', 'dd',
+    'details', 'div', 'dl', 'dt', 'figcaption', 'figure', 'footer', 'h1', 'h2',
+    'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr', 'html', 'li', 'main', 'nav',
+    'ol', 'p', 'pre', 'section', 'summary', 'table', 'tbody', 'td', 'tfoot', 'th',
+    'thead', 'tr', 'ul',
+})
+
+
+def _block_of(string) -> Any:
+    """The nearest block element around a string of the tree."""
+    el = string.parent
+    while el is not None and getattr(el, 'name', None) not in _BLOCK_TAGS:
+        el = el.parent
+    return el
+
+
+def _blocks(root, sentinel_re: Optional['re.Pattern'] = None) -> List[tuple]:
+    """The paragraphs of an element: ``[(text, [sentinel ids]), ...]``.
+
+    Consecutive strings under the same block element are one paragraph,
+    joined without a separator (the markup between them carries its own
+    spaces) and with runs of whitespace collapsed. A ``<br>`` ends the
+    paragraph it stands in. Strings matching ``sentinel_re`` are taken out of
+    the text and reported with the paragraph they stood in, so that a split
+    can fall on its beginning.
+    """
+    from bs4 import (Comment, Declaration, Doctype, NavigableString,
+                     ProcessingInstruction, Tag)
+    skipped = (Comment, Declaration, Doctype, ProcessingInstruction)
+
+    out: List[tuple] = []
+    parts: List[str] = []
+    marks: List[int] = []
+    current = None
+
+    def flush() -> None:
+        text = ' '.join(''.join(parts).split())
+        if text or marks:
+            out.append((text, list(marks)))
+        parts.clear()
+        marks.clear()
+
+    for node in root.descendants:
+        if isinstance(node, Tag):
+            if node.name == 'br':
+                flush()
+                current = None
+            continue
+        if not isinstance(node, NavigableString) or isinstance(node, skipped):
+            continue
+        block = _block_of(node)
+        if block is not current:
+            flush()
+            current = block
+        hit = sentinel_re.fullmatch(str(node)) if sentinel_re else None
+        if hit:
+            marks.append(int(hit.group(1)))
+        else:
+            parts.append(str(node))
+    flush()
+    return out
+
+
+def _block_text(root) -> str:
+    """The text of an element, a paragraph per block element."""
+    return '\n\n'.join(text for text, _ in _blocks(root) if text)
 
 
 def _normalize_item_name(filename: str) -> str:
@@ -129,20 +205,32 @@ class EPUBExtractor(BaseExtractor):
         language = self._get_dc_metadata(book, 'language')
 
         toc = self._extract_toc_ebooklib(book)
-        toc_map = self._build_toc_map(toc)
+        # The nav as a tree (Gliederung B7): every entry a node, depth its
+        # nesting, the chapter level declared by Scriptor's rule rather than
+        # taken to be the top.
+        tree = Tree.from_headings(
+            [(e.get('level', 1), e.get('title') or '') for e in toc],
+            region_of=region_of_heading) if toc else None
+        level = tree.chapter_level() if tree else None
+        by_file: Dict[str, List[tuple]] = defaultdict(list)  # file -> [(node, anchor)]
+        for i, entry in enumerate(toc):
+            href = entry.get('href')
+            if href:
+                base, _, anchor = href.partition('#')
+                by_file[base].append((i, anchor or None))
+        node_class: Dict[int, tuple] = {}   # node -> (section_type, region)
+        printed: Dict[int, str] = {}        # node -> the <h1> its own file prints
 
-        # Extract text from all document items
         chapters_text = []
         chapters_metadata = []
 
         _sub_heading_re = re.compile(r'^h[2-6]$')
 
-        doc_items = [
-            i for i in book.get_items() if i.get_type() == ebooklib.ITEM_DOCUMENT
-        ]
+        doc_items = self._reading_order(book)
         use_filenames = self._filename_signals_usable(
             [i.get_name() for i in doc_items]
         )
+        running: Optional[int] = None       # the node the reading is in
 
         for item in doc_items:
             content = item.get_content()
@@ -153,71 +241,108 @@ class EPUBExtractor(BaseExtractor):
                 el.decompose()
 
             h1 = soup.find('h1')
-            chapter_title = h1.get_text(strip=True) if h1 else None
+            chapter_title = (' '.join(_block_text(h1).split()) or None) if h1 else None
 
-            text = self._clean_text(soup.get_text(separator='\n\n'))
+            text = self._clean_text(_block_text(soup))
             if not text.strip():
                 continue
 
             item_name = item.get_name()
-            toc_info = toc_map.get(item_name, {})
+            entries = by_file.get(item_name, [])
+            anchored = [(i, a) for i, a in entries if a and soup.find(id=a) is not None]
+            at_start = [i for i, a in entries if (i, a) not in anchored]
 
-            # Section type determined at chapter level — sub-sections inherit.
-            # Untitled items fall back to the filename: index and note files
-            # routinely ship without a heading or TOC entry, and assuming
-            # main content for those puts index entries into search results.
-            display_title = chapter_title or toc_info.get('title') or ''
+            # The file's own classification: its heading, its filename, the
+            # epub:type it opens with. Untitled items fall back to the
+            # filename -- index and note files routinely ship without a
+            # heading or TOC entry.
             start = h1 or soup.find('section') or soup.find('body')
-            chapter_section_type, chapter_region = self._classify(
-                display_title, item_name if use_filenames else '',
-                self._epub_types_at(start),
-            )
+            start_types = self._epub_types_at(start)
+            file_title = chapter_title or (toc[at_start[-1]]['title'] if at_start else '')
+            file_class = self._classify(
+                file_title, item_name if use_filenames else '', start_types)
 
-            # Split by sub-sections.  Prefer anchor-based splitting (uses
-            # the unique element IDs from the TOC hrefs), then h2-h6 tags,
-            # then TOC title text matching as last resort.
-            toc_subs = toc_info.get('sub_sections', [])
-            has_anchors = any(s.get('anchor') for s in toc_subs)
+            # The node the file opens in: the deepest entry pointing at the
+            # file itself; else, for a file with no entry and no heading of
+            # its own -- a converter's continuation of the previous file --
+            # the node the reading is in. A file with a heading of its own
+            # and no entry is a section the nav does not list.
+            if at_start:
+                head_node = at_start[-1]
+            elif chapter_title is None or anchored:
+                head_node = running
+            else:
+                head_node = None
 
-            if has_anchors:
-                sections = self._split_html_by_anchors(soup, toc_subs)
+            if anchored:
+                sections = self._split_html_by_anchors(
+                    soup, [{'title': toc[i]['title'], 'anchor': a, 'node': i}
+                           for i, a in anchored])
             else:
                 sub_headings = [
-                    h.get_text(strip=True)
+                    ' '.join(_block_text(h).split())
                     for h in soup.find_all(_sub_heading_re)
                 ]
-                if not sub_headings:
-                    sub_headings = [s['title'] for s in toc_subs]
                 sections = self._split_text_by_headings(text, sub_headings)
 
             for section in sections:
                 if not section['text'].strip():
                     continue
+                node = section.get('node', head_node)
+                heading = section['heading'] if section.get('node') is None else None
 
-                section_title = section['heading'] or toc_info.get('title')
+                if node is not None and tree is not None:
+                    epub_types = section.get('epub_types') or start_types
+                    base_type, base_region = self._node_class(
+                        node, toc, tree, node_class, epub_types)
+                    names_own = (file_class[1] is not None
+                                 or file_class[0] != SectionType.MAIN_CONTENT)
+                    if node == head_node and names_own and (
+                            not at_start or base_region is None):
+                        # The file's own evidence -- its heading, epub:type
+                        # or filename -- where the node's title names nothing,
+                        # and always in a continuation the nav does not list.
+                        base_type, base_region = file_class
+                    fields = tree.fields_of(node, level)
+                    if chapter_title and node in at_start:
+                        printed[node] = chapter_title
+                    chain = [node] + tree.ancestors(node)
+                    chapter_node = next(
+                        (j for j in chain if tree.nodes[j].depth <= (level or 1)), node)
+                    # The printed heading of the chapter outranks its nav
+                    # title (B1), in every file the chapter runs through.
+                    chapter = (printed.get(chapter_node) or fields.chapter
+                               or toc[node]['title'])
+                    section_title = heading or fields.section_title or None
+                    section_number = fields.section or None
+                else:
+                    base_type, base_region = file_class
+                    chapter = file_title or item_name
+                    section_title = heading
+                    section_number = None
 
-                # A sub-section may name a region of its own -- a chapter's
-                # "Notes", an appendix's "Bibliography"; one that names none
-                # stays in the region of its chapter. Inside an apparatus it
-                # may only name another apparatus: under "Anmerkungen" a
-                # section "Vorwort" holds the notes to the preface.
-                section_type, region = chapter_section_type, chapter_region
-                if section['heading']:
-                    sub_type, sub_region = self._classify(
-                        section['heading'], '', section.get('epub_types', ''))
+                # A heading inside the node may name a region of its own --
+                # a chapter's "Notes"; inside an apparatus only another
+                # apparatus (under "Anmerkungen" a "Vorwort" holds the notes
+                # to the preface).
+                section_type, region = base_type, base_region
+                if heading:
+                    sub_type, sub_region = self._classify(heading)
                     if sub_region is not None and (
-                            chapter_region not in APPARATUS or sub_region in APPARATUS):
+                            base_region not in APPARATUS or sub_region in APPARATUS):
                         section_type, region = sub_type, sub_region
 
                 chapters_text.append(section['text'])
                 chapters_metadata.append({
-                    'chapter': display_title or item_name,
-                    'section': toc_info.get('section'),
+                    'chapter': chapter,
+                    'section': section_number,
                     'section_title': section_title,
                     'section_type': section_type,
                     'region': region,
                     'file': item_name,
                 })
+                if node is not None:
+                    running = node
 
         full_text = '\n\n---\n\n'.join(chapters_text)
 
@@ -365,36 +490,6 @@ class EPUBExtractor(BaseExtractor):
         return values[0][0] if values else None
 
     @staticmethod
-    def _build_toc_map(toc: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """Build a mapping from href (without anchor) to TOC entry info.
-
-        Each file entry contains the chapter-level title plus a list of
-        sub-section dicts ``[{'title': ..., 'anchor': ...}, ...]`` for
-        level-2+ TOC entries that point into the same file.
-        """
-        toc_map: Dict[str, Dict[str, Any]] = {}
-        for entry in toc:
-            href = entry.get('href')
-            if not href:
-                continue
-            parts = href.split('#', 1)
-            href_base = parts[0]
-            anchor = parts[1] if len(parts) > 1 else None
-            if href_base not in toc_map:
-                toc_map[href_base] = {
-                    'section': entry.get('section'),
-                    'title': entry.get('title'),
-                    'level': entry.get('level', 1),
-                    'sub_sections': [],
-                }
-            elif entry.get('level', 1) > 1:
-                toc_map[href_base]['sub_sections'].append({
-                    'title': entry.get('title', ''),
-                    'anchor': anchor,
-                })
-        return toc_map
-
-    @staticmethod
     def _extract_section_number(title: str) -> Optional[str]:
         """
         Extract section number from TOC title.
@@ -467,6 +562,49 @@ class EPUBExtractor(BaseExtractor):
         if contains_keyword(normalized, _FILENAME_BACK_MATTER):
             return SectionType.BACK_MATTER, None
         return SectionType.MAIN_CONTENT, None
+
+    @classmethod
+    def _node_class(cls, node: int, toc: List[Dict[str, Any]], tree: 'Tree',
+                    cache: Dict[int, tuple], epub_types: str = '') -> tuple:
+        """``(section_type, region)`` of a nav node.
+
+        Its own title (and the ``epub:type`` where it begins) if they name a
+        region; otherwise its parent's. Inside an apparatus a node may only
+        name another apparatus -- the rule the sub-sections follow.
+        """
+        if node in cache:
+            return cache[node]
+        own = cls._classify(toc[node].get('title') or '', '', epub_types)
+        ancestors = tree.ancestors(node)
+        parent = cls._node_class(ancestors[0], toc, tree, cache) if ancestors else None
+        if own[1] is not None and (parent is None or parent[1] not in APPARATUS
+                                   or own[1] in APPARATUS):
+            result = own
+        elif parent is not None:
+            result = parent
+        else:
+            result = own
+        cache[node] = result
+        return result
+
+    @staticmethod
+    def _reading_order(book) -> list:
+        """The documents in spine order, then any the spine leaves out.
+
+        The manifest lists files in whatever order the packager wrote them;
+        a node that runs on into the next file needs the order they are read
+        in. Documents outside the spine are kept, at the end, so that no
+        text is lost.
+        """
+        docs = [i for i in book.get_items() if i.get_type() == ebooklib.ITEM_DOCUMENT]
+        by_id = {i.get_id(): i for i in docs}
+        ordered = []
+        for entry in book.spine:
+            idref = entry[0] if isinstance(entry, (tuple, list)) else entry
+            item = by_id.pop(idref, None)
+            if item is not None:
+                ordered.append(item)
+        return ordered + [i for i in docs if i.get_id() in by_id]
 
     @classmethod
     def _detect_section_type(cls, title: str, filename: str = "") -> str:
@@ -555,10 +693,10 @@ class EPUBExtractor(BaseExtractor):
                 continue
             el = soup.find(id=anchor)
             if el:
-                markers.append((el, sub['title']))
+                markers.append((el, sub))
 
         if not markers:
-            text = self._clean_text(soup.get_text(separator='\n\n'))
+            text = self._clean_text(_block_text(soup))
             return [{'heading': None, 'text': text}]
 
         # Place each anchor where it stands in the document, not by its words.
@@ -571,7 +709,7 @@ class EPUBExtractor(BaseExtractor):
         from bs4 import NavigableString
 
         sentinels = []
-        for k, (el, _title) in enumerate(markers):
+        for k, (el, _sub) in enumerate(markers):
             sentinel = NavigableString(f"{_SENTINEL_OPEN}{k}{_SENTINEL_CLOSE}")
             el.insert(0, sentinel)
             sentinels.append(sentinel)
@@ -579,16 +717,19 @@ class EPUBExtractor(BaseExtractor):
         parts: List[str] = []
         length = 0
         split_points: List[tuple] = []  # (char_offset, title, epub:type)
-        for string in body.stripped_strings:
-            hit = _SENTINEL_RE.fullmatch(string)
-            if hit:
-                el, title = markers[int(hit.group(1))]
-                split_points.append((length, title, self._epub_types_at(el)))
+        # A split falls on the beginning of the paragraph its anchor stands
+        # in: an anchor sits at the head of its heading, never mid-sentence.
+        for text, marks in _blocks(body, _SENTINEL_RE):
+            start = length + 2 if parts and text else length
+            for k in marks:
+                el, sub = markers[k]
+                split_points.append((start, sub, self._epub_types_at(el)))
+            if not text:
                 continue
             if parts:
-                length += 2  # the '\n\n' that joins the strings
-            parts.append(string)
-            length += len(string)
+                length += 2  # the '\n\n' that joins the paragraphs
+            parts.append(text)
+            length += len(text)
         for sentinel in sentinels:
             sentinel.extract()
         full_text = '\n\n'.join(parts)
@@ -605,15 +746,18 @@ class EPUBExtractor(BaseExtractor):
             sections.append({'heading': None, 'text': self._clean_text(intro)})
 
         # Sections between markers
-        for i, (offset, title, epub_types) in enumerate(split_points):
+        for i, (offset, sub, epub_types) in enumerate(split_points):
             end = split_points[i + 1][0] if i + 1 < len(split_points) else len(full_text)
             section_text = full_text[offset:end].strip()
             if section_text:
-                sections.append({
-                    'heading': title,
+                section = {
+                    'heading': sub['title'],
                     'text': self._clean_text(section_text),
                     'epub_types': epub_types,
-                })
+                }
+                if sub.get('node') is not None:
+                    section['node'] = sub['node']
+                sections.append(section)
 
         return sections
 
@@ -622,8 +766,7 @@ class EPUBExtractor(BaseExtractor):
         soup = BeautifulSoup(content, 'html.parser')
         for element in soup(['script', 'style']):
             element.decompose()
-        text = soup.get_text(separator='\n\n')
-        return self._clean_text(text)
+        return self._clean_text(_block_text(soup))
 
     def _create_chunks_with_chapters(
         self,

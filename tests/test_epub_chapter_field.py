@@ -64,5 +64,24 @@ def test_printed_h1_outranks_the_toc_title(chapter_by_file):
     assert chapter_by_file["printed"] == "Gedruckte Überschrift"
 
 
-def test_file_name_remains_the_last_resort(chapter_by_file):
-    assert chapter_by_file["bare"] == "bare.xhtml"
+def test_a_file_without_entry_or_heading_continues_the_chapter(chapter_by_file):
+    """A converter splits a chapter into several files and lists only the
+    first; the rest are the same chapter, not a file name (Gliederung B7)."""
+    assert chapter_by_file["bare"] == "Gedruckte Überschrift"
+
+
+def test_file_name_remains_the_last_resort(tmp_path):
+    book = epub.EpubBook()
+    book.set_identifier("b7-fixture")
+    book.set_title("Fixture")
+    book.set_language("de")
+    book.add_author("Anonymus")
+    lone = _document("lone.xhtml", "<p>Absatz lone ohne alles.</p>")
+    book.add_item(lone)
+    book.add_item(epub.EpubNcx())
+    book.add_item(epub.EpubNav())
+    book.spine = [lone]
+    path = tmp_path / "lone.epub"
+    epub.write_epub(str(path), book)
+    chunks = EPUBExtractor().extract(path).chunks
+    assert {c["metadata"]["chapter"] for c in chunks if "lone" in c["text"]} == {"lone.xhtml"}

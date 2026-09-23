@@ -94,29 +94,6 @@ class TestSplitTextByHeadings:
         assert "chosen by the church" in result[4]['text']
 
 
-class TestBuildTocMap:
-    build = staticmethod(EPUBExtractor._build_toc_map)
-
-    def test_first_entry_per_file_wins(self):
-        """When multiple TOC entries point to the same file, keep the first."""
-        toc = [
-            {'title': 'Chapter 2', 'level': 1, 'href': 'text00007.html'},
-            {'title': 'Sub-Section A', 'level': 2, 'href': 'text00007.html#sub_a'},
-            {'title': 'Sub-Section B', 'level': 2, 'href': 'text00007.html#sub_b'},
-        ]
-        result = self.build(toc)
-        assert result['text00007.html']['title'] == 'Chapter 2'
-        assert result['text00007.html']['level'] == 1
-
-    def test_different_files_kept(self):
-        toc = [
-            {'title': 'Chapter 1', 'level': 1, 'href': 'ch01.html'},
-            {'title': 'Chapter 2', 'level': 1, 'href': 'ch02.html'},
-        ]
-        result = self.build(toc)
-        assert 'ch01.html' in result
-        assert 'ch02.html' in result
-
 
 class TestSectionTypeFromFilename:
     """Paratext must be recognised when the EPUB gives it no readable title.
