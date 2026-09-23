@@ -85,14 +85,16 @@ def _block_of(string) -> Any:
 
 
 def _blocks(root, sentinel_re: Optional['re.Pattern'] = None) -> List[tuple]:
-    """The paragraphs of an element: ``[(text, [sentinel ids]), ...]``.
+    """The paragraphs of an element: ``[(text, [(sentinel id, offset)]), ...]``.
 
     Consecutive strings under the same block element are one paragraph,
     joined without a separator (the markup between them carries its own
     spaces) and with runs of whitespace collapsed. A ``<br>`` ends the
     paragraph it stands in. Strings matching ``sentinel_re`` are taken out of
     the text and reported with the paragraph they stood in, so that a split
-    can fall on its beginning.
+    can fall on its beginning; ``offset`` is how much of the paragraph's
+    text came before the sentinel (0 at its start; more for a page break
+    mid-paragraph).
     """
     from bs4 import (Comment, Declaration, Doctype, NavigableString,
                      ProcessingInstruction, Tag)
@@ -124,11 +126,124 @@ def _blocks(root, sentinel_re: Optional['re.Pattern'] = None) -> List[tuple]:
             current = block
         hit = sentinel_re.fullmatch(str(node)) if sentinel_re else None
         if hit:
-            marks.append(int(hit.group(1)))
+            marks.append((int(hit.group(1)), len(' '.join(''.join(parts).split()))))
         else:
             parts.append(str(node))
     flush()
     return out
+
+
+# Marks the place of a page-list target (private use, apart from the nav ones).
+_PAGE_OPEN, _PAGE_CLOSE = chr(0xE002), chr(0xE003)
+_PAGE_SENTINEL_RE = re.compile(re.escape(_PAGE_OPEN) + r"(\d+)" + re.escape(_PAGE_CLOSE))
+
+# A page-list label as the reader sees it: "[S. 5]", "p. xiv", "Seite 12".
+# The prefix is the reader's language, not the page (Befund Gliederung §6.1).
+_LABEL_PREFIX = re.compile(
+    r"^\[?\s*(?:s\.|seite|p\.|pp\.|page|pag\.|pág\.|bl\.)?\s*", re.IGNORECASE)
+# What is read as a label at all; anything else is not guessed.
+_LABEL_OK = re.compile(r"^(?:\d{1,4}[a-z]?|[ivxlcdm]{1,8})$", re.IGNORECASE)
+
+
+def _page_label(text: str) -> Optional[str]:
+    """The printed page a page-list entry names, or None if it names none."""
+    label = _LABEL_PREFIX.sub('', ' '.join((text or '').split())).rstrip('] ').strip()
+    return label if _LABEL_OK.match(label) else None
+
+
+def _page_targets(book) -> Dict[str, List[tuple]]:
+    """``file -> [(anchor or None, label), ...]`` from the package's page list.
+
+    EPUB 3 declares it as ``<nav epub:type="page-list">``, EPUB 2 as the
+    NCX ``pageList``; hrefs are resolved against the document that holds
+    them, so the keys are item names. Entries whose label is not a page are
+    dropped rather than guessed.
+    """
+    import posixpath
+
+    targets: Dict[str, List[tuple]] = defaultdict(list)
+    for item in book.get_items():
+        name = item.get_name() or ''
+        try:
+            content = item.get_content()
+        except Exception:  # noqa: BLE001
+            continue
+        if not content or (b'page-list' not in content and b'pageList' not in content
+                           and b'pagelist' not in content.lower()):
+            continue
+        soup = BeautifulSoup(content, 'html.parser')
+        pairs = []
+        for nav in soup.find_all('nav'):
+            if 'page-list' in (nav.get('epub:type') or '').split():
+                pairs += [(a.get_text(), a.get('href')) for a in nav.find_all('a')]
+        for target in soup.find_all('pagetarget'):
+            text = target.find('text')
+            content_el = target.find('content')
+            pairs.append((text.get_text() if text else target.get('value', ''),
+                          content_el.get('src') if content_el else None))
+        base = posixpath.dirname(name)
+        for text, href in pairs:
+            label = _page_label(text)
+            if not href or label is None:
+                continue
+            file, _, anchor = href.partition('#')
+            path = posixpath.normpath(posixpath.join(base, file)) if file else name
+            targets[path].append((anchor or None, label))
+        if targets:
+            break
+    return targets
+
+
+def _paragraph_pages(soup, targets: List[tuple], carry: Optional[str]) -> tuple:
+    """The printed page at the start of each paragraph of a file.
+
+    Returns ``(pages, carry)``: per paragraph of ``_block_text`` a pair
+    ``(start, breaks)`` -- the page its first word stands on, and the page
+    breaks inside it as ``(offset, label)`` -- and the label the file ends
+    on. A chunk carries the page of its first character, and a chunk the
+    chunker cut out of a long paragraph finds it among the breaks.
+    """
+    from bs4 import NavigableString
+
+    # A file whose first page lies before the page the reading is on is not
+    # its continuation -- a notes file gathered at the end of the book
+    # (Steuer [7237]: after the index on 1625, notes on 1021). What precedes
+    # its first break has no page anyone stated, and none is guessed.
+    first = targets[0][1] if targets else None
+    if (first and carry and first.isdigit() and carry.isdigit()
+            and int(first) < int(carry)):
+        carry = None
+
+    sentinels, labels = [], []
+    for anchor, label in targets:
+        if anchor is None:
+            carry = label           # the target is the file itself
+            continue
+        el = soup.find(id=anchor)
+        if el is None:
+            continue
+        sentinel = NavigableString(f"{_PAGE_OPEN}{len(labels)}{_PAGE_CLOSE}")
+        el.insert(0, sentinel)
+        sentinels.append(sentinel)
+        labels.append(label)
+    pages: List[tuple] = []
+    pending: Optional[str] = None   # a break standing in an empty block
+    for text, marks in _blocks(soup, _PAGE_SENTINEL_RE):
+        at_start = [labels[k] for k, offset in marks if offset == 0]
+        inside = [(offset, labels[k]) for k, offset in marks if offset > 0]
+        if not text:
+            if marks:
+                pending = labels[marks[-1][0]]
+            continue
+        start = at_start[-1] if at_start else (pending or carry)
+        pending = None
+        pages.append((start, inside))
+        carry = inside[-1][1] if inside else start
+    for sentinel in sentinels:
+        sentinel.extract()
+    if pending:
+        carry = pending
+    return pages, carry
 
 
 def _block_text(root) -> str:
@@ -231,6 +346,9 @@ class EPUBExtractor(BaseExtractor):
             [i.get_name() for i in doc_items]
         )
         running: Optional[int] = None       # the node the reading is in
+        # The print edition's pages, where the package declares them.
+        page_targets = _page_targets(book)
+        page_carry: Optional[str] = None    # the page the reading is on
 
         for item in doc_items:
             content = item.get_content()
@@ -243,11 +361,17 @@ class EPUBExtractor(BaseExtractor):
             h1 = soup.find('h1')
             chapter_title = (' '.join(_block_text(h1).split()) or None) if h1 else None
 
+            item_name = item.get_name()
+            file_pages: Optional[List[Optional[str]]] = None
+            if page_targets:
+                file_pages, page_carry = _paragraph_pages(
+                    soup, page_targets.get(item_name, []), page_carry)
+
             text = self._clean_text(_block_text(soup))
             if not text.strip():
                 continue
-
-            item_name = item.get_name()
+            file_paras = text.split('\n\n')
+            para_at = 0                     # where the next section's text begins
             entries = by_file.get(item_name, [])
             anchored = [(i, a) for i, a in entries if a and soup.find(id=a) is not None]
             at_start = [i for i, a in entries if (i, a) not in anchored]
@@ -332,6 +456,21 @@ class EPUBExtractor(BaseExtractor):
                             base_region not in APPARATUS or sub_region in APPARATUS):
                         section_type, region = sub_type, sub_region
 
+                # The printed page of each paragraph: the section's paragraphs
+                # are the file's, in order, so they are found by walking on.
+                para_pages = None
+                if file_pages is not None and len(file_pages) == len(file_paras):
+                    para_pages = []
+                    for para in section['text'].split('\n\n'):
+                        k = para_at
+                        while k < len(file_paras) and file_paras[k] != para:
+                            k += 1
+                        if k < len(file_paras):
+                            para_pages.append(file_pages[k])
+                            para_at = k + 1
+                        else:
+                            para_pages.append(None)
+
                 chapters_text.append(section['text'])
                 chapters_metadata.append({
                     'chapter': chapter,
@@ -340,6 +479,7 @@ class EPUBExtractor(BaseExtractor):
                     'section_type': section_type,
                     'region': region,
                     'file': item_name,
+                    'para_pages': para_pages,
                 })
                 if node is not None:
                     running = node
@@ -359,6 +499,13 @@ class EPUBExtractor(BaseExtractor):
             total_chunks=len(chunks),
         )
         extraction_metadata.warnings.append("Extracted with ebooklib")
+        if page_targets:
+            # The edition the page list refers to, where the package names it
+            # (Befund Gliederung §6.1: a log line, no column on this path).
+            source = self._get_dc_metadata(book, 'source')
+            extraction_metadata.warnings.append(
+                f"Page list: {sum(len(v) for v in page_targets.values())} targets, "
+                f"print edition {source or 'not named'} (label_source catalogue)")
 
         return ExtractedText(
             full_text=full_text,
@@ -721,7 +868,7 @@ class EPUBExtractor(BaseExtractor):
         # in: an anchor sits at the head of its heading, never mid-sentence.
         for text, marks in _blocks(body, _SENTINEL_RE):
             start = length + 2 if parts and text else length
-            for k in marks:
+            for k, _offset in marks:
                 el, sub = markers[k]
                 split_points.append((start, sub, self._epub_types_at(el)))
             if not text:
@@ -793,9 +940,42 @@ class EPUBExtractor(BaseExtractor):
             )
 
             chapter_chunks = self._create_chunks(chapter_text, base_metadata)
+            para_pages = chapter_meta.get('para_pages')
+            if para_pages:
+                self._assign_pages(chapter_chunks, chapter_text.split('\n\n'), para_pages)
             chunks.extend(chapter_chunks)
 
         return chunks
+
+    @staticmethod
+    def _assign_pages(chunks: List[Dict[str, Any]], paras: List[str],
+                      pages: List[Optional[str]]) -> None:
+        """Give each chunk the printed page of its first paragraph.
+
+        The page comes from the package's page list: stated, not seen on a
+        page, so ``label_source`` is ``catalogue`` (spec §6.3, Befund
+        Gliederung §6.1) and ``page`` stays 0 -- an EPUB has no physical
+        page. The chunk's first paragraph is found by its opening words; a
+        paragraph the chunker cut is found by the words of its piece.
+        """
+        k = 0
+        for chunk in chunks:
+            first = chunk['text'].split('\n\n', 1)[0].strip()[:80]
+            j = k
+            while j < len(paras) and first not in paras[j]:
+                j += 1
+            if j == len(paras) or pages[j] is None:
+                continue
+            k = j
+            label, breaks = pages[j]
+            at = paras[j].find(first)
+            for offset, inside in breaks:
+                if offset <= at:
+                    label = inside
+            if label:
+                chunk['metadata']['page_label'] = label
+                chunk['metadata']['label_source'] = 'catalogue'
+                chunk['metadata']['page'] = 0
 
     @staticmethod
     def _clean_text(text: str) -> str:
