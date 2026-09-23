@@ -49,8 +49,14 @@ History
          put a whole file into its last sub-section, so every chunk of the
          file named that section (Le Goff [4031]; about 8 % of EPUBs). Both
          ``section_title`` and the chunk boundaries change for those books.
+``4``    EPUB and PDF sections are classified by Scriptor's region vocabulary
+         (Gliederung B7, absorbing seam step S7): the whole title must name
+         the region, ``epub:type`` outranks the title, prefaces and
+         appendices stay searchable, glossaries and lists of illustrations
+         leave the search as ``lists``. ``section_type`` changes for rows of
+         both formats, and EPUB rows now carry ``region``.
 """
 
 from __future__ import annotations
 
-PIPELINE_VERSION = "3"
+PIPELINE_VERSION = "4"

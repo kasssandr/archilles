@@ -163,8 +163,6 @@ class TestCorpusData:
     def test_toc_keywords_union_all_languages(self):
         kw = i18n.get_toc_keywords()
         assert "chapter" in kw and "kapitel" in kw
-        front = i18n.get_toc_front_matter_keywords()
-        assert "preface" in front and "vorwort" in front
 
     def test_dialogue_markers_drop_private_name(self):
         markers = i18n.get_dialogue_user_markers()

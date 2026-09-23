@@ -396,36 +396,10 @@ def get_stopwords(languages: list[str] | None) -> set[str]:
     return out
 
 
-# TOC / section-classification keywords (findings 2.2, 6.15). Per-language for
-# maintainability; getters return the union of *all* known languages (Option B,
-# not language-filtered — P1 word-boundary matching prevents cross-language
-# false hits like 'notes' in 'banknotes').
-TOC_FRONT_MATTER: dict[str, frozenset[str]] = {
-    "en": frozenset({
-        'preface', 'foreword', 'acknowledgments', 'acknowledgements',
-        'table of contents', 'contents', 'toc', 'dedication',
-        'about the author', 'about this book', 'prologue', 'copyright', 'isbn',
-        'title page', 'half title', 'frontispiece',
-        'list of illustrations', 'list of maps',
-    }),
-    "de": frozenset({
-        'vorwort', 'geleitwort', 'danksagung', 'inhaltsverzeichnis', 'inhalt',
-        'widmung', 'über den autor', 'prolog',
-    }),
-}
-TOC_BACK_MATTER: dict[str, frozenset[str]] = {
-    "en": frozenset({
-        'index', 'bibliography', 'references', 'glossary', 'appendix',
-        'notes', 'endnotes', 'epilogue', 'afterword', 'abbreviations',
-        'about the publisher', 'colophon',
-    }),
-    "de": frozenset({
-        'register', 'sachregister', 'personenregister', 'namenregister',
-        'bibliographie', 'literaturverzeichnis', 'literatur', 'quellenverzeichnis',
-        'glossar', 'anhang', 'anmerkungen', 'endnoten', 'epilog', 'nachwort',
-        'abkürzungen', 'abkürzungsverzeichnis',
-    }),
-}
+# Classifying a section by its title is Scriptor's region vocabulary since
+# outline step B7 (src/extractors/scriptor_extractor.region_of_title); the
+# front- and back-matter word lists that stood here are gone with it.
+#
 # Generic TOC markers used to filter short highlights (annotations).
 TOC_GENERIC: dict[str, frozenset[str]] = {
     "en": frozenset({
@@ -444,16 +418,6 @@ def _union(per_lang: dict[str, frozenset[str]]) -> frozenset[str]:
     for words in per_lang.values():
         out |= words
     return frozenset(out)
-
-
-def get_toc_front_matter_keywords() -> frozenset[str]:
-    """All known front-matter TOC keywords (not language-filtered)."""
-    return _union(TOC_FRONT_MATTER)
-
-
-def get_toc_back_matter_keywords() -> frozenset[str]:
-    """All known back-matter TOC keywords (not language-filtered)."""
-    return _union(TOC_BACK_MATTER)
 
 
 def get_toc_keywords() -> frozenset[str]:

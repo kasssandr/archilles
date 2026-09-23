@@ -50,10 +50,11 @@
 > der wie jeder Apparat aus der Standardsuche fällt. `appendix` gehört nicht
 > mehr zum Apparat: Anhänge bleiben suchbar ([DECISIONS.md](DECISIONS.md),
 > Region → `section_type`). Archilles liest die Menge aus Scriptors
-> `APPARATUS` und zieht damit ohne Codeänderung nach. Bis B7/B8 gilt das nur
-> für den Scriptor-Pfad; EPUB- und PDF-Pfad schließen Anhänge noch über ihre
-> eigenen Wortlisten aus. Ein 0.5.0-Master läuft unverändert durch den
-> `ScriptorExtractor` (Major 0).
+> `APPARATUS` und zieht damit ohne Codeänderung nach. Seit B7 klassifizieren
+> auch der EPUB-Pfad und die Verzeichnistitel des PDF-Pfads mit Scriptors
+> Vokabular (`PIPELINE_VERSION` 4); nur die Seitenheuristik des PDF-Pfads
+> behält bis B8 ihre eigene Wortliste. Ein 0.5.0-Master läuft unverändert
+> durch den `ScriptorExtractor` (Major 0).
 
 > **Evidenzkette, 2026-09-20.** Aus einem Industrie-Befund zur Belegkette
 > (`archilles-scriptor/docs/internal/BRIEFING_EVIDENZKETTE_2026-09-20.md`)

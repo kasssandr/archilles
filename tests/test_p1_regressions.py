@@ -535,7 +535,7 @@ class TestSectionClassificationBoundaries:
 
         assert (EPUBExtractor._detect_section_type("The Geneva Protocol")
                 == SectionType.MAIN_CONTENT)
-        assert (EPUBExtractor._detect_section_type("TOC")
+        assert (EPUBExtractor._detect_section_type("Table of Contents")
                 == SectionType.FRONT_MATTER)
 
     def test_introduction_page_stays_main_content(self):

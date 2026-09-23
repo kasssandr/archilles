@@ -138,10 +138,13 @@ class TestSectionTypeFromFilename:
         "OEBPS/endnotes.html",
         "bibliography.xhtml",
         "glossary.html",
-        "Text/081_appendix-m.html",
     ])
     def test_untitled_back_matter_detected_from_filename(self, filename):
         assert self.detect("", filename) == SectionType.BACK_MATTER
+
+    def test_an_appendix_file_stays_searchable(self):
+        # An appendix is not apparatus (user decision, 2026-09-23).
+        assert self.detect("", "Text/081_appendix-m.html") == SectionType.MAIN_CONTENT
 
     @pytest.mark.parametrize("filename", [
         "index_split_033.html",
@@ -187,7 +190,9 @@ class TestSectionTypeFromFilename:
 
     def test_title_still_detected_without_filename(self):
         assert self.detect("Bibliography") == SectionType.BACK_MATTER
-        assert self.detect("Preface") == SectionType.FRONT_MATTER
+        assert self.detect("Contents") == SectionType.FRONT_MATTER
+        # A preface is named but searchable (user decision, 2026-09-10).
+        assert self.detect("Preface") == SectionType.MAIN_CONTENT
 
     def test_no_title_and_no_filename_is_main_content(self):
         assert self.detect("", "") == SectionType.MAIN_CONTENT

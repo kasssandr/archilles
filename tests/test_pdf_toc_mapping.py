@@ -114,20 +114,26 @@ class TestSectionTypeFromTocTitle:
     """Tests for PDFExtractor._section_type_from_toc_title()."""
 
     @pytest.mark.parametrize("title", [
-        'Preface', 'VORWORT', 'Foreword', 'Geleitwort',
-        'Table of Contents', 'INHALTSVERZEICHNIS', 'Inhalt',
-        'Acknowledgments', 'Danksagung', 'Dedication', 'Widmung',
-        'Copyright', 'Prologue',
+        'Table of Contents', 'INHALTSVERZEICHNIS', 'Inhalt', 'Title Page', 'Impressum',
     ])
     def test_front_matter(self, title):
         assert PDFExtractor._section_type_from_toc_title(title) == 'front_matter'
 
     @pytest.mark.parametrize("title", [
+        'Preface', 'VORWORT', 'Geleitwort', 'Acknowledgments', 'Danksagung',
+        'Appendix', 'Anhang', 'Appendix C. Dream Transcripts',
+    ])
+    def test_prefaces_and_appendices_stay_searchable(self, title):
+        """User decisions of 2026-09-10 (preface) and 2026-09-23 (appendix):
+        both are named, neither is apparatus."""
+        assert PDFExtractor._section_type_from_toc_title(title) == 'main_content'
+
+    @pytest.mark.parametrize("title", [
         'Index', 'REGISTER', 'Sachregister', 'Personenregister',
         'Bibliography', 'BIBLIOGRAPHIE', 'Literaturverzeichnis',
-        'Glossary', 'Glossar', 'Appendix', 'Anhang',
-        'Notes', 'Endnotes', 'Anmerkungen', 'Nachwort', 'Afterword',
-        'Abbreviations', 'Abkürzungsverzeichnis',
+        'Glossary', 'Glossar', 'List of Illustrations',
+        'Notes', 'Endnotes', 'Anmerkungen',
+        'Abbreviations', 'Abkürzungsverzeichnis', 'Index of Modern Authors',
     ])
     def test_back_matter(self, title):
         assert PDFExtractor._section_type_from_toc_title(title) == 'back_matter'
@@ -136,19 +142,27 @@ class TestSectionTypeFromTocTitle:
         'Chapter I: The Temple', 'A. Einleitung', 'Introduction',
         '3. The Roman Empire', 'Part II: Networks',
         'Einleitung', 'Einführung',
+        # Named nothing by Scriptor's vocabulary, so running text (M2: an
+        # epilogue is argument; a dedication or copyright page is too short
+        # to matter either way).
+        'Nachwort', 'Afterword', 'Prologue', 'Foreword', 'Dedication', 'Widmung',
+        'Copyright',
     ])
     def test_main_content(self, title):
-        """Regular chapter titles and introductions return None (→ main_content fallback)."""
+        """Titles that name no region return None (→ main_content fallback)."""
         assert PDFExtractor._section_type_from_toc_title(title) is None
 
     def test_case_insensitive(self):
         assert PDFExtractor._section_type_from_toc_title('BIBLIOGRAPHY') == 'back_matter'
-        assert PDFExtractor._section_type_from_toc_title('vorwort') == 'front_matter'
+        assert PDFExtractor._section_type_from_toc_title('inhaltsverzeichnis') == 'front_matter'
 
-    def test_keyword_in_longer_title(self):
+    def test_the_whole_title_must_name_the_region(self):
         assert PDFExtractor._section_type_from_toc_title(
             'D. BIBLIOGRAPHIE UND QUELLEN'
         ) == 'back_matter'
         assert PDFExtractor._section_type_from_toc_title(
+            'Literatur und Mehrsprachigkeit'
+        ) is None
+        assert PDFExtractor._section_type_from_toc_title(
             'Preface to the Second Edition'
-        ) == 'front_matter'
+        ) is None

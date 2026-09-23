@@ -14,15 +14,15 @@ try:
 except ImportError:
     EBOOKLIB_AVAILABLE = False
 
+from scriptor.reflow.regions import APPARATUS
+from scriptor.structure import region_for_epub_type
+
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
-from src.archilles.i18n import (
-    get_toc_back_matter_keywords,
-    get_toc_front_matter_keywords,
-)
 from .base import BaseExtractor
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import EPUBExtractionError
+from .scriptor_extractor import region_of_title, region_to_section_type
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,10 @@ _SECTION_NUM_LABEL = re.compile(r'(?:Chapter|Section)\s+(\d+(?:\.\d+)*)', re.IGN
 _SENTINEL_OPEN, _SENTINEL_CLOSE = chr(0xE000), chr(0xE001)  # private use, never in a book
 _SENTINEL_RE = re.compile(re.escape(_SENTINEL_OPEN) + r"(\d+)" + re.escape(_SENTINEL_CLOSE))
 
-# Section type classification patterns — sourced from the central corpus-
-# language data (i18n); not language-filtered. This also gives EPUBs German
-# section detection, which the previous English-only set lacked.
-# NB: "introduction"/"einleitung" are deliberately NOT classified here —
-# introductions are substantive content and belong to main_content.
-_FRONT_MATTER_PATTERNS = get_toc_front_matter_keywords()
-_BACK_MATTER_PATTERNS = get_toc_back_matter_keywords()
-
+# A title is classified by Scriptor's region vocabulary (region_of_title), the
+# same on every path (outline B7, absorbing seam step S7): the whole title
+# must name the region, so "Literatur und Mehrsprachigkeit" stays a chapter.
+#
 # Filename conventions for sections that carry no heading and no TOC entry.
 # Deliberately narrow and English-only: these are EPUB packaging conventions
 # produced by conversion tools, not prose titles, so the multilingual TOC
@@ -50,11 +46,12 @@ _BACK_MATTER_PATTERNS = get_toc_back_matter_keywords()
 # index about as often as it means the converter's source document, and a
 # sampled check found `index_split_*.html` files carrying ordinary prose.
 # Hiding main content is worse than leaving an index visible, and real
-# indexes are usually caught by their TOC title anyway.
+# indexes are usually caught by their TOC title anyway. 'appendix' is absent
+# for the reason an appendix is not apparatus (user decision, 2026-09-23).
 _FILENAME_BACK_MATTER = frozenset({
     'note', 'notes', 'footnote', 'footnotes',
     'endnote', 'endnotes', 'bibliography', 'biblio', 'references',
-    'glossary', 'appendix', 'colophon',
+    'glossary', 'colophon',
 })
 _FILENAME_FRONT_MATTER = frozenset({
     'cover', 'titlepage', 'halftitle', 'frontmatter',
@@ -170,8 +167,10 @@ class EPUBExtractor(BaseExtractor):
             # routinely ship without a heading or TOC entry, and assuming
             # main content for those puts index entries into search results.
             display_title = chapter_title or toc_info.get('title') or ''
-            chapter_section_type = self._detect_section_type(
-                display_title, item_name if use_filenames else ''
+            start = h1 or soup.find('section') or soup.find('body')
+            chapter_section_type, chapter_region = self._classify(
+                display_title, item_name if use_filenames else '',
+                self._epub_types_at(start),
             )
 
             # Split by sub-sections.  Prefer anchor-based splitting (uses
@@ -197,12 +196,26 @@ class EPUBExtractor(BaseExtractor):
 
                 section_title = section['heading'] or toc_info.get('title')
 
+                # A sub-section may name a region of its own -- a chapter's
+                # "Notes", an appendix's "Bibliography"; one that names none
+                # stays in the region of its chapter. Inside an apparatus it
+                # may only name another apparatus: under "Anmerkungen" a
+                # section "Vorwort" holds the notes to the preface.
+                section_type, region = chapter_section_type, chapter_region
+                if section['heading']:
+                    sub_type, sub_region = self._classify(
+                        section['heading'], '', section.get('epub_types', ''))
+                    if sub_region is not None and (
+                            chapter_region not in APPARATUS or sub_region in APPARATUS):
+                        section_type, region = sub_type, sub_region
+
                 chapters_text.append(section['text'])
                 chapters_metadata.append({
                     'chapter': display_title or item_name,
                     'section': toc_info.get('section'),
                     'section_title': section_title,
-                    'section_type': chapter_section_type,
+                    'section_type': section_type,
+                    'region': region,
                     'file': item_name,
                 })
 
@@ -422,37 +435,59 @@ class EPUBExtractor(BaseExtractor):
         )
 
     @staticmethod
-    def _detect_section_type(title: str, filename: str = "") -> str:
-        """
-        Detect if section is front matter, main content, or back matter.
+    def _classify(title: str, filename: str = "",
+                  epub_types: str = "") -> tuple[str, Optional[str]]:
+        """``(section_type, region)`` of a section.
 
         Args:
-            title: Chapter heading or TOC title. Authoritative when present.
-            filename: EPUB item name, used only when there is no title —
-                many EPUBs ship their index, notes and front matter without
-                a heading or TOC entry, and the filename is then the only
-                identifier left (``index_split_033.html``).
+            title: Chapter heading or TOC title.
+            filename: EPUB item name, used only when there is no title and no
+                ``epub:type`` — many EPUBs ship their index, notes and front
+                matter without a heading or TOC entry, and the filename is
+                then the only identifier left (``index_split_033.html``).
+            epub_types: the ``epub:type`` of the element the section begins
+                in. The publisher's own statement, so it outranks the title.
 
-        Returns:
-            'front_matter', 'main_content', or 'back_matter'
+        The region is Scriptor's name (spec §4.4) and is stored beside the
+        section type; a filename is no region, so it yields None there.
         """
-        # Word-boundary matching (finding 2.2): substring checks turned
-        # 'protocol' into front matter ('toc') and excluded chapters.
-        if contains_keyword(title, _FRONT_MATTER_PATTERNS):
-            return SectionType.FRONT_MATTER
-        if contains_keyword(title, _BACK_MATTER_PATTERNS):
-            return SectionType.BACK_MATTER
+        region = region_for_epub_type(epub_types) if epub_types else None
+        if region is None:
+            region = region_of_title(title)
+        if region is not None:
+            return region_to_section_type(region), region
         if title:
             # A readable heading outranks a packaging convention: a chapter
             # that merely lives in index_split_*.html is still a chapter.
-            return SectionType.MAIN_CONTENT
+            return SectionType.MAIN_CONTENT, None
 
         normalized = _normalize_item_name(filename)
         if contains_keyword(normalized, _FILENAME_FRONT_MATTER):
-            return SectionType.FRONT_MATTER
+            return SectionType.FRONT_MATTER, None
         if contains_keyword(normalized, _FILENAME_BACK_MATTER):
-            return SectionType.BACK_MATTER
-        return SectionType.MAIN_CONTENT
+            return SectionType.BACK_MATTER, None
+        return SectionType.MAIN_CONTENT, None
+
+    @classmethod
+    def _detect_section_type(cls, title: str, filename: str = "") -> str:
+        """'front_matter', 'main_content' or 'back_matter' — see ``_classify``."""
+        return cls._classify(title, filename)[0]
+
+    @staticmethod
+    def _epub_types_at(el) -> str:
+        """The ``epub:type`` of an element or the nearest section around it.
+
+        A publisher marks the partition on ``<body>`` or on a ``<section>``;
+        the element a heading or an anchor stands on rarely carries it.
+        """
+        while el is not None and getattr(el, 'name', None):
+            types = el.get('epub:type') if hasattr(el, 'get') else None
+            if types:
+                return types
+            if el.name in ('body', 'html'):
+                break
+            el = el.parent
+        return ''
 
     @staticmethod
     def _split_text_by_headings(
@@ -543,11 +578,12 @@ class EPUBExtractor(BaseExtractor):
         body = soup.find('body') or soup
         parts: List[str] = []
         length = 0
-        split_points: List[tuple] = []  # (char_offset, title)
+        split_points: List[tuple] = []  # (char_offset, title, epub:type)
         for string in body.stripped_strings:
             hit = _SENTINEL_RE.fullmatch(string)
             if hit:
-                split_points.append((length, markers[int(hit.group(1))][1]))
+                el, title = markers[int(hit.group(1))]
+                split_points.append((length, title, self._epub_types_at(el)))
                 continue
             if parts:
                 length += 2  # the '\n\n' that joins the strings
@@ -569,13 +605,14 @@ class EPUBExtractor(BaseExtractor):
             sections.append({'heading': None, 'text': self._clean_text(intro)})
 
         # Sections between markers
-        for i, (offset, title) in enumerate(split_points):
+        for i, (offset, title, epub_types) in enumerate(split_points):
             end = split_points[i + 1][0] if i + 1 < len(split_points) else len(full_text)
             section_text = full_text[offset:end].strip()
             if section_text:
                 sections.append({
                     'heading': title,
                     'text': self._clean_text(section_text),
+                    'epub_types': epub_types,
                 })
 
         return sections
@@ -609,6 +646,7 @@ class EPUBExtractor(BaseExtractor):
                 section=chapter_meta.get('section'),
                 section_title=chapter_meta.get('section_title'),
                 section_type=chapter_meta.get('section_type', SectionType.MAIN_CONTENT),
+                region=chapter_meta.get('region'),
             )
 
             chapter_chunks = self._create_chunks(chapter_text, base_metadata)
