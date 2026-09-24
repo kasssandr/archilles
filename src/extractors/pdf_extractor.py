@@ -18,12 +18,15 @@ try:
 except ImportError:
     PYMUPDF_AVAILABLE = False
 
+from scriptor.reflow.outline import OutlineEntry, credible
+from scriptor.structure import Tree
+
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
 from .base import BaseExtractor
 from .exceptions import PDFExtractionError
 from .models import ChunkMetadata, ExtractedText
-from .scriptor_extractor import region_of_title, region_to_section_type
+from .scriptor_extractor import node_regions, region_of_title, region_to_section_type
 from .ocr_extractor import (
     OCRBackend,
     detect_scanned_pdf,
@@ -439,66 +442,58 @@ class PDFExtractor(BaseExtractor):
     @staticmethod
     def _build_page_toc_map(
         toc: List[Dict[str, Any]],
-    ) -> Dict[int, Dict[str, str]]:
+        last_page: Optional[int] = None,
+    ) -> Dict[int, Dict[str, Optional[str]]]:
+        """The outline as a tree, read per physical page (outline B8).
+
+        Returns ``{page: {chapter, section_title, section, region}}``. Each
+        entry is a node (depth = outline level, place = physical page); a
+        page belongs to the node that began on it or last before it, and its
+        fields are Scriptor's ``fields_of`` on the volume's ``chapter_level``
+        -- not "level 1 is the chapter", which made parts the chapters and a
+        "Cover" beside them one more. An outline Scriptor would not believe
+        (``outline.credible``: junk, page bookmarks, one page) maps nothing.
+        Pages before the first entry are left out; the last entry runs to
+        ``last_page`` (default: its own page).
         """
-        Build a mapping from physical page number to chapter/section info.
-
-        Returns {page_number: {chapter, section_title, toc_section_type}}
-        where toc_section_type is derived from TOC title keywords.
-        """
-        if not toc or len(toc) < 3:
+        # Whitespace as the EPUB path reads it: an outline may carry no-break
+        # spaces ("Art. 17\xa0DSM-RL") the printed heading does not.
+        entries = [OutlineEntry(level=e['level'], title=' '.join(e['title'].split()),
+                                page=e['page'])
+                   for e in toc or []]
+        if not credible(entries):
             return {}
 
-        # Filter out junk TOCs (scanner artifacts, all pointing to page 1, etc.)
-        pages_referenced = {e['page'] for e in toc}
-        if len(pages_referenced) <= 1:
-            return {}
-        junk_count = sum(1 for e in toc if PDFExtractor._JUNK_TOC_RE.match(e['title'].strip()))
-        if junk_count > len(toc) * 0.5:
-            return {}
+        # The tree in the outline's order, which is the reading order.
+        tree = Tree.from_headings([(e.level, e.title) for e in entries],
+                                  region_of=region_of_title)
+        level = tree.chapter_level()
+        regions = node_regions(tree)
 
-        # Sort by page, preserving original order for same-page entries
-        sorted_toc = sorted(toc, key=lambda e: e['page'])
-
-        # Build page ranges: each entry covers from its page to next entry's page - 1
-        # Track current level-1 heading as "chapter", deeper levels as "section_title"
-        entries_with_ranges = []
-        for i, entry in enumerate(sorted_toc):
-            end_page = sorted_toc[i + 1]['page'] - 1 if i + 1 < len(sorted_toc) else 999999
-            entries_with_ranges.append({
-                'level': entry['level'],
-                'title': entry['title'],
-                'start': entry['page'],
-                'end': end_page,
-            })
-
-        # Assign chapter/section_title per page
-        page_map: Dict[int, Dict[str, str]] = {}
-        current_chapter = ''
-        current_section = ''
-
-        for entry in entries_with_ranges:
-            if entry['level'] == 1:
-                current_chapter = entry['title']
-                current_section = ''
+        # Page order, the outline's order among entries on one page.
+        starts = sorted(range(len(entries)), key=lambda i: entries[i].page)
+        page_map: Dict[int, Dict[str, Optional[str]]] = {}
+        for k, i in enumerate(starts):
+            first = entries[i].page
+            if k + 1 < len(starts):
+                last = entries[starts[k + 1]].page - 1
             else:
-                current_section = entry['title']
-
-            for p in range(entry['start'], entry['end'] + 1):
-                # Only set if not already set by a more specific (deeper) entry
-                if p not in page_map:
-                    page_map[p] = {
-                        'chapter': current_chapter,
-                        'section_title': current_section,
-                    }
-                elif entry['level'] > 1:
-                    # Deeper entry overrides section_title but keeps chapter
-                    page_map[p]['section_title'] = current_section
-
+                last = max(first, last_page or first)
+            fields = tree.fields_of(i, level)
+            info = {
+                'chapter': fields.chapter,
+                'section_title': fields.section_title,
+                'section': fields.section,
+                'region': regions[i],
+            }
+            for p in range(first, last + 1):
+                page_map[p] = info
+            if first > last:
+                # Several entries on one page: the last one begun holds it.
+                page_map[first] = info
         return page_map
 
     # Pre-compiled regex patterns (avoid re.compile inside hot loops)
-    _JUNK_TOC_RE = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)
     _FN_NUMBER_RE = re.compile(r'^\d{1,3}[\s\.]')
     _FOOTNOTE_LINE_RE = re.compile(r'^(\d+)[\.\)\s]\s*[A-Za-z\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF]')
     _MULTI_NUMBER_RE = re.compile(r'\d+\s*[,\-]\s*\d+')
@@ -532,7 +527,8 @@ class PDFExtractor(BaseExtractor):
         Each chunk inherits the metadata of its first paragraph's page.
         """
         total_pages = len(pages_text)
-        page_toc_map = self._build_page_toc_map(toc or [])
+        last_page = max((m['page'] for m in pages_metadata), default=None)
+        page_toc_map = self._build_page_toc_map(toc or [], last_page)
 
         # Phase 1: collect all paragraphs with their page metadata
         all_paragraphs: List[tuple] = []  # (text, ChunkMetadata)
@@ -545,9 +541,7 @@ class PDFExtractor(BaseExtractor):
 
             chapter = toc_info.get('chapter', '')
             section_title = toc_info.get('section_title', '')
-            # The deeper title first: a chapter's "Notes" names its region,
-            # a section that names none stays in its chapter's.
-            region = region_of_title(section_title) or region_of_title(chapter)
+            region = toc_info.get('region')
             toc_section_type = (region_to_section_type(region)
                                 if region is not None else None)
 
@@ -568,6 +562,7 @@ class PDFExtractor(BaseExtractor):
                 page=page_meta['page'],
                 page_label=page_meta.get('page_label'),
                 chapter=chapter or None,
+                section=toc_info.get('section') or None,
                 section_title=section_title or None,
                 section_type=section_type,
                 region=region,
