@@ -20,13 +20,10 @@ except ImportError:
 
 from src.archilles.constants import SectionType
 from src.archilles.text_match import contains_keyword
-from src.archilles.i18n import (
-    get_toc_back_matter_keywords,
-    get_toc_front_matter_keywords,
-)
 from .base import BaseExtractor
 from .exceptions import PDFExtractionError
 from .models import ChunkMetadata, ExtractedText
+from .scriptor_extractor import region_of_title, region_to_section_type
 from .ocr_extractor import (
     OCRBackend,
     detect_scanned_pdf,
@@ -500,13 +497,6 @@ class PDFExtractor(BaseExtractor):
 
         return page_map
 
-    # Sourced from the central corpus-language data (i18n); not language-
-    # filtered (the word-boundary matching prevents cross-language hits).
-    # NB: "introduction"/"einleitung" are deliberately NOT classified here —
-    # introductions are substantive content and belong to main_content.
-    _FRONT_MATTER_TOC_KEYWORDS = get_toc_front_matter_keywords()
-    _BACK_MATTER_TOC_KEYWORDS = get_toc_back_matter_keywords()
-
     # Pre-compiled regex patterns (avoid re.compile inside hot loops)
     _JUNK_TOC_RE = re.compile(r'^(scan\s*\d+|z\s*-\s*|page\s*\d+$|\d+$)', re.IGNORECASE)
     _FN_NUMBER_RE = re.compile(r'^\d{1,3}[\s\.]')
@@ -518,18 +508,14 @@ class PDFExtractor(BaseExtractor):
 
     @classmethod
     def _section_type_from_toc_title(cls, title: str) -> Optional[str]:
-        """Derive section_type from a TOC entry title, or None if unclear.
+        """The section_type a TOC entry title names, or None if it names none.
 
-        Keyword matching uses word boundaries (finding 2.2): substring
-        checks classified 'Banknotes' as back matter ('notes') and thereby
-        excluded whole chapters from the default search.
+        Scriptor's region vocabulary (``region_of_title``, outline B7): the
+        whole title must name the region, so neither 'A History of Banknotes'
+        (finding 2.2) nor 'Literatur und Mehrsprachigkeit' leaves the search.
         """
-        t = title.strip()
-        if contains_keyword(t, cls._BACK_MATTER_TOC_KEYWORDS):
-            return SectionType.BACK_MATTER
-        if contains_keyword(t, cls._FRONT_MATTER_TOC_KEYWORDS):
-            return SectionType.FRONT_MATTER
-        return None
+        region = region_of_title(title)
+        return region_to_section_type(region) if region is not None else None
 
     def _create_chunks_with_pages(
         self,
@@ -557,13 +543,13 @@ class PDFExtractor(BaseExtractor):
             phys_page = page_meta['page']
             toc_info = page_toc_map.get(phys_page, {})
 
-            toc_section_type = None
             chapter = toc_info.get('chapter', '')
             section_title = toc_info.get('section_title', '')
-            if chapter:
-                toc_section_type = self._section_type_from_toc_title(chapter)
-            if toc_section_type is None and section_title:
-                toc_section_type = self._section_type_from_toc_title(section_title)
+            # The deeper title first: a chapter's "Notes" names its region,
+            # a section that names none stays in its chapter's.
+            region = region_of_title(section_title) or region_of_title(chapter)
+            toc_section_type = (region_to_section_type(region)
+                                if region is not None else None)
 
             if toc_section_type is not None:
                 section_type = toc_section_type
@@ -584,6 +570,7 @@ class PDFExtractor(BaseExtractor):
                 chapter=chapter or None,
                 section_title=section_title or None,
                 section_type=section_type,
+                region=region,
             )
 
             page_text = self._detect_paragraph_breaks(page_text)
@@ -671,38 +658,6 @@ class PDFExtractor(BaseExtractor):
         self._add_window_text(chunks, full_text, 500)
 
         return chunks
-
-    # ------------------------------------------------------------------
-    # Sentence-aligned overlap
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _extract_overlap_tail(cls, text: str, target_tokens: int) -> str:
-        """Extract the last ~target_tokens from text, aligned to a sentence boundary.
-
-        Scans backward from the end of *text* to find a sentence-ending
-        punctuation mark (. ! ? : ») followed by whitespace.  Returns the
-        text from the nearest sentence start that fits within
-        *target_tokens*.  If no sentence boundary is found, falls back to
-        the last *target_tokens* words.
-        """
-        words = text.split()
-        if len(words) <= target_tokens:
-            return text
-
-        # Take roughly target_tokens words from the end
-        tail = ' '.join(words[-target_tokens:])
-
-        # Find the first sentence boundary in the tail to align the start
-        match = cls._SENTENCE_END_RE.search(tail)
-        if match:
-            # Start after the sentence-ending punctuation + space
-            aligned = tail[match.end():].strip()
-            # Only use aligned version if it retains at least 40% of target
-            if len(aligned.split()) >= target_tokens * 0.4:
-                return aligned
-
-        return tail
 
     # ------------------------------------------------------------------
     # Paragraph break detection

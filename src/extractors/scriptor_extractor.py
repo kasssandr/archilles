@@ -25,7 +25,8 @@ from pathlib import Path
 
 from scriptor.document import Bundle, ParsedDoc, load_bundle, parse_prepared, region_at
 from scriptor.reflow.pagelabel import PAGE_MARKER_RE
-from scriptor.reflow.regions import APPARATUS
+from scriptor.reflow.regions import APPARATUS, region_of_heading
+from scriptor.structure import is_packaging
 
 from src.archilles.book_files import is_scriptor_master
 from src.archilles.constants import SectionType
@@ -67,6 +68,24 @@ def region_to_section_type(region: str) -> str:
     if region in _FRONT_MATTER_REGIONS:
         return SectionType.FRONT_MATTER
     return SectionType.MAIN_CONTENT
+
+
+def region_of_title(title: str | None) -> str | None:
+    """The region a heading or contents title names, or None (outline B7).
+
+    Scriptor's vocabulary, so that a title means the same on every path:
+    the whole line must be a region heading (``Literatur und
+    Mehrsprachigkeit`` is a chapter), with the tolerance for qualifiers and
+    complements that G7 measured (``Index of Modern Authors``). Title pages,
+    covers and colophons carry no region word -- Scriptor names them from
+    the page, not the title -- so the packaging words stand in for that.
+    """
+    if not title or not title.strip():
+        return None
+    region = region_of_heading(title)
+    if region is None and is_packaging(title):
+        region = 'front-matter'
+    return region
 
 
 @dataclass(frozen=True)
