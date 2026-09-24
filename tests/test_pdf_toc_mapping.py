@@ -54,12 +54,16 @@ class TestBuildPageTocMap:
         ]
         m = PDFExtractor._build_page_toc_map(toc)
 
-        assert m[5] == {'chapter': 'Preface', 'section_title': ''}
-        assert m[9] == {'chapter': 'Preface', 'section_title': ''}
-        assert m[10] == {'chapter': 'Chapter I', 'section_title': ''}
-        assert m[15] == {'chapter': 'Chapter I', 'section_title': ''}
-        assert m[20] == {'chapter': 'Chapter II', 'section_title': ''}
-        assert m[50] == {'chapter': 'Index', 'section_title': ''}
+        def cs(p):
+            return m[p]['chapter'], m[p]['section_title']
+
+        assert cs(5) == ('Preface', '')
+        assert cs(9) == ('Preface', '')
+        assert cs(10) == ('Chapter I', '')
+        assert cs(15) == ('Chapter I', '')
+        assert cs(20) == ('Chapter II', '')
+        assert cs(50) == ('Index', '')
+        assert m[50]['region'] == 'index'
 
     def test_hierarchical_toc(self):
         """Level-2+ entries populate section_title, level-1 populates chapter."""
@@ -100,10 +104,82 @@ class TestBuildPageTocMap:
             {'level': 1, 'title': 'Ch2', 'page': 10},
             {'level': 1, 'title': 'Index', 'page': 100},
         ]
-        m = PDFExtractor._build_page_toc_map(toc)
+        m = PDFExtractor._build_page_toc_map(toc, last_page=500)
 
         assert m[100]['chapter'] == 'Index'
         assert m[500]['chapter'] == 'Index'
+        assert 501 not in m
+
+    # --- outline B8: the tree, not "level 1 is the chapter" ---
+
+    def test_parts_lie_above_the_chapters(self):
+        toc = [
+            {'level': 1, 'title': 'Part I – Origins', 'page': 5},
+            {'level': 2, 'title': '1. The Temple', 'page': 7},
+            {'level': 3, 'title': 'The Priests', 'page': 12},
+            {'level': 2, 'title': '2. The City', 'page': 30},
+            {'level': 1, 'title': 'Part II – Networks', 'page': 50},
+            {'level': 2, 'title': '3. The Roads', 'page': 52},
+        ]
+        m = PDFExtractor._build_page_toc_map(toc, last_page=80)
+
+        assert m[5]['chapter'] == 'Part I – Origins'      # the part page is its own
+        assert m[8]['chapter'] == '1. The Temple'
+        assert m[8]['section_title'] == ''
+        assert m[12]['chapter'] == '1. The Temple'
+        assert m[12]['section_title'] == 'The Priests'
+        assert m[52]['chapter'] == '3. The Roads'
+
+    def test_a_cover_beside_the_chapters_leaves_them_chapters(self):
+        """G1: 32 of 93 outlines carry 'Cover' on level 1 beside the chapters."""
+        toc = [
+            {'level': 1, 'title': 'Cover', 'page': 1},
+            {'level': 1, 'title': 'Title Page', 'page': 3},
+            {'level': 1, 'title': '1. Genesis', 'page': 9},
+            {'level': 2, 'title': 'Abraham', 'page': 11},
+            {'level': 1, 'title': '2. Exodus', 'page': 40},
+        ]
+        m = PDFExtractor._build_page_toc_map(toc, last_page=60)
+
+        assert m[1]['region'] == 'front-matter'
+        assert m[11]['chapter'] == '1. Genesis'
+        assert m[11]['section_title'] == 'Abraham'
+        assert m[11]['region'] is None
+        assert m[45]['chapter'] == '2. Exodus'
+
+    def test_page_bookmarks_map_nothing(self):
+        """JSTOR's outline of every page is no outline (Briefing §7.6)."""
+        toc = [{'level': 1, 'title': f'p. {n}', 'page': n - 298} for n in range(299, 320)]
+        assert PDFExtractor._build_page_toc_map(toc) == {}
+
+    def test_section_is_the_designator_chain(self):
+        toc = [
+            {'level': 1, 'title': 'Erstes Kapitel: Die bildliche Aneignung', 'page': 20},
+            {'level': 2, 'title': 'A. Begriff', 'page': 21},
+            {'level': 3, 'title': 'II. Aneignung', 'page': 25},
+            {'level': 4, 'title': '1. Aneignung als allgemeinsprachlicher Begriff', 'page': 26},
+            {'level': 1, 'title': 'Zweites Kapitel: Die Rede', 'page': 90},
+        ]
+        m = PDFExtractor._build_page_toc_map(toc, last_page=100)
+
+        assert m[26]['chapter'] == 'Erstes Kapitel: Die bildliche Aneignung'
+        assert m[26]['section_title'] == '1. Aneignung als allgemeinsprachlicher Begriff'
+        assert m[26]['section'] == 'A.II.1'
+        assert m[90]['section'] == ''
+
+    def test_a_section_under_the_notes_stays_notes(self):
+        toc = [
+            {'level': 1, 'title': '1. Anfang', 'page': 5},
+            {'level': 1, 'title': '2. Ende', 'page': 20},
+            {'level': 1, 'title': 'Anmerkungen', 'page': 40},
+            {'level': 2, 'title': 'Vorwort', 'page': 40},
+            {'level': 2, 'title': 'Kapitel 1', 'page': 41},
+        ]
+        m = PDFExtractor._build_page_toc_map(toc, last_page=50)
+
+        assert m[40]['region'] == 'notes'
+        assert m[45]['region'] == 'notes'
+        assert m[45]['chapter'] == 'Anmerkungen'
 
 
 # ---------------------------------------------------------------------------

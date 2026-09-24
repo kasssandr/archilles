@@ -55,8 +55,15 @@ History
          appendices stay searchable, glossaries and lists of illustrations
          leave the search as ``lists``. ``section_type`` changes for rows of
          both formats, and EPUB rows now carry ``region``.
+``5``    PDFs without a bundle read their outline as a tree (Gliederung B8):
+         ``chapter`` is the node on the volume's chapter level, not level 1
+         (parts no longer pose as chapters), ``section`` carries the
+         designator chain, a section inherits its parent's region, and an
+         outline of page bookmarks maps nothing. ``chapter``,
+         ``section_title``, ``section`` and ``section_type`` change for those
+         rows.
 """
 
 from __future__ import annotations
 
-PIPELINE_VERSION = "4"
+PIPELINE_VERSION = "5"

@@ -26,7 +26,7 @@ from pathlib import Path
 from scriptor.document import Bundle, ParsedDoc, load_bundle, parse_prepared, region_at
 from scriptor.reflow.pagelabel import PAGE_MARKER_RE
 from scriptor.reflow.regions import APPARATUS, region_of_heading
-from scriptor.structure import is_packaging
+from scriptor.structure import Tree, is_packaging
 
 from src.archilles.book_files import is_scriptor_master
 from src.archilles.constants import SectionType
@@ -86,6 +86,25 @@ def region_of_title(title: str | None) -> str | None:
     if region is None and is_packaging(title):
         region = 'front-matter'
     return region
+
+
+def node_regions(tree: Tree) -> list[str | None]:
+    """The region each node of an outline lies in (outline B7/B8).
+
+    Its own (``Node.region``) where its title names one, else its parent's;
+    inside an apparatus a node may only name another apparatus -- under
+    "Anmerkungen" a "Vorwort" holds the notes to the preface.
+    """
+    out: list[str | None] = []
+    for i, node in enumerate(tree.nodes):
+        ancestors = tree.ancestors(i)
+        parent = out[ancestors[0]] if ancestors else None
+        own = node.region
+        if own is not None and (parent not in APPARATUS or own in APPARATUS):
+            out.append(own)
+        else:
+            out.append(parent if parent is not None else own)
+    return out
 
 
 @dataclass(frozen=True)
