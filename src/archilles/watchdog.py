@@ -284,6 +284,75 @@ def _index_priority_key(
     return (0 if is_priority else 1, rating_order, -entry['calibre_id'])
 
 
+# How many books each lane contributes to the mixed opening of a run.
+LANE_QUOTA = 10
+
+
+def _order_calibre_queue(
+    entries: list[dict],
+    calibre_books: dict,
+    first_authors: list[str],
+    first_tags: list[str],
+    first_titles: list[str],
+) -> list[dict]:
+    """Indexing order for new books and the fulltext backlog.
+
+    The head is what ``_index_priority_key`` puts in front: priority matches,
+    then 5★ and 4★. After it, every run opens with a mix dealt one book
+    at a time from three lanes, 1-2-3-1-2-3, up to ``LANE_QUOTA`` each:
+
+      1. newest    -- most recently added first
+      2. 3★        -- the 3★ books, newest first
+      3. comment   -- longest Calibre comment first
+
+    Then the rest follows by comment length alone. A long comment is where
+    the librarian left a translation or a review, which marks a title as
+    important whatever its rating. Before this, the tail was ordered by
+    recency alone, so such a book waited behind every newer addition.
+
+    A book dealt by one lane is gone from the others; a lane that runs dry is
+    skipped. Every run starts again with lane 1 -- the order is recomputed
+    from the remaining queue, so a run stopped early leaves nothing to resume.
+    """
+    keyed = [(_index_priority_key(e, calibre_books, first_authors, first_tags, first_titles), e)
+             for e in entries]
+    keyed.sort(key=lambda ke: ke[0])
+    head = [e for k, e in keyed if k[:2] != (1, 2)]
+    tail = [e for k, e in keyed if k[:2] == (1, 2)]  # already newest first
+
+    def meta(e: dict) -> dict:
+        return calibre_books.get(e['calibre_id'], {})
+
+    # Stable sort: equal lengths keep the newest-first order.
+    by_comment = sorted(tail, key=lambda e: -len(meta(e).get('comments', '')))
+    lanes = [
+        tail,
+        [e for e in tail if meta(e).get('rating') == 6],
+        by_comment,
+    ]
+    cursors = [0] * len(lanes)
+    dealt = [0] * len(lanes)
+    taken: set[int] = set()
+    mixed: list[dict] = []
+    while True:
+        progressed = False
+        for i, lane in enumerate(lanes):
+            if dealt[i] >= LANE_QUOTA:
+                continue
+            while cursors[i] < len(lane) and lane[cursors[i]]['calibre_id'] in taken:
+                cursors[i] += 1
+            if cursors[i] < len(lane):
+                e = lane[cursors[i]]
+                taken.add(e['calibre_id'])
+                mixed.append(e)
+                dealt[i] += 1
+                progressed = True
+        if not progressed:
+            break
+    rest = [e for e in by_comment if e['calibre_id'] not in taken]
+    return head + mixed + rest
+
+
 def _zotero_priority_key(
     entry: dict,
     zotero_items: dict,
@@ -934,11 +1003,11 @@ class WatchdogScanner:
                 cp_new = IndexingCheckpoint.load(self.checkpoint_file)
                 done_ids = {int(b) for b in cp_new.completed_books} if cp_new else set()
                 pending = [e for e in results['new_books'] if e['calibre_id'] not in done_ids]
-                pending.sort(key=lambda e: _index_priority_key(
-                    e, calibre_books,
-                    first_authors or [], first_tags or [], first_titles or [],
-                ))
                 already_done = len(done_ids)
+                pending = _order_calibre_queue(
+                    pending, calibre_books,
+                    first_authors or [], first_tags or [], first_titles or [],
+                )
                 saved_total = cp_new.total_books if cp_new else 0
                 total_p3 = max(saved_total, already_done + len(pending))
                 if cp_new is None:
@@ -1021,11 +1090,11 @@ class WatchdogScanner:
                     e for e in pending
                     if (calibre_books.get(e['calibre_id'], {}).get('rating') or 0) == target
                 ]
-            pending.sort(key=lambda e: _index_priority_key(
-                e, calibre_books,
-                first_authors or [], first_tags or [], first_titles or [],
-            ))
             already_done = len(done_ids)
+            pending = _order_calibre_queue(
+                pending, calibre_books,
+                first_authors or [], first_tags or [], first_titles or [],
+            )
             saved_total = cp_fulltext.total_books if cp_fulltext else 0
             total_p4 = max(saved_total, already_done + len(pending))
             if cp_fulltext is None:
