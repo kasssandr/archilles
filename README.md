@@ -176,7 +176,7 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
 }
 ```
 
-Then in Claude Desktop, you can use natural language — all 12 MCP tools are available:
+Then in Claude Desktop, you can use natural language — all 13 MCP tools are available:
 - *"Search my books for discussions of political legitimacy"*
 - *"Find annotations about consciousness"*
 - *"What did I highlight about medieval trade?"*
@@ -310,7 +310,7 @@ Search through your collection of primary sources and secondary literature simul
 - Semantic + keyword hybrid search (LanceDB native)
 - Two-stage retrieval: RRF fusion + optional cross-encoder reranking
 - Calibre metadata integration (tags, comments, custom fields, annotation indexing)
-- MCP server — 12 tools for Claude Desktop (search, metadata, annotations, bibliography, utilities)
+- MCP server — 13 tools for Claude Desktop (search, citation check, metadata, annotations, bibliography, utilities)
 - Multi-language support (75+ languages, stop-word removal for 12 languages)
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
@@ -330,11 +330,10 @@ Search through your collection of primary sources and secondary literature simul
 - **Structure-aware PDF chunking**: chapter/section metadata from TOC, running footer removal
 - **DialogueChunker**: specialized chunking for chat/Q&A exports (ChatGPT, Gemini, Grok, NotebookLM)
 
-### Coming in v1.0
+### Coming next
 
 🚧 **Planned improvements:**
-- Docling-based Markdown extraction (structured output from complex academic PDFs)
-- VLM-based OCR (LightOnOCR-2, GOT-OCR 2.0)
+- Scanned PDFs through [Scriptor](https://github.com/kasssandr/archilles-scriptor): Tesseract OCR onto Scriptor's page model, so a scanned volume cites its printed page labels rather than physical page numbers
 
 ### Future Development
 
