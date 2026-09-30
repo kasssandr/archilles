@@ -369,7 +369,9 @@ def _zotero_priority_key(
     item first — the analog of Calibre's -calibre_id. Variante A: an explicit
     priority match beats recency (an old tagged item outranks a new untagged one).
     """
-    data = zotero_items.get(entry['doc_id'], {})
+    # Every unit of an item sorts with its item; the stable sort then keeps
+    # an item's attachments together, in unit order.
+    data = zotero_items.get(_zotero_split_unit_id(entry['doc_id'])[0], {})
     is_priority = _priority_match(
         " ".join(data.get('authors', [])),
         data.get('tags', []),
@@ -1393,18 +1395,20 @@ class WatchdogScanner:
 # scanner's notion of "excluded item" / "indexable attachment" cannot drift
 # from what the adapter actually indexes.
 from src.adapters.zotero_adapter import (  # noqa: E402
-    _CONTENT_TYPE_MAP as _ZOTERO_CONTENT_TYPE_MAP,
     _EXCLUDED_TYPE_IDS as _ZOTERO_EXCLUDED_TYPE_IDS,
+    list_attachment_units as _zotero_attachment_units,
+    split_unit_id as _zotero_split_unit_id,
+    unit_id as _zotero_unit_id,
 )
-
-_ZOTERO_INDEXABLE_CONTENT_TYPES = tuple(_ZOTERO_CONTENT_TYPE_MAP)
 
 
 def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
     """Batch-read all Zotero items in one pass for watchdog scanning.
 
     Returns {item_key: {title, authors, tags, abstract, date, modified_at,
-                         attachment_modified_at, has_attachment}}.
+                         attachment_modified_at, has_attachment, units}}.
+    ``units`` lists the item's indexable attachments as
+    {unit_id, attachment_key, modified_at}, first attachment first.
     Authors and tags are pre-sorted for stable hash computation.
     """
     db_path = library_path / "zotero.sqlite"
@@ -1450,6 +1454,7 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
                 "date": "",
                 "attachment_modified_at": None,
                 "has_attachment": False,
+                "units": [],
             }
             for r in items
         }
@@ -1532,23 +1537,25 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
         for data in result.values():
             data["collections"].sort()
 
-        # Attachments: has_attachment + max dateModified (signals annotation changes)
-        ct_ph = ",".join("?" * len(_ZOTERO_INDEXABLE_CONTENT_TYPES))
-        att_rows = conn.execute(f"""
-            SELECT ia.parentItemID, MAX(i.dateModified) AS att_modified
-            FROM itemAttachments ia
-            JOIN items i ON ia.itemID = i.itemID
-            WHERE ia.linkMode IN (0, 1, 2)
-            AND ia.contentType IN ({ct_ph})
-            AND ia.itemID NOT IN (SELECT itemID FROM deletedItems)
-            GROUP BY ia.parentItemID
-        """, _ZOTERO_INDEXABLE_CONTENT_TYPES).fetchall()
-
-        for row in att_rows:
-            key = id_to_key.get(row["parentItemID"])
-            if key:
-                result[key]["has_attachment"] = True
-                result[key]["attachment_modified_at"] = row["att_modified"]
+        # Attachments: one indexing unit each, in the adapter's own order, so
+        # scanner and adapter agree on every unit id. An attachment's
+        # dateModified signals annotation changes in that file.
+        for parent_id, attachments in _zotero_attachment_units(conn).items():
+            key = id_to_key.get(parent_id)
+            if not key:
+                continue
+            result[key]["has_attachment"] = True
+            result[key]["attachment_modified_at"] = max(
+                (a["dateModified"] or "" for a in attachments), default="",
+            ) or None
+            result[key]["units"] = [
+                {
+                    "unit_id": _zotero_unit_id(key, position, att["key"]),
+                    "attachment_key": att["key"],
+                    "modified_at": att["dateModified"] or "",
+                }
+                for position, att in enumerate(attachments)
+            ]
 
         return result
     finally:
@@ -1593,8 +1600,11 @@ class ZoteroWatchdogScanner:
         self.excluded_tags_lower: set[str] = {
             t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
         }
-        self._annotation_cache: dict[str, str] | None = None  # {key: att_modified_at}
+        self.first_attachment_cache_file = archilles_dir / "zotero_first_attachments.json"
+        self._annotation_cache: dict[str, str] | None = None  # {unit_id: att_modified_at}
         self._annotation_cache_dirty = False
+        self._first_attachment_cache: dict[str, str] | None = None  # {item_key: attachment_key}
+        self._first_attachment_cache_dirty = False
         self._shutdown_requested = False
         self._rag = None
         self._plan = None
@@ -1624,6 +1634,7 @@ class ZoteroWatchdogScanner:
             'new_books':            [],
             'metadata_changed':    [],
             'annotations_changed': [],
+            'attachment_replaced': [],   # bare key now names a different file
             'unchanged':           [],
             'errors':              [],
             'delta_updates':       0,
@@ -1686,53 +1697,80 @@ class ZoteroWatchdogScanner:
         # so a failed or interrupted delta re-detects it next scan instead of
         # silently swallowing the update.
         pending_cache: dict[str, str] = {}
+        first_cache = self._load_first_attachment_cache()
+        # Every id the library can be indexed under: each item's bare key,
+        # with or without a file, plus one id per further attachment.
+        current_ids: set[str] = set()
+        unit_modified: dict[str, str] = {}
 
         for key, data in zotero_items.items():
+            current_ids.add(key)
+            current_ids.update(unit["unit_id"] for unit in data["units"])
+
             if self.excluded_tags_lower:
                 item_tags_lower = {t.lower() for t in data.get("tags", [])}
                 if item_tags_lower & self.excluded_tags_lower:
                     continue
 
-            if not data["has_attachment"]:
-                continue
+            # One pass per attachment: each is indexed, and watched, on its own.
+            for unit in data["units"]:
+                uid = unit["unit_id"]
+                unit_modified[uid] = unit["modified_at"]
 
-            if key not in indexed_hashes:
-                results['new_books'].append({'doc_id': key, 'title': data.get('title', key)})
-                continue
+                if uid not in indexed_hashes:
+                    title = data.get('title', key)
+                    if uid != key:
+                        title = f"{title} · attachment {unit['attachment_key']}"
+                    results['new_books'].append({'doc_id': uid, 'title': title})
+                    continue
 
-            stored = indexed_hashes[key]
+                # The bare key names whichever attachment comes first. When
+                # that one is deleted, or a better format is added, the key
+                # passes to another file while the index still holds the old
+                # one's text — and nothing else would ever notice.
+                if uid == key:
+                    known_first = first_cache.get(key, "")
+                    if not known_first:
+                        first_cache[key] = unit["attachment_key"]
+                        self._first_attachment_cache_dirty = True
+                    elif known_first != unit["attachment_key"]:
+                        results['attachment_replaced'].append(key)
+                        continue
 
-            # Metadata change
-            current_meta_hash = _compute_zotero_metadata_hash(data)
-            stored_meta_hash = stored.get('metadata_hash', '')
-            meta_changed = bool(stored_meta_hash) and current_meta_hash != stored_meta_hash
+                stored = indexed_hashes[uid]
 
-            # Annotation change: attachment dateModified as proxy
-            current_att_mod = data.get("attachment_modified_at") or ""
-            cached_att_mod = ann_cache.get(key, "")
-            annot_changed = bool(cached_att_mod) and current_att_mod != cached_att_mod
+                # Metadata change
+                current_meta_hash = _compute_zotero_metadata_hash(data)
+                stored_meta_hash = stored.get('metadata_hash', '')
+                meta_changed = bool(stored_meta_hash) and current_meta_hash != stored_meta_hash
 
-            # First-seen seeding is not a change signal — cache it immediately.
-            # A genuine change (annot_changed) is deferred to Phase 2 (4.3).
-            if annot_changed:
-                pending_cache[key] = current_att_mod
-            elif not cached_att_mod and current_att_mod:
-                ann_cache[key] = current_att_mod
-                self._annotation_cache_dirty = True
+                # Annotation change: the attachment's dateModified as proxy
+                current_att_mod = unit["modified_at"]
+                cached_att_mod = ann_cache.get(uid, "")
+                annot_changed = bool(cached_att_mod) and current_att_mod != cached_att_mod
 
-            if meta_changed:
-                results['metadata_changed'].append(key)
-            if annot_changed:
-                results['annotations_changed'].append(key)
-            if not meta_changed and not annot_changed:
-                results['unchanged'].append(key)
+                # First-seen seeding is not a change signal — cache it immediately.
+                # A genuine change (annot_changed) is deferred to Phase 2 (4.3).
+                if annot_changed:
+                    pending_cache[uid] = current_att_mod
+                elif not cached_att_mod and current_att_mod:
+                    ann_cache[uid] = current_att_mod
+                    self._annotation_cache_dirty = True
+
+                if meta_changed:
+                    results['metadata_changed'].append(uid)
+                if annot_changed:
+                    results['annotations_changed'].append(uid)
+                if not meta_changed and not annot_changed:
+                    results['unchanged'].append(uid)
 
         # ── Orphan cleanup: indexed items deleted from Zotero ────
         # ``zotero_items`` excludes trashed items (deletedItems), so moving
-        # an item to the Zotero trash removes it from the index too. Guard
-        # against an empty snapshot as in the Calibre scanner.
+        # an item to the Zotero trash removes it from the index too — and so
+        # does deleting one attachment of several, for that attachment alone.
+        # Guard against an empty snapshot as in the Calibre scanner.
         if zotero_items:
-            orphan_ids = [k for k in indexed_hashes if k not in zotero_items]
+            orphan_ids = [k for k in indexed_hashes if k not in current_ids]
             _cleanup_orphaned_books(
                 self.db_path, orphan_ids, dry_run, results,
                 indexed_count=len(indexed_hashes),
@@ -1740,7 +1778,10 @@ class ZoteroWatchdogScanner:
             )
 
         # ── Phase 2: apply delta updates ─────────────────────────
-        books_to_update = set(results['metadata_changed']) | set(results['annotations_changed'])
+        replaced = set(results['attachment_replaced'])
+        books_to_update = (
+            set(results['metadata_changed']) | set(results['annotations_changed']) | replaced
+        )
         if books_to_update and not dry_run:
             from src.adapters.zotero_adapter import ZoteroAdapter
             adapter = ZoteroAdapter(self.library_path)
@@ -1752,7 +1793,7 @@ class ZoteroWatchdogScanner:
                 if self._shutdown_requested:
                     print(f"\n⏸️  Shutdown requested — phase 2 stopped after {i-1}/{total_p2} items.")
                     break
-                data = zotero_items.get(key, {})
+                data = zotero_items.get(_zotero_split_unit_id(key)[0], {})
                 file_path = _resolve_file_path_safely(
                     adapter, key, data.get('title', ''), results, "phase 2",
                 )
@@ -1760,8 +1801,16 @@ class ZoteroWatchdogScanner:
                     continue
                 print(f"\n[{i}/{total_p2}] {data.get('title', key)}")
                 try:
-                    rag.index_book(str(file_path), key, force=False)
+                    # A replaced first attachment is a different text under
+                    # the same id: only a forced re-index puts it there.
+                    rag.index_book(str(file_path), key, force=key in replaced)
                     results['delta_updates'] += 1
+                    if key in replaced:
+                        first_cache[key] = data["units"][0]["attachment_key"]
+                        self._first_attachment_cache_dirty = True
+                        if unit_modified.get(key):
+                            ann_cache[key] = unit_modified[key]
+                            self._annotation_cache_dirty = True
                     # Commit the deferred annotation-cache value now that the
                     # re-index succeeded (4.3). Metadata-only changes have no
                     # pending entry; failed/shutdown-skipped items keep their
@@ -1824,10 +1873,15 @@ class ZoteroWatchdogScanner:
                         if mark_pending and res.get('status') is None:
                             rag.store.mark_pending_external(key)
                         # Seed annotation cache for freshly indexed items
-                        att_mod = zotero_items.get(key, {}).get("attachment_modified_at") or ""
+                        att_mod = unit_modified.get(key, "")
                         if att_mod:
                             ann_cache[key] = att_mod
                             self._annotation_cache_dirty = True
+                        # ...and remember which file the bare key stands for.
+                        units = zotero_items.get(key, {}).get("units")
+                        if units:
+                            first_cache[key] = units[0]["attachment_key"]
+                            self._first_attachment_cache_dirty = True
                     except Exception as exc:
                         logger.error("New-item indexing failed for key=%s: %s", key, exc)
                         results['errors'].append({'doc_id': key, 'error': str(exc)})
@@ -1846,11 +1900,40 @@ class ZoteroWatchdogScanner:
 
         if not dry_run:
             self._save_annotation_cache()
+            self._save_first_attachment_cache()
             self._write_log(results)
 
         return results
 
     # ── Internal helpers ──────────────────────────────────────────
+
+    def _load_first_attachment_cache(self) -> dict[str, str]:
+        """Lazy-load ``{item_key: attachment_key}`` — the file each bare key
+        was indexed from. Unreadable means unknown, which re-seeds it."""
+        if self._first_attachment_cache is None:
+            try:
+                self._first_attachment_cache = json.loads(
+                    self.first_attachment_cache_file.read_text(encoding='utf-8')
+                )
+            except FileNotFoundError:
+                self._first_attachment_cache = {}
+            except Exception as exc:
+                logger.warning("Could not read Zotero first-attachment cache (resetting): %s", exc)
+                self._first_attachment_cache = {}
+        return self._first_attachment_cache
+
+    def _save_first_attachment_cache(self) -> None:
+        if self._first_attachment_cache is None or not self._first_attachment_cache_dirty:
+            return
+        try:
+            self.archilles_dir.mkdir(parents=True, exist_ok=True)
+            self.first_attachment_cache_file.write_text(
+                json.dumps(self._first_attachment_cache, indent=2),
+                encoding='utf-8',
+            )
+            self._first_attachment_cache_dirty = False
+        except Exception as exc:
+            logger.warning("Could not save Zotero first-attachment cache: %s", exc)
 
     def _load_indexed_hashes(self) -> dict[str, dict[str, str]]:
         """Load stored hashes from LanceDB using string book_id as key.
@@ -1947,6 +2030,9 @@ class ZoteroWatchdogScanner:
         lines = [
             f"{ts} ZOTERO SCAN completed in {results['total_time']}s",
             f"  new_items: {n_new}" + (f" {new_ids}" if new_ids else ""),
+            *([f"  attachment_replaced: {len(results['attachment_replaced'])} "
+               f"{results['attachment_replaced']}"]
+              if results.get('attachment_replaced') else []),
             f"  metadata_changed: {n_meta}"
             + (f" {results['metadata_changed']}" if n_meta else ""),
             f"  annotations_changed: {n_anno}"

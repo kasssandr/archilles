@@ -41,6 +41,105 @@ _CONTENT_TYPE_MAP = {
 # Preferred attachment formats (higher = better)
 _FORMAT_PRIORITY = {"pdf": 10, "epub": 8, "html": 3, "txt": 2}
 
+# File extensions dropped from an attachment's title when it names a unit
+_TITLE_EXTENSIONS = {"pdf", "epub", "html", "htm", "txt", "md", "docx"}
+
+# Link modes that can point at a local file: imported file, imported URL
+# snapshot, linked file. 3 (linked URL) and 4 (embedded image) never do.
+_FILE_LINK_MODES = (0, 1, 2)
+
+#: Separates the item key from the attachment key in a unit id.
+UNIT_SEPARATOR = "#"
+
+
+# ── Indexing units ───────────────────────────────────────────────
+#
+# A Zotero item may carry several files — five reviews of one book, a page
+# and the two documents saved with it. Each of them is indexed on its own, as
+# a *unit*. The first attachment keeps the bare item key as its id, so every
+# item indexed before units existed stays where it is; each further one is
+# ``ITEMKEY#ATTACHMENTKEY``.
+#
+# Which attachment is "first" is decided by format and age alone, never by
+# whether its file can be found right now: an id that moved whenever a drive
+# was offline would turn one unreachable file into a round of deletions and
+# re-indexing.
+
+
+def split_unit_id(doc_id: str) -> tuple[str, str | None]:
+    """``"KEY#ATT"`` → ``("KEY", "ATT")``; a bare ``"KEY"`` → ``("KEY", None)``."""
+    item_key, _, att_key = str(doc_id).partition(UNIT_SEPARATOR)
+    return item_key, (att_key or None)
+
+
+def unit_id(item_key: str, position: int, att_key: str) -> str:
+    """Id of the attachment at ``position`` in its item's ordered list."""
+    return item_key if position == 0 else f"{item_key}{UNIT_SEPARATOR}{att_key}"
+
+
+def list_attachment_units(
+    conn: sqlite3.Connection, item_id: int | None = None,
+) -> dict[int, list[dict]]:
+    """Indexable attachments per parent item, in unit order.
+
+    ``{parentItemID: [{itemID, key, dateModified, linkMode, contentType, path,
+    format}, ...]}`` — for one item, or for the whole library in a single
+    query. The adapter and the watchdog scanner both read this, which is what
+    keeps their idea of a unit id from drifting apart.
+    """
+    query = """
+        SELECT ia.parentItemID, ia.itemID, i.key, i.dateModified,
+               ia.linkMode, ia.contentType, ia.path
+        FROM itemAttachments ia
+        JOIN items i ON ia.itemID = i.itemID
+        WHERE ia.itemID NOT IN (SELECT itemID FROM deletedItems)
+    """
+    params: tuple = ()
+    if item_id is None:
+        query += " AND ia.parentItemID IS NOT NULL"
+    else:
+        query += " AND ia.parentItemID = ?"
+        params = (item_id,)
+
+    units: dict[int, list[dict]] = {}
+    for row in conn.execute(query, params):
+        fmt = _CONTENT_TYPE_MAP.get(row["contentType"] or "", "")
+        if not fmt or row["linkMode"] not in _FILE_LINK_MODES:
+            continue
+        att = dict(row)
+        att["format"] = fmt
+        units.setdefault(row["parentItemID"], []).append(att)
+
+    for attachments in units.values():
+        attachments.sort(
+            key=lambda a: (-_FORMAT_PRIORITY.get(a["format"], 1), a["itemID"])
+        )
+    return units
+
+
+def current_unit_ids(conn: sqlite3.Connection) -> set[str]:
+    """Every id the library can currently be indexed under.
+
+    The bare key of each live item — with or without a file, as before units
+    existed — plus one id per further attachment. What the index holds beyond
+    this set is an orphan.
+    """
+    excluded = ",".join(str(t) for t in _EXCLUDED_TYPE_IDS)
+    items = conn.execute(
+        f"""
+        SELECT itemID, key FROM items
+        WHERE itemTypeID NOT IN ({excluded})
+        AND itemID NOT IN (SELECT itemID FROM deletedItems)
+        """
+    ).fetchall()
+    units = list_attachment_units(conn)
+    current: set[str] = set()
+    for item in items:
+        current.add(item["key"])
+        for position, att in enumerate(units.get(item["itemID"], [])):
+            current.add(unit_id(item["key"], position, att["key"]))
+    return current
+
 
 def _parse_year(date_str: str) -> int | None:
     """Extract a 4-digit year from Zotero's date field."""
@@ -285,8 +384,9 @@ class ZoteroAdapter(SourceAdapter):
         """
         conn = self._connect()
         try:
+            item_key, att_key = split_unit_id(doc_id)
             item_row = conn.execute(
-                "SELECT itemID FROM items WHERE key = ?", (doc_id,)
+                "SELECT itemID FROM items WHERE key = ?", (item_key,)
             ).fetchone()
             if not item_row:
                 return "item not found in zotero.sqlite", doc_id
@@ -298,6 +398,15 @@ class ZoteroAdapter(SourceAdapter):
             ).fetchall()
             if not rows:
                 return "item has no attachment at all", ""
+
+            # A unit is one attachment, so explain that one. An item with no
+            # indexable attachment at all has no unit; every row is then part
+            # of the answer.
+            unit = self._select_attachment(conn, item_row["itemID"], att_key)
+            if unit is not None:
+                rows = [r for r in rows if r["itemID"] == unit["itemID"]]
+            elif att_key is not None:
+                return "attachment not found in zotero.sqlite", doc_id
 
             categories: list[str] = []
             details: list[str] = []
@@ -338,44 +447,61 @@ class ZoteroAdapter(SourceAdapter):
         finally:
             conn.close()
 
-    def _get_primary_attachment(self, conn: sqlite3.Connection, item_id: int) -> tuple[Path | None, str]:
-        """Find the best attachment for an item. Returns (path, format)."""
-        rows = conn.execute(
-            """
-            SELECT ia.itemID, ia.linkMode, ia.contentType, ia.path
-            FROM itemAttachments ia
-            JOIN items i ON ia.itemID = i.itemID
-            WHERE ia.parentItemID = ?
-            AND i.itemID NOT IN (SELECT itemID FROM deletedItems)
-            """,
-            (item_id,),
-        ).fetchall()
+    def _select_attachment(
+        self, conn: sqlite3.Connection, item_id: int, att_key: str | None,
+    ) -> dict | None:
+        """The attachment a unit id stands for, or ``None``.
 
-        candidates = []
-        for row in rows:
-            content_type = row["contentType"] or ""
-            fmt = _CONTENT_TYPE_MAP.get(content_type, "")
-            path = self._resolve_attachment_path(conn, row)
-            if path and fmt:
-                priority = _FORMAT_PRIORITY.get(fmt, 1)
-                candidates.append((priority, path, fmt))
+        A bare item key is the first attachment. A further one is addressed by
+        its own key — and only a further one: the first has exactly one id.
+        """
+        attachments = list_attachment_units(conn, item_id).get(item_id, [])
+        if att_key is None:
+            return attachments[0] if attachments else None
+        for att in attachments[1:]:
+            if att["key"] == att_key:
+                return att
+        return None
 
-        if not candidates:
-            return None, ""
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1], candidates[0][2]
+    def _attachment_title(self, conn: sqlite3.Connection, att: dict) -> str:
+        """What tells this attachment apart from its siblings: its Zotero
+        title, else its file name — either way without the extension."""
+        title = self._get_field(conn, att["itemID"], "title")
+        if not title:
+            title = re.split(r"[/\\:]", att["path"] or "")[-1]
+        suffix = Path(title).suffix.lower().lstrip(".")
+        if suffix in _TITLE_EXTENSIONS:
+            title = title[: -(len(suffix) + 1)]
+        return title.strip() or att["key"]
 
     # ── Build metadata ───────────────────────────────────────────
 
-    def _build_metadata(self, conn: sqlite3.Connection, item_id: int, item_key: str) -> DocumentMetadata:
-        """Build DocumentMetadata for a single Zotero item."""
+    def _build_metadata(
+        self,
+        conn: sqlite3.Connection,
+        item_id: int,
+        item_key: str,
+        att: dict | None,
+        position: int = 0,
+    ) -> DocumentMetadata:
+        """Build DocumentMetadata for one unit of a Zotero item.
+
+        ``att`` is the unit's attachment, at ``position`` in the item's ordered
+        list; ``None`` for an item with nothing to index. Every unit carries
+        its item's metadata — the reviewed book is what a review is filed
+        under. A further unit adds its attachment's name to the title, the one
+        thing a search hit can tell the siblings apart by.
+        """
         fields = self._get_fields(conn, item_id, [
             "title", "abstractNote", "date", "publisher", "language",
             "series", "shortTitle", "extra",
         ])
 
-        file_path, file_format = self._get_primary_attachment(conn, item_id)
+        file_path = self._resolve_attachment_path(conn, att) if att else None
+        file_format = att["format"] if att and file_path else ""
+        title = fields.get("title", "") or fields.get("shortTitle", "") or f"[Untitled {item_key}]"
+        if att and position > 0:
+            title = f"{title} · {self._attachment_title(conn, att)}"
 
         # Timestamps from items table
         ts_row = conn.execute(
@@ -384,8 +510,8 @@ class ZoteroAdapter(SourceAdapter):
         ).fetchone()
 
         return DocumentMetadata(
-            doc_id=item_key,
-            title=fields.get("title", "") or fields.get("shortTitle", "") or f"[Untitled {item_key}]",
+            doc_id=unit_id(item_key, position, att["key"]) if att else item_key,
+            title=title,
             authors=self._get_creators(conn, item_id),
             file_path=file_path or Path(""),
             file_format=file_format,
@@ -470,17 +596,31 @@ class ZoteroAdapter(SourceAdapter):
             query += " ORDER BY i.itemID"
             rows = conn.execute(query, params).fetchall()
 
+            units = list_attachment_units(conn)
             docs = []
             for row in rows:
-                try:
-                    docs.append(self._build_metadata(conn, row["itemID"], row["key"]))
-                except Exception as e:
-                    logger.warning("Failed to build metadata for item %s: %s", row["key"], e)
+                # One document per attachment. An item without any still gets
+                # its one entry, so it stays visible as metadata.
+                for position, att in enumerate(units.get(row["itemID"]) or [None]):
+                    try:
+                        docs.append(self._build_metadata(
+                            conn, row["itemID"], row["key"], att, position,
+                        ))
+                    except Exception as e:
+                        logger.warning("Failed to build metadata for item %s: %s", row["key"], e)
             return docs
         finally:
             conn.close()
 
+    def list_works(self) -> list[DocumentMetadata]:
+        """Items, not attachments: the first unit of each stands for it."""
+        return [
+            doc for doc in self.list_documents()
+            if split_unit_id(doc.doc_id)[1] is None
+        ]
+
     def get_metadata(self, doc_id: str) -> DocumentMetadata | None:
+        item_key, att_key = split_unit_id(doc_id)
         conn = self._connect()
         try:
             row = conn.execute(
@@ -490,22 +630,30 @@ class ZoteroAdapter(SourceAdapter):
                 AND itemTypeID NOT IN ({excluded})
                 AND itemID NOT IN (SELECT itemID FROM deletedItems)
                 """.format(excluded=",".join(str(t) for t in _EXCLUDED_TYPE_IDS)),
-                (doc_id,),
+                (item_key,),
             ).fetchone()
             if not row:
                 return None
-            return self._build_metadata(conn, row["itemID"], row["key"])
+            attachments = list_attachment_units(conn, row["itemID"]).get(row["itemID"], [])
+            if att_key is None:
+                att = attachments[0] if attachments else None
+                return self._build_metadata(conn, row["itemID"], row["key"], att)
+            for position, att in enumerate(attachments):
+                if position > 0 and att["key"] == att_key:
+                    return self._build_metadata(conn, row["itemID"], row["key"], att, position)
+            return None
         finally:
             conn.close()
 
     def get_file_path(self, doc_id: str) -> Path | None:
         conn = self._connect()
         try:
-            row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()
+            item_key, att_key = split_unit_id(doc_id)
+            row = conn.execute("SELECT itemID FROM items WHERE key = ?", (item_key,)).fetchone()
             if not row:
                 return None
-            path, _ = self._get_primary_attachment(conn, row["itemID"])
-            return path
+            att = self._select_attachment(conn, row["itemID"], att_key)
+            return self._resolve_attachment_path(conn, att) if att else None
         finally:
             conn.close()
 
@@ -519,13 +667,25 @@ class ZoteroAdapter(SourceAdapter):
         ``page_number`` on the chunk, and the page is what a citation names.
         The mapping lives in ``annotation_providers.zotero_provider`` so this
         adapter and the import path cannot drift apart.
+
+        Highlights follow their file: a further unit (``KEY#ATT``) gets those
+        made in its own attachment and nothing else. Everything that belongs to
+        no further unit stays with the bare key — its attachment's highlights
+        and the item's notes, which are about the item rather than one file.
         """
+        item_key, att_key = split_unit_id(doc_id)
         conn = self._connect()
         try:
-            item_row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()
+            item_row = conn.execute("SELECT itemID FROM items WHERE key = ?", (item_key,)).fetchone()
             if not item_row:
                 return []
             item_id = item_row["itemID"]
+            further_units = {
+                att["key"]: att["itemID"]
+                for att in list_attachment_units(conn, item_id).get(item_id, [])[1:]
+            }
+            if att_key is not None and att_key not in further_units:
+                return []
 
             annotations = []
 
@@ -544,6 +704,11 @@ class ZoteroAdapter(SourceAdapter):
                 (item_id,),
             ).fetchall()
             for att in att_rows:
+                if att_key is not None:
+                    if att["itemID"] != further_units[att_key]:
+                        continue
+                elif att["itemID"] in further_units.values():
+                    continue
                 ann_rows = conn.execute(
                     f"SELECT {columns} FROM itemAnnotations WHERE parentItemID = ?",
                     (att["itemID"],),
@@ -565,7 +730,7 @@ class ZoteroAdapter(SourceAdapter):
                     ))
 
             # 2. Standalone notes (itemNotes)
-            note_rows = conn.execute(
+            note_rows = [] if att_key is not None else conn.execute(
                 "SELECT note, title FROM itemNotes WHERE parentItemID = ?",
                 (item_id,),
             ).fetchall()
@@ -585,7 +750,8 @@ class ZoteroAdapter(SourceAdapter):
     def get_comments(self, doc_id: str) -> str:
         conn = self._connect()
         try:
-            item_row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()
+            item_key, _ = split_unit_id(doc_id)
+            item_row = conn.execute("SELECT itemID FROM items WHERE key = ?", (item_key,)).fetchone()
             if not item_row:
                 return ""
             return self._get_field(conn, item_row["itemID"], "abstractNote")
@@ -598,10 +764,14 @@ class ZoteroAdapter(SourceAdapter):
         Authors are sorted alphabetically so that reordering authors in
         Zotero's UI does not trigger a false-positive watchdog update.
         Use ``_get_creators()`` directly if insertion order matters.
+
+        Every unit of an item hashes the same: they share the item's metadata,
+        and the attachment's name in a further unit's title is not part of it.
         """
+        item_key, _ = split_unit_id(doc_id)
         conn = self._connect()
         try:
-            row = conn.execute("SELECT itemID FROM items WHERE key = ?", (doc_id,)).fetchone()
+            row = conn.execute("SELECT itemID FROM items WHERE key = ?", (item_key,)).fetchone()
             if not row:
                 return ""
             item_id = row["itemID"]
@@ -627,18 +797,13 @@ class ZoteroAdapter(SourceAdapter):
         Excluded item types (annotation/attachment/note) and trashed items
         must match list_documents() exactly, otherwise children of an item
         would be flagged as orphans on every cleanup pass.
+
+        A further unit is current only while its attachment is: deleting one
+        review of five takes that review out of the index and leaves the item.
         """
-        excluded = ",".join(str(t) for t in _EXCLUDED_TYPE_IDS)
         conn = self._connect()
         try:
-            rows = conn.execute(
-                f"""
-                SELECT key FROM items
-                WHERE itemTypeID NOT IN ({excluded})
-                AND itemID NOT IN (SELECT itemID FROM deletedItems)
-                """
-            ).fetchall()
-            current = {r[0] for r in rows}
+            current = current_unit_ids(conn)
         finally:
             conn.close()
         return {str(x) for x in lancedb_ids} - current

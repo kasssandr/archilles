@@ -137,6 +137,16 @@ class SourceAdapter(ABC):
         No-op by default.  Implementations may use ``watchdog`` or similar.
         """
 
+    def list_works(self) -> list[DocumentMetadata]:
+        """One entry per bibliographic work, for listings and exports.
+
+        ``list_documents()`` answers "what is there to index", and a source may
+        index one work as several documents — Zotero does, one per attachment.
+        A bibliography or a tag count must not see that work three times.
+        Same as ``list_documents()`` unless the adapter makes the distinction.
+        """
+        return self.list_documents()
+
     def get_metadata_by_path(self, file_path: Path) -> DocumentMetadata | None:
         """Look up metadata by file path instead of doc_id.
 

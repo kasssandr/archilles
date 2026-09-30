@@ -451,7 +451,7 @@ class CalibreMCPServer:
         max_books: Optional[int],
     ) -> dict[str, Any]:
         try:
-            docs = self.adapter.list_documents()
+            docs = self.adapter.list_works()
             results = []
             for doc in docs:
                 if author and not any(author.lower() in a.lower() for a in doc.authors):
@@ -556,7 +556,7 @@ class CalibreMCPServer:
         """Adapter-based fallback for list_books_by_author (Zotero, folder, etc.)."""
         author_lower = author.lower()
         try:
-            docs = self.adapter.list_documents()
+            docs = self.adapter.list_works()
             results = []
             for doc in docs:
                 if not any(author_lower in a.lower() for a in doc.authors):
@@ -637,7 +637,7 @@ class CalibreMCPServer:
     def _list_tags_via_adapter(self, min_books: int, max_tags: int) -> dict[str, Any]:
         try:
             tag_counts: dict[str, int] = {}
-            for doc in self.adapter.list_documents():
+            for doc in self.adapter.list_works():
                 for tag in doc.tags:
                     tag_counts[tag] = tag_counts.get(tag, 0) + 1
             all_tags = [

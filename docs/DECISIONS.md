@@ -494,6 +494,28 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 
 ---
 
+### ADR-037: Zotero — jeder Anhang ist eine eigene indexierte Einheit (September 2026)
+
+**Kontext:** Der `ZoteroAdapter` wählte pro Eintrag den „besten" Anhang (PDF vor EPUB vor HTML) und ließ die übrigen stillschweigend fallen. In Calibre liegt pro Buchordner eine Datei (ADR-010), in der Calibre-Spiegelung ebenso — dort fiel es nie auf. In der Sammlung `Rezensionen` liegen aber mehrere Rezensionen unter dem rezensierten Buch: 53 Einträge mit mehreren Anhängen, 95 von 288 Dateien wurden nie indexiert. Anforderung des Nutzers: „Bei Zotero muss alles indexiert werden."
+
+**Entscheidung:** Jeder indexierbare Anhang wird eine eigene Einheit mit eigener `book_id`. Der erste Anhang behält den bloßen Zotero-Key (`9G6GPTPJ`), jeder weitere heißt `EINTRAG#ANHANG` (`9G6GPTPJ#WBT4H8D9`). Die Reihenfolge ist fest: bestes Format, bei Gleichstand der älteste Anhang.
+
+**Begründung:**
+- *Bloßer Key für den ersten Anhang:* Alles, was vor der Änderung indexiert wurde, bleibt unter seiner Kennung gültig — keine Nachindexierung des Bestands.
+- *Eigene Einheit statt zusammengefasstem Dokument:* Ein Zitat muss eine Rezension nennen können, nicht „eine von fünf". Seitenzahlen verschiedener Dateien in einem Dokument wären nicht mehr adressierbar (ADR-034).
+- *Reihenfolge unabhängig von der Erreichbarkeit der Datei:* Eine Kennung, die wandert, sobald ein Laufwerk fehlt, würde aus einer nicht erreichbaren Datei eine Runde Löschungen und Neuindexierungen machen. Ein nicht auflösbarer erster Anhang wird deshalb als übersprungen gemeldet, statt dass der zweite an seine Stelle rückt.
+- *Metadaten vom Eintrag:* Titel, Autoren, Tags und Metadaten-Hash kommen vom Eintrag; eine weitere Einheit hängt den Namen ihres Anhangs an den Titel („Buchtitel · Dateiname"). Hervorhebungen folgen ihrer Datei, Notizen des Eintrags bleiben beim bloßen Key.
+
+**Konsequenzen:**
+- Das Waisen-Aufräumen kennt Einheiten: Wird ein einzelner Anhang in Zotero gelöscht, verschwindet genau dessen Text aus dem Index; der Eintrag bleibt.
+- Der bloße Key kann auf eine andere Datei übergehen (erster Anhang gelöscht, besseres Format nachgetragen). Der Watchdog merkt sich deshalb in `zotero_first_attachments.json`, aus welchem Anhang er indexiert hat, und indexiert bei Abweichung erzwungen neu (`attachment_replaced`).
+- Bibliographische Listen (MCP: Export, Autoren- und Tag-Listen) gehen über `list_works()` und sehen ein Werk einmal, nicht einmal pro Anhang.
+- Offen: Als Autor eines Treffers steht der Autor des rezensierten Buchs, nicht der Rezensent — Zotero führt ihn nirgends. Notizen an Einträgen ohne Datei und nachträglich geschriebene Notizen werden weiterhin nicht erfasst.
+
+**Implementierung:** `src/adapters/zotero_adapter.py` (`list_attachment_units`, `unit_id`, `split_unit_id`), `ZoteroWatchdogScanner` in `src/archilles/watchdog.py`, Tests in `tests/test_zotero_attachment_units.py`.
+
+---
+
 ### ADR-023: Structure-Aware PDF Chunking (März 2026)
 
 **Kontext:** Eine Analyse mit dem Chunk Inspector (19. März 2026, `BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) zeigte, dass PDF-Chunks 0% chapter/section_title-Abdeckung hatten, während EPUB-Chunks 96–100% erreichten. Der PDF-TOC wurde zwar extrahiert, aber nicht auf einzelne Chunks gemappt.
