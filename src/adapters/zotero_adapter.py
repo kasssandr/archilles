@@ -91,6 +91,9 @@ class ZoteroAdapter(SourceAdapter):
         self._library_path = Path(library_path)
         self._db_path = self._library_path / "zotero.sqlite"
         self._storage_path = self._library_path / "storage"
+        if linked_attachment_base is None:
+            from src.archilles.config import get_linked_attachment_base
+            linked_attachment_base = get_linked_attachment_base(self._library_path)
         self._linked_base = Path(linked_attachment_base) if linked_attachment_base else None
 
         if not self._db_path.exists():

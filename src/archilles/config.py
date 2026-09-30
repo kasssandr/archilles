@@ -548,6 +548,23 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
     )
 
 
+def get_linked_attachment_base(library_path: Path) -> Path | None:
+    """Return ``linked_attachment_base`` of the master-config source at *library_path*.
+
+    Lets callers that only know the library path (CLI scripts, the watchdog
+    subprocess) resolve relative Zotero linked files. ``None`` when there is
+    no master config, no matching source, or the key is unset.
+    """
+    master = load_master_config()
+    if master is None:
+        return None
+    wanted = os.path.normcase(os.path.abspath(library_path))
+    for src in master.sources:
+        if os.path.normcase(os.path.abspath(src.library_path)) == wanted:
+            return src.linked_attachment_base
+    return None
+
+
 def resolve_enable_reranking(explicit: bool | None) -> bool:
     """Resolve the effective cross-encoder reranking flag.
 
