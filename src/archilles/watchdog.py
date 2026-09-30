@@ -1401,6 +1401,11 @@ from src.adapters.zotero_adapter import (  # noqa: E402
     unit_id as _zotero_unit_id,
 )
 
+# The annotation cache holds one more entry per indexed item, under the item
+# key plus this suffix: the state of its notes. "@" cannot occur in a Zotero
+# key, nor in a unit id.
+_NOTES_CACHE_SUFFIX = "@notes"
+
 
 def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
     """Batch-read all Zotero items in one pass for watchdog scanning.
@@ -1455,6 +1460,7 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
                 "attachment_modified_at": None,
                 "has_attachment": False,
                 "units": [],
+                "notes_signal": "",
             }
             for r in items
         }
@@ -1556,6 +1562,24 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
                 }
                 for position, att in enumerate(attachments)
             ]
+
+        # Notes: how many an item has and when one was last touched. They are
+        # items of their own, so writing or editing one changes neither the
+        # parent's metadata nor any attachment's dateModified — without this
+        # signal a note written after indexing never reaches the index. The
+        # count is in it because deleting a note moves no date forward.
+        note_rows = conn.execute("""
+            SELECT n.parentItemID, COUNT(*) AS n, MAX(i.dateModified) AS modified
+            FROM itemNotes n
+            JOIN items i ON n.itemID = i.itemID
+            WHERE n.parentItemID IS NOT NULL
+            AND n.itemID NOT IN (SELECT itemID FROM deletedItems)
+            GROUP BY n.parentItemID
+        """).fetchall()
+        for row in note_rows:
+            key = id_to_key.get(row["parentItemID"])
+            if key:
+                result[key]["notes_signal"] = f"{row['n']}:{row['modified'] or ''}"
 
         return result
     finally:
@@ -1757,6 +1781,20 @@ class ZoteroWatchdogScanner:
                     ann_cache[uid] = current_att_mod
                     self._annotation_cache_dirty = True
 
+                # The item's notes are indexed with the bare key. Same rules:
+                # the first sight of an indexed item only records the state, a
+                # later difference is a change and is committed after Phase 2.
+                # "No notes" is recorded too, or the first note ever written
+                # would look like a first sight.
+                if uid == key:
+                    notes_key = uid + _NOTES_CACHE_SUFFIX
+                    if notes_key not in ann_cache:
+                        ann_cache[notes_key] = data["notes_signal"]
+                        self._annotation_cache_dirty = True
+                    elif ann_cache[notes_key] != data["notes_signal"]:
+                        pending_cache[notes_key] = data["notes_signal"]
+                        annot_changed = True
+
                 if meta_changed:
                     results['metadata_changed'].append(uid)
                 if annot_changed:
@@ -1815,9 +1853,10 @@ class ZoteroWatchdogScanner:
                     # re-index succeeded (4.3). Metadata-only changes have no
                     # pending entry; failed/shutdown-skipped items keep their
                     # old cached value and are re-detected next scan.
-                    if key in pending_cache:
-                        ann_cache[key] = pending_cache[key]
-                        self._annotation_cache_dirty = True
+                    for cache_key in (key, key + _NOTES_CACHE_SUFFIX):
+                        if cache_key in pending_cache:
+                            ann_cache[cache_key] = pending_cache[cache_key]
+                            self._annotation_cache_dirty = True
                 except Exception as exc:
                     logger.error("Delta update failed for key=%s: %s", key, exc)
                     results['errors'].append({'doc_id': key, 'error': str(exc)})
@@ -1877,11 +1916,14 @@ class ZoteroWatchdogScanner:
                         if att_mod:
                             ann_cache[key] = att_mod
                             self._annotation_cache_dirty = True
-                        # ...and remember which file the bare key stands for.
-                        units = zotero_items.get(key, {}).get("units")
-                        if units:
-                            first_cache[key] = units[0]["attachment_key"]
+                        # ...and, for the bare key, which file it stands for
+                        # and the notes it was indexed with.
+                        item = zotero_items.get(key)
+                        if item and item["units"]:
+                            first_cache[key] = item["units"][0]["attachment_key"]
                             self._first_attachment_cache_dirty = True
+                            ann_cache[key + _NOTES_CACHE_SUFFIX] = item["notes_signal"]
+                            self._annotation_cache_dirty = True
                     except Exception as exc:
                         logger.error("New-item indexing failed for key=%s: %s", key, exc)
                         results['errors'].append({'doc_id': key, 'error': str(exc)})

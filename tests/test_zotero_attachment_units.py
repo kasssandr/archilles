@@ -298,3 +298,88 @@ class TestReplacedFirstAttachment:
         assert calls == [("BOOK01", True)]
         remembered = json.loads(scanner.first_attachment_cache_file.read_text())
         assert remembered == {"BOOK01": "ATT1001"}
+
+
+# ── Notes written after indexing ────────────────────────────────
+
+
+def _add_note(library: Path, note_id: int, parent_id: int,
+              modified: str = "2025-07-01T00:00:00") -> None:
+    conn = sqlite3.connect(str(library / "zotero.sqlite"))
+    conn.execute("INSERT INTO items VALUES (?, 27, 1, ?, ?, ?)",
+                 (note_id, f"NOTE{note_id}", modified, modified))
+    conn.execute("INSERT INTO itemNotes VALUES (?, ?, '<p>a thought</p>', '')",
+                 (note_id, parent_id))
+    conn.commit()
+    conn.close()
+
+
+class TestNotesWrittenLater:
+    """A note is an item of its own: writing one changes neither the parent's
+    metadata nor any attachment's date. Nothing used to notice it, so a note
+    written after its item was indexed stayed out of the index for good."""
+
+    def _scan(self, library, tmp_path, cache: dict | None):
+        stored = _stored(library)
+        scanner = _make_scanner(library, tmp_path)
+        if cache is not None:
+            scanner.annotation_cache_file.write_text(json.dumps(cache))
+        with patch.object(scanner, "_load_indexed_hashes",
+                          return_value={"BOOK01": stored, "BOOK01#ATT2000": stored}):
+            return scanner.scan(dry_run=True)
+
+    def test_signal_counts_and_dates_the_notes(self, library):
+        assert _zotero_metadata_for_scan(library)["BOOK01"]["notes_signal"] == ""
+        _add_note(library, 5000, parent_id=1)
+        _add_note(library, 5001, parent_id=1, modified="2025-08-01T00:00:00")
+        signal = _zotero_metadata_for_scan(library)["BOOK01"]["notes_signal"]
+        assert signal == "2:2025-08-01T00:00:00"
+
+    def test_first_sight_is_not_a_change(self, library, tmp_path):
+        _add_note(library, 5000, parent_id=1)
+        results = self._scan(library, tmp_path, cache={})
+        assert results["annotations_changed"] == []
+
+    def test_first_note_on_a_known_item_is_a_change(self, library, tmp_path):
+        """"No notes" has to be a recorded state, or this looks like a first sight."""
+        _add_note(library, 5000, parent_id=1)
+        results = self._scan(library, tmp_path, cache={"BOOK01@notes": ""})
+        assert results["annotations_changed"] == ["BOOK01"]
+
+    def test_a_deleted_note_is_a_change(self, library, tmp_path):
+        results = self._scan(library, tmp_path,
+                             cache={"BOOK01@notes": "1:2025-07-01T00:00:00"})
+        assert results["annotations_changed"] == ["BOOK01"]
+
+    def test_notes_belong_to_the_bare_key_only(self, library, tmp_path):
+        _add_note(library, 5000, parent_id=1)
+        results = self._scan(library, tmp_path, cache={"BOOK01@notes": ""})
+        assert "BOOK01#ATT2000" in results["unchanged"]
+
+    def test_the_new_state_is_kept_once_the_update_succeeded(
+        self, library, tmp_path, monkeypatch,
+    ):
+        _add_note(library, 5000, parent_id=1)
+        stored = _stored(library)
+        scanner = _make_scanner(library, tmp_path)
+        scanner.annotation_cache_file.write_text(json.dumps({"BOOK01@notes": ""}))
+        scanner._load_indexed_hashes = lambda: {"BOOK01": stored, "BOOK01#ATT2000": stored}
+        plan = MagicMock()
+        plan.embed_local = True
+        plan.mode = "balanced"
+        scanner._resolve_plan = lambda: plan
+        calls: list[tuple[str, bool]] = []
+
+        class RecordingRAG:
+            def index_book(self, path, key, force=False):
+                calls.append((key, force))
+                return {}
+
+        scanner._load_rag = lambda: RecordingRAG()
+        monkeypatch.setattr(ZoteroAdapter, "get_file_path", lambda self, key: Path("f.pdf"))
+
+        scanner.scan(queue_new=False)
+
+        assert calls == [("BOOK01", False)]
+        cache = json.loads(scanner.annotation_cache_file.read_text())
+        assert cache["BOOK01@notes"] == "1:2025-07-01T00:00:00"

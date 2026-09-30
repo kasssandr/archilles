@@ -510,7 +510,8 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 - Das Waisen-Aufräumen kennt Einheiten: Wird ein einzelner Anhang in Zotero gelöscht, verschwindet genau dessen Text aus dem Index; der Eintrag bleibt.
 - Der bloße Key kann auf eine andere Datei übergehen (erster Anhang gelöscht, besseres Format nachgetragen). Der Watchdog merkt sich deshalb in `zotero_first_attachments.json`, aus welchem Anhang er indexiert hat, und indexiert bei Abweichung erzwungen neu (`attachment_replaced`).
 - Bibliographische Listen (MCP: Export, Autoren- und Tag-Listen) gehen über `list_works()` und sehen ein Werk einmal, nicht einmal pro Anhang.
-- Offen: Als Autor eines Treffers steht der Autor des rezensierten Buchs, nicht der Rezensent — Zotero führt ihn nirgends. Notizen an Einträgen ohne Datei und nachträglich geschriebene Notizen werden weiterhin nicht erfasst.
+- Offen: Als Autor eines Treffers steht der Autor des rezensierten Buchs, nicht der Rezensent — Zotero führt ihn nirgends. Notizen an Einträgen ohne Datei und eigenständige Notizen werden weiterhin nicht erfasst.
+- Nachtrag: Notizen sind eigene Zotero-Items — eine nachträglich geschriebene ändert weder die Metadaten des Eintrags noch das Datum eines Anhangs. Der Watchdog führt deshalb je Eintrag ein eigenes Signal (Anzahl und jüngstes Änderungsdatum der Notizen, im Annotations-Cache unter `KEY@notes`). Der erste Blick auf einen schon indexierten Eintrag merkt sich nur den Stand; was vor diesem Zeitpunkt im Index fehlte, holt erst ein bewusster Nachlauf.
 
 **Implementierung:** `src/adapters/zotero_adapter.py` (`list_attachment_units`, `unit_id`, `split_unit_id`), `ZoteroWatchdogScanner` in `src/archilles/watchdog.py`, Tests in `tests/test_zotero_attachment_units.py`.
 
