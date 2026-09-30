@@ -39,6 +39,8 @@ def _build_library(path, *, link_mode, raw_path, with_file=False):
         CREATE TABLE itemAttachments (itemID INTEGER PRIMARY KEY,
                                       parentItemID INTEGER, linkMode INTEGER,
                                       path TEXT, contentType TEXT);
+        CREATE TABLE tags (tagID INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE itemTags (itemID INTEGER, tagID INTEGER);
         CREATE TABLE itemNotes (itemID INTEGER PRIMARY KEY,
                                 parentItemID INTEGER, note TEXT, title TEXT);
         CREATE TABLE itemAnnotations (itemID INTEGER PRIMARY KEY,
@@ -110,6 +112,8 @@ class TestAdapterExplainsWhyThereIsNoFile:
             CREATE TABLE itemAttachments (itemID INTEGER PRIMARY KEY,
                                           parentItemID INTEGER, linkMode INTEGER,
                                           path TEXT, contentType TEXT);
+            CREATE TABLE tags (tagID INTEGER PRIMARY KEY, name TEXT);
+            CREATE TABLE itemTags (itemID INTEGER, tagID INTEGER);
             CREATE TABLE itemNotes (itemID INTEGER PRIMARY KEY,
                                     parentItemID INTEGER, note TEXT, title TEXT);
             CREATE TABLE deletedItems (itemID INTEGER PRIMARY KEY);

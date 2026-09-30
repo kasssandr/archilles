@@ -1396,6 +1396,7 @@ class WatchdogScanner:
 # from what the adapter actually indexes.
 from src.adapters.zotero_adapter import (  # noqa: E402
     _EXCLUDED_TYPE_IDS as _ZOTERO_EXCLUDED_TYPE_IDS,
+    attachment_exclusion_tags as _zotero_attachment_exclusion_tags,
     list_attachment_units as _zotero_attachment_units,
     split_unit_id as _zotero_split_unit_id,
     unit_id as _zotero_unit_id,
@@ -1546,7 +1547,9 @@ def _zotero_metadata_for_scan(library_path: Path) -> dict[str, dict[str, Any]]:
         # Attachments: one indexing unit each, in the adapter's own order, so
         # scanner and adapter agree on every unit id. An attachment's
         # dateModified signals annotation changes in that file.
-        for parent_id, attachments in _zotero_attachment_units(conn).items():
+        for parent_id, attachments in _zotero_attachment_units(
+            conn, excluded_tags=_zotero_attachment_exclusion_tags(library_path),
+        ).items():
             key = id_to_key.get(parent_id)
             if not key:
                 continue

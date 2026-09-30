@@ -163,6 +163,13 @@ ARCHILLES supports multiple library backends, auto-detected from the directory s
 | `ObsidianAdapter` | Obsidian vault | Detects `.obsidian/` directory |
 | `FolderAdapter` | Plain directory | Fallback for any supported file collection |
 
+**Zotero: every attachment is indexed.** An item with several files — five reviews of one book, a paper and its supplement — is indexed file by file. The first attachment is addressed by the item key, each further one by `ITEMKEY#ATTACHMENTKEY`, and its search hits are titled "Item title · attachment name". Two things are left out:
+
+- **An attachment you tag out.** Put an exclusion tag (default `exclude`, configurable through `excluded_tags` in `.archilles/config.json`) on the attachment itself, not on the item. It stays in the item and is not indexed — for a second edition, a draft, a supplement.
+- **A web snapshot next to a PDF or EPUB.** The browser connector saves the publisher's landing page along with the paper; that page is skipped. A snapshot that is the item's only content is indexed as before.
+
+Notes attached to an item are indexed with it, and a note written or edited later is picked up by the next watchdog run.
+
 ### 2.11 DialogueChunker
 Specialized chunker for chat and Q&A exports (ChatGPT, Gemini, Grok, NotebookLM). Recognizes turn markers (`## User`, `## Assistant`, `**Q:**`, etc.) and chunks per turn or turn-pair, preserving `speaker` metadata. Registered in `ChunkerRegistry`, auto-activated when dialogue structure is detected.
 

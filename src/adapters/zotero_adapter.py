@@ -48,6 +48,12 @@ _TITLE_EXTENSIONS = {"pdf", "epub", "html", "htm", "txt", "md", "docx"}
 # snapshot, linked file. 3 (linked URL) and 4 (embedded image) never do.
 _FILE_LINK_MODES = (0, 1, 2)
 
+# "Imported URL": what the browser connector's snapshot of a web page is.
+_SNAPSHOT_LINK_MODE = 1
+
+# Formats that are the document itself; a snapshot beside one is a by-product.
+_DOCUMENT_FORMATS = ("pdf", "epub")
+
 #: Separates the item key from the attachment key in a unit id.
 UNIT_SEPARATOR = "#"
 
@@ -77,8 +83,23 @@ def unit_id(item_key: str, position: int, att_key: str) -> str:
     return item_key if position == 0 else f"{item_key}{UNIT_SEPARATOR}{att_key}"
 
 
+def attachment_exclusion_tags(library_path: Path) -> frozenset[str]:
+    """The tags that take a single attachment out of the index, lowercased.
+
+    The same ``excluded_tags`` that exclude a whole item, read from the
+    library's config and from nowhere else — not from a run's
+    ``--include-excluded`` or ``--exclude-tag``. Those decide what one run
+    works on; this decides which attachment is an item's first, and an id
+    must not depend on how a run was started.
+    """
+    from src.archilles.config import get_excluded_tags
+    return frozenset(t.lower() for t in get_excluded_tags(library_path))
+
+
 def list_attachment_units(
-    conn: sqlite3.Connection, item_id: int | None = None,
+    conn: sqlite3.Connection,
+    item_id: int | None = None,
+    excluded_tags: frozenset[str] = frozenset(),
 ) -> dict[int, list[dict]]:
     """Indexable attachments per parent item, in unit order.
 
@@ -86,6 +107,15 @@ def list_attachment_units(
     format}, ...]}`` — for one item, or for the whole library in a single
     query. The adapter and the watchdog scanner both read this, which is what
     keeps their idea of a unit id from drifting apart.
+
+    Two kinds of attachment are left out, and are then no unit at all:
+
+    * one that carries a tag from ``excluded_tags`` — how a user keeps a
+      second edition, a draft or a supplement in the item without indexing it;
+    * a web snapshot next to a PDF or EPUB. The browser connector saves the
+      publisher's landing page along with the paper, and nobody asked for its
+      menus and cookie notice in the index. A snapshot on its own is the
+      item's content and stays.
     """
     query = """
         SELECT ia.parentItemID, ia.itemID, i.key, i.dateModified,
@@ -110,14 +140,39 @@ def list_attachment_units(
         att["format"] = fmt
         units.setdefault(row["parentItemID"], []).append(att)
 
-    for attachments in units.values():
+    tagged_out: set[int] = set()
+    if excluded_tags:
+        tagged_out = {
+            row[0] for row in conn.execute(
+                """
+                SELECT it.itemID, t.name FROM itemTags it
+                JOIN tags t ON it.tagID = t.tagID
+                JOIN itemAttachments ia ON ia.itemID = it.itemID
+                """
+            )
+            if row[1].lower() in excluded_tags
+        }
+
+    for parent_id in list(units):
+        attachments = [a for a in units[parent_id] if a["itemID"] not in tagged_out]
+        if any(a["format"] in _DOCUMENT_FORMATS for a in attachments):
+            attachments = [
+                a for a in attachments
+                if not (a["format"] == "html" and a["linkMode"] == _SNAPSHOT_LINK_MODE)
+            ]
+        if not attachments:
+            del units[parent_id]
+            continue
         attachments.sort(
             key=lambda a: (-_FORMAT_PRIORITY.get(a["format"], 1), a["itemID"])
         )
+        units[parent_id] = attachments
     return units
 
 
-def current_unit_ids(conn: sqlite3.Connection) -> set[str]:
+def current_unit_ids(
+    conn: sqlite3.Connection, excluded_tags: frozenset[str] = frozenset(),
+) -> set[str]:
     """Every id the library can currently be indexed under.
 
     The bare key of each live item — with or without a file, as before units
@@ -132,7 +187,7 @@ def current_unit_ids(conn: sqlite3.Connection) -> set[str]:
         AND itemID NOT IN (SELECT itemID FROM deletedItems)
         """
     ).fetchall()
-    units = list_attachment_units(conn)
+    units = list_attachment_units(conn, excluded_tags=excluded_tags)
     current: set[str] = set()
     for item in items:
         current.add(item["key"])
@@ -194,9 +249,14 @@ class ZoteroAdapter(SourceAdapter):
             from src.archilles.config import get_linked_attachment_base
             linked_attachment_base = get_linked_attachment_base(self._library_path)
         self._linked_base = Path(linked_attachment_base) if linked_attachment_base else None
+        self._excluded_attachment_tags = attachment_exclusion_tags(self._library_path)
 
         if not self._db_path.exists():
             raise FileNotFoundError(f"zotero.sqlite not found in {self._library_path}")
+
+    def _units(self, conn: sqlite3.Connection, item_id: int | None = None) -> dict[int, list[dict]]:
+        """``list_attachment_units`` under this library's exclusion tags."""
+        return list_attachment_units(conn, item_id, self._excluded_attachment_tags)
 
     @property
     def adapter_type(self) -> str:
@@ -455,7 +515,7 @@ class ZoteroAdapter(SourceAdapter):
         A bare item key is the first attachment. A further one is addressed by
         its own key — and only a further one: the first has exactly one id.
         """
-        attachments = list_attachment_units(conn, item_id).get(item_id, [])
+        attachments = self._units(conn, item_id).get(item_id, [])
         if att_key is None:
             return attachments[0] if attachments else None
         for att in attachments[1:]:
@@ -596,7 +656,7 @@ class ZoteroAdapter(SourceAdapter):
             query += " ORDER BY i.itemID"
             rows = conn.execute(query, params).fetchall()
 
-            units = list_attachment_units(conn)
+            units = self._units(conn)
             docs = []
             for row in rows:
                 # One document per attachment. An item without any still gets
@@ -634,7 +694,7 @@ class ZoteroAdapter(SourceAdapter):
             ).fetchone()
             if not row:
                 return None
-            attachments = list_attachment_units(conn, row["itemID"]).get(row["itemID"], [])
+            attachments = self._units(conn, row["itemID"]).get(row["itemID"], [])
             if att_key is None:
                 att = attachments[0] if attachments else None
                 return self._build_metadata(conn, row["itemID"], row["key"], att)
@@ -668,10 +728,10 @@ class ZoteroAdapter(SourceAdapter):
         The mapping lives in ``annotation_providers.zotero_provider`` so this
         adapter and the import path cannot drift apart.
 
-        Highlights follow their file: a further unit (``KEY#ATT``) gets those
-        made in its own attachment and nothing else. Everything that belongs to
-        no further unit stays with the bare key — its attachment's highlights
-        and the item's notes, which are about the item rather than one file.
+        Highlights follow their file: each unit gets those made in its own
+        attachment and nothing else — so an attachment that is no unit (tagged
+        out, or a snapshot beside a PDF) contributes none. The item's notes go
+        with the bare key; they are about the item rather than one file.
         """
         item_key, att_key = split_unit_id(doc_id)
         conn = self._connect()
@@ -680,11 +740,8 @@ class ZoteroAdapter(SourceAdapter):
             if not item_row:
                 return []
             item_id = item_row["itemID"]
-            further_units = {
-                att["key"]: att["itemID"]
-                for att in list_attachment_units(conn, item_id).get(item_id, [])[1:]
-            }
-            if att_key is not None and att_key not in further_units:
+            unit = self._select_attachment(conn, item_id, att_key)
+            if unit is None and att_key is not None:
                 return []
 
             annotations = []
@@ -704,10 +761,7 @@ class ZoteroAdapter(SourceAdapter):
                 (item_id,),
             ).fetchall()
             for att in att_rows:
-                if att_key is not None:
-                    if att["itemID"] != further_units[att_key]:
-                        continue
-                elif att["itemID"] in further_units.values():
+                if unit is not None and att["itemID"] != unit["itemID"]:
                     continue
                 ann_rows = conn.execute(
                     f"SELECT {columns} FROM itemAnnotations WHERE parentItemID = ?",
@@ -803,7 +857,7 @@ class ZoteroAdapter(SourceAdapter):
         """
         conn = self._connect()
         try:
-            current = current_unit_ids(conn)
+            current = current_unit_ids(conn, self._excluded_attachment_tags)
         finally:
             conn.close()
         return {str(x) for x in lancedb_ids} - current

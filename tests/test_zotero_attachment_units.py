@@ -383,3 +383,109 @@ class TestNotesWrittenLater:
         assert calls == [("BOOK01", False)]
         cache = json.loads(scanner.annotation_cache_file.read_text())
         assert cache["BOOK01@notes"] == "1:2025-07-01T00:00:00"
+
+
+# ── What the user can leave out ─────────────────────────────────
+
+
+def _tag(library: Path, item_id: int, name: str) -> None:
+    conn = sqlite3.connect(str(library / "zotero.sqlite"))
+    tag_id = conn.execute("SELECT COALESCE(MAX(tagID), 0) + 1 FROM tags").fetchone()[0]
+    conn.execute("INSERT INTO tags (tagID, name) VALUES (?, ?)", (tag_id, name))
+    conn.execute("INSERT INTO itemTags (itemID, tagID) VALUES (?, ?)", (item_id, tag_id))
+    conn.commit()
+    conn.close()
+
+
+class TestAttachmentTaggedOut:
+    """Two editions in one item, one of them not for the index: the tag that
+    excludes a whole item excludes a single attachment too, and the file
+    stays where it is."""
+
+    def test_tagged_attachment_is_no_unit(self, adapter, tmp_path):
+        _tag(tmp_path, 101, "exclude")
+        ids = [d.doc_id for d in adapter.list_documents()]
+        assert ids == ["BOOK0001", "BOOK0001#REVCCCCC", "BOOK0002"]
+        assert adapter.get_file_path("BOOK0001#REVBBBBB") is None
+
+    def test_tag_is_matched_case_insensitively(self, adapter, tmp_path):
+        _tag(tmp_path, 101, "Exclude")
+        assert "BOOK0001#REVBBBBB" not in [d.doc_id for d in adapter.list_documents()]
+
+    def test_any_other_tag_changes_nothing(self, adapter, tmp_path):
+        _tag(tmp_path, 101, "to-read")
+        assert "BOOK0001#REVBBBBB" in [d.doc_id for d in adapter.list_documents()]
+
+    def test_configured_tags_replace_the_default(self, adapter, tmp_path):
+        (tmp_path / ".archilles").mkdir()
+        (tmp_path / ".archilles" / "config.json").write_text(
+            json.dumps({"excluded_tags": ["Zweitausgabe"]}), encoding="utf-8")
+        _tag(tmp_path, 101, "Zweitausgabe")
+        _tag(tmp_path, 102, "exclude")
+        ids = [d.doc_id for d in ZoteroAdapter(tmp_path).list_documents()]
+        assert ids == ["BOOK0001", "BOOK0001#REVCCCCC", "BOOK0002"]
+
+    def test_tagging_the_first_passes_the_bare_key_on(self, adapter, tmp_path):
+        """The scanner's replaced-attachment check is what then re-indexes it."""
+        _tag(tmp_path, 100, "exclude")
+        assert adapter.get_file_path("BOOK0001").name == "Review Post.pdf"
+        assert [d.doc_id for d in adapter.list_documents()][:2] == [
+            "BOOK0001", "BOOK0001#REVCCCCC"]
+
+    def test_its_unit_becomes_an_orphan(self, adapter, tmp_path):
+        _tag(tmp_path, 101, "exclude")
+        indexed = {"BOOK0001", "BOOK0001#REVBBBBB", "BOOK0001#REVCCCCC"}
+        assert adapter.compute_orphan_ids(indexed) == {"BOOK0001#REVBBBBB"}
+
+    def test_the_scanner_agrees(self, library, tmp_path):
+        _tag(library, 2000, "exclude")
+        units = _zotero_metadata_for_scan(library)["BOOK01"]["units"]
+        assert [u["unit_id"] for u in units] == ["BOOK01"]
+
+
+def _snapshot(item_id: int, key: str) -> dict:
+    return {"itemID": item_id, "key": key, "linkMode": 1, "contentType": HTML,
+            "path": "storage:landing.html", "filename": "landing.html"}
+
+
+class TestSnapshotBesideTheDocument:
+    """The browser connector saves the publisher's landing page along with the
+    paper. Nobody chose to have two files there."""
+
+    def _library(self, tmp_path, monkeypatch, attachments):
+        monkeypatch.setenv("ARCHILLES_CONFIG_PATH", str(tmp_path / "absent.json"))
+        _create_zotero_db(tmp_path, items=[{
+            "itemID": 1, "key": "PAPER001", "itemTypeID": 12, "title": "A Paper",
+            "attachments": attachments,
+        }])
+        return ZoteroAdapter(tmp_path)
+
+    def test_snapshot_beside_a_pdf_is_left_out(self, tmp_path, monkeypatch):
+        adapter = self._library(tmp_path, monkeypatch, [
+            _snapshot(100, "SNAPSHOT"), _att(101, "THEPDF00", "paper.pdf")])
+        assert [d.doc_id for d in adapter.list_documents()] == ["PAPER001"]
+        assert adapter.get_file_path("PAPER001").name == "paper.pdf"
+
+    def test_snapshot_on_its_own_is_the_content(self, tmp_path, monkeypatch):
+        adapter = self._library(tmp_path, monkeypatch, [_snapshot(100, "SNAPSHOT")])
+        assert adapter.get_file_path("PAPER001").name == "landing.html"
+
+    def test_two_snapshots_without_a_document_both_stay(self, tmp_path, monkeypatch):
+        adapter = self._library(tmp_path, monkeypatch, [
+            _snapshot(100, "SNAPSHOT"), _snapshot(101, "SNAPSHO2")])
+        assert [d.doc_id for d in adapter.list_documents()] == [
+            "PAPER001", "PAPER001#SNAPSHO2"]
+
+    def test_an_html_file_attached_on_purpose_stays(self, tmp_path, monkeypatch):
+        """Only the connector's snapshot is a by-product; a stored or linked
+        HTML file was put there by hand."""
+        adapter = self._library(tmp_path, monkeypatch, [
+            _att(100, "HTMLFILE", "notes.html", HTML), _att(101, "THEPDF00", "paper.pdf")])
+        assert [d.doc_id for d in adapter.list_documents()] == [
+            "PAPER001", "PAPER001#HTMLFILE"]
+
+    def test_tagged_out_pdf_leaves_the_snapshot_as_content(self, tmp_path, monkeypatch):
+        adapter = self._library(tmp_path, monkeypatch, [
+            _snapshot(100, "SNAPSHOT"), _att(101, "THEPDF00", "paper.pdf")])
+        _tag(tmp_path, 101, "exclude")
+        assert adapter.get_file_path("PAPER001").name == "landing.html"
