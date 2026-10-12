@@ -102,14 +102,52 @@ def test_the_single_source_server_does_the_same():
 
 # the Markdown export --------------------------------------------------------------
 
-def test_the_calibre_link_opens_the_physical_page(tmp_path):
-    """Search rows carry page_number; the link read 'page', which no row has."""
+def _export(tmp_path, metadata):
     rag = ArchillesRAG(db_path=str(tmp_path / "db"), skip_model=True)
-    results = [{"rank": 1, "similarity": 0.8, "text": "Ein Satz.",
-                "metadata": {"book_title": "Aneignung", "calibre_id": 10593,
-                             "page_label": "88", "page_number": 104}}]
+    results = [{"rank": 1, "similarity": 0.8, "text": "Ein Satz.", "metadata": metadata}]
     out = rag.export_to_markdown(results, "Satz", str(tmp_path / "export.md"))
-    assert "calibre://view/10593#page=104" in Path(out).read_text(encoding="utf-8")
+    return Path(out).read_text(encoding="utf-8")
+
+
+def test_the_calibre_link_uses_an_action_calibre_knows(tmp_path):
+    """calibre://view/<id>#page=N was no action of Calibre's URL scheme;
+    show-book in the open library ('_') is, and it takes no page."""
+    text = _export(tmp_path, {"book_title": "Aneignung", "calibre_id": 10593,
+                              "page_label": "88", "page_number": 104})
+    assert "(calibre://show-book/_/10593)" in text
+    assert "calibre://view/" not in text
+
+
+def test_the_file_link_survives_spaces_and_parentheses(tmp_path):
+    text = _export(tmp_path, {"book_title": "Aneignung",
+                              "source_file": r"D:\Calibre-Bibliothek\Bauer\Aneignung (10593)\Aneignung.pdf"})
+    assert "(file:///D:/Calibre-Bibliothek/Bauer/Aneignung%20%2810593%29/Aneignung.pdf)" in text
+
+
+# where the work lives --------------------------------------------------------------
+
+def test_a_result_names_its_library_id_and_its_file(tmp_path):
+    from src.calibre_mcp.server import source_location
+    book = tmp_path / "Aneignung.pdf"
+    book.write_bytes(b"%PDF")
+    assert source_location({"calibre_id": 10593, "source_file": str(book)}) == {
+        "id": "10593", "file": str(book)}
+    assert source_location({"source_id": "ABCD1234#EFGH5678", "calibre_id": 0}) == {
+        "id": "ABCD1234#EFGH5678", "file": None}
+
+
+def test_a_file_that_is_gone_is_not_named(tmp_path):
+    from src.calibre_mcp.server import source_location
+    gone = {"calibre_id": 10593, "source_file": str(tmp_path / "tmp" / "deleted.epub")}
+    assert source_location(gone) == {"id": "10593", "file": None}
+
+
+def test_both_servers_hand_clients_the_location(tmp_path):
+    row = ROW | {"metadata": ROW["metadata"] | {"calibre_id": 10593}}
+    for response in (_unified(tmp_path, [row]).search_books_with_citations_tool(query="q"),
+                     _single([row]).search_books_with_citations_tool(query="q")):
+        assert response["raw_results"][0]["location"] == {"id": "10593", "file": None}
+        assert "'location'" in response["usage_instructions"]
 
 
 # the prompt Claude gets -----------------------------------------------------------

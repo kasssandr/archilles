@@ -48,6 +48,29 @@ def citation_page(metadata: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def source_location(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Where a search result's work lives, so a client can name it to the
+    reader: the library's own ID (Calibre book id, Zotero key, vault path)
+    and the file, while it is still on disk.
+
+    A link would be the nicer form, but Claude Desktop does not follow custom
+    schemes such as ``calibre://`` (tested 2026-10-12), so the reader gets
+    what it takes to open the work by hand. A file that is gone is left out:
+    older rows name a deleted temporary EPUB.
+    """
+    source_id = metadata.get('source_id') or metadata.get('calibre_id') or None
+    source_file = metadata.get('source_file') or None
+    if source_file and not Path(source_file).is_file():
+        source_file = None
+    return {'id': str(source_id) if source_id else None, 'file': source_file}
+
+
+LOCATION_NOTE = (
+    "Each raw result carries 'location' (the library ID and, when on disk, "
+    "the file path): name it with the citation so the reader can open the original."
+)
+
+
 class CalibreMCPServer:
     """
     MCP Server for Calibre library integration.
@@ -782,7 +805,8 @@ class CalibreMCPServer:
                 'usage_instructions': (
                     "Copy 'system_prompt' to Claude's System Prompt field, "
                     "then copy 'user_prompt' to the message. "
-                    "Claude will cite sources as [doc_1], [doc_2], etc."
+                    "Claude will cite sources as [doc_1], [doc_2], etc. "
+                    + LOCATION_NOTE
                 ),
                 'raw_results': [
                     {
@@ -794,7 +818,8 @@ class CalibreMCPServer:
                             'title': r['metadata'].get('book_title'),
                             'year': r['metadata'].get('year'),
                             **citation_page(r['metadata']),
-                        }
+                        },
+                        'location': source_location(r['metadata']),
                     }
                     for r in results
                 ]

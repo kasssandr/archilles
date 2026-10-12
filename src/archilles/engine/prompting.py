@@ -3,6 +3,7 @@ assembly and markdown export. Extracted from the ArchillesRAG monolith (8.16).""
 from datetime import datetime
 from html import escape as _html_escape
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from src.archilles.constants import ChunkType
 from src.archilles.i18n import t
@@ -118,13 +119,15 @@ class PromptBuilder:
                 # Normalize path separators to forward slashes for URLs
                 url_path = source_file.replace('\\', '/')
 
-                # Add file:/// prefix
+                # Percent-encode: a space or parenthesis in a Calibre path
+                # ("Author/Title (123)/...") would end the Markdown link early.
+                quoted = quote(url_path, safe='/:')
                 if url_path.startswith('/'):
                     # Unix path
-                    file_url = f"file://{url_path}"
+                    file_url = f"file://{quoted}"
                 else:
                     # Windows path (e.g., D:/...)
-                    file_url = f"file:///{url_path}"
+                    file_url = f"file:///{quoted}"
 
                 # Extract filename (handle both Windows and Unix paths)
                 if '/' in url_path:
@@ -134,17 +137,11 @@ class PromptBuilder:
 
                 link_parts.append(f"[{filename}]({file_url})")
 
-            # Add Calibre URI if available (opens in Calibre library viewer)
+            # Calibre URI: selects the book in the library currently open
+            # ("_"). Calibre's scheme has no page anchor; the old
+            # calibre://view/<id>#page=N was no valid action at all.
             if calibre_id:
-                # Format: calibre://view/<calibre_id>
-                # Optional: add #page=N if we have a page number
-                calibre_url = f"calibre://view/{calibre_id}"
-
-                # Add page anchor if we have page info (the physical page:
-                # the viewer counts pages, not printed labels)
-                if metadata.get('page_number'):
-                    calibre_url += f"#page={metadata['page_number']}"
-
+                calibre_url = f"calibre://show-book/_/{calibre_id}"
                 link_parts.append(f"[📚 {t('export.open_in_calibre', lang)}]({calibre_url})")
 
             if link_parts:

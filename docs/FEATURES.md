@@ -245,7 +245,9 @@ JSON-RPC 2.0 over stdio. Careful stdout/stderr isolation to prevent JSON-RPC pro
 Each search result includes: author, title, year, and either page number/page label (PDF) or chapter/section (EPUB). Suitable for academic citation. EPUB results should include a verbatim original-language quote for Ctrl+F findability.
 
 ### 5.4 calibre:// URI Links
-Search results include both `file://` URIs (for Markdown apps like Joplin/Obsidian) and `calibre://` URIs that open the book in Calibre directly at the correct page.
+The Markdown export carries both `file://` URIs (percent-encoded, for Markdown apps like Joplin/Obsidian) and `calibre://show-book/_/<id>` URIs that select the book in the open Calibre library. Calibre's URL scheme has no page anchor, so the page stays in the citation.
+
+MCP search results carry no links: Claude Desktop does not follow custom schemes such as `calibre://`. Instead each raw result has a `location` (library ID — Calibre book id, Zotero key or vault path — and the file path while it exists on disk), which Claude names with the citation.
 
 ---
 

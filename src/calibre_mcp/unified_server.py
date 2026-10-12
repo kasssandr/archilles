@@ -38,7 +38,13 @@ from src.archilles.config import (
     master_archilles_dir,
     resolve_source_config,
 )
-from src.calibre_mcp.server import CalibreMCPServer, citation_page, create_mcp_tools
+from src.calibre_mcp.server import (
+    LOCATION_NOTE,
+    CalibreMCPServer,
+    citation_page,
+    create_mcp_tools,
+    source_location,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -411,12 +417,14 @@ class UnifiedMCPServer:
         response_extra = {}
         if not all(r.get("rerank_score") is not None for r in merged):
             # Without a cross-encoder the 'similarity' values are RRF
-            # rank-fusion scores (~1/(60+rank); best possible hit ≈ 0.016).
-            # Clients reading them as cosine similarities conclude every
-            # result is noise.
+            # rank-fusion scores: one 1/(60+rank) term per list a hit appears
+            # in, so a hit topping both the vector and the BM25 list scores
+            # 2/61 ≈ 0.033. Clients reading them as cosine similarities
+            # conclude every result is noise.
             response_extra["score_note"] = (
                 "Similarity values are RRF rank-fusion scores, not cosine "
-                "similarities: the best possible hit scores ~0.016 (1/61). "
+                "similarities: a hit ranked first in both the vector and the "
+                "keyword list scores ~0.033 (2/61), first in one list ~0.016. "
                 "Judge relevance by rank and text, not by the absolute value."
             )
 
@@ -431,7 +439,8 @@ class UnifiedMCPServer:
             "user_prompt": claude_prompt["user"],
             "usage_instructions": (
                 "Copy 'system_prompt' to the system field, then 'user_prompt' to the message. "
-                "Citations [doc_N] reference the documents — each carries its 'source' field."
+                "Citations [doc_N] reference the documents — each carries its 'source' field. "
+                + LOCATION_NOTE
             ),
             "raw_results": [
                 {
@@ -445,6 +454,7 @@ class UnifiedMCPServer:
                         "year": r.get("metadata", {}).get("year"),
                         **citation_page(r.get("metadata", {})),
                     },
+                    "location": source_location(r.get("metadata", {})),
                 }
                 for r in merged
             ],
