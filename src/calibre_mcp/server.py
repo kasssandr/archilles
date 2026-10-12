@@ -62,12 +62,18 @@ def source_location(metadata: dict[str, Any]) -> dict[str, Any]:
     source_file = metadata.get('source_file') or None
     if source_file and not Path(source_file).is_file():
         source_file = None
-    return {'id': str(source_id) if source_id else None, 'file': source_file}
+    return {
+        'id': str(source_id) if source_id else None,
+        'file': source_file,
+        # The physical page, which a viewer counts — not the printed label.
+        'page_number': metadata.get('page_number') or None,
+    }
 
 
 LOCATION_NOTE = (
-    "Each raw result carries 'location' (the library ID and, when on disk, "
-    "the file path): name it with the citation so the reader can open the original."
+    "Each raw result carries 'location' (the library ID, the file path when on "
+    "disk, and the physical page): name ID and file with the citation, and when "
+    "the reader asks to see a passage, pass ID and page_number to open_original."
 )
 
 
@@ -363,6 +369,42 @@ class CalibreMCPServer:
             'error': 'No metadata source available',
             'help': 'This tool requires a Calibre library with metadata.db or a configured adapter',
         }
+
+    def open_original_tool(
+        self,
+        id: str,
+        page: Optional[int] = None,
+        in_calibre: bool = False,
+    ) -> dict[str, Any]:
+        """MCP Tool: open a work's original on this machine.
+
+        ``id`` is the library ID a search result's ``location`` carries; the
+        adapter resolves it to the file, so no client-named path is ever
+        opened. ``in_calibre`` selects a Calibre book in Calibre instead.
+        """
+        from src.archilles.open_original import open_file, open_in_calibre
+
+        if self.adapter is None:
+            return {'status': 'unknown_volume', 'id': str(id),
+                    'error': 'this source has no adapter to resolve the ID'}
+        if in_calibre:
+            if self.adapter.adapter_type != 'calibre':
+                # Not refused: across sources, the next one may be Calibre.
+                return {'status': 'unknown_volume', 'id': str(id),
+                        'error': 'in_calibre needs a Calibre source'}
+            if not str(id).isdigit():
+                return {'status': 'refused', 'id': str(id),
+                        'error': 'in_calibre takes a Calibre book ID'}
+            return open_in_calibre(int(id))
+        try:
+            path = self.adapter.get_file_path(str(id))
+        except ValueError:
+            path = None  # another library's ID: a Zotero key asked of Calibre
+        except Exception as e:
+            return {'status': 'error', 'id': str(id), 'error': f'Cannot resolve the file: {e}'}
+        if path is None:
+            return {'status': 'unknown_volume', 'id': str(id)}
+        return open_file(Path(path), page)
 
     def _get_book_details_via_adapter(self, doc_id: str) -> dict[str, Any]:
         try:
@@ -1311,6 +1353,36 @@ def create_mcp_tools(server: CalibreMCPServer) -> list[dict]:
                     }
                 },
                 'required': ['book_id', 'page', 'quote']
+            }
+        },
+        {
+            'name': 'open_original',
+            'description': (
+                'Open the original of a work on the reader\'s computer — the PDF at '
+                'the cited page, or the book in its default program. Use it when the '
+                'reader asks to see, check or read on from a passage. Links to local '
+                'files do not work in this chat; this tool is the way to the original.'
+            ),
+            'inputSchema': {
+                'type': 'object',
+                'properties': {
+                    'id': {
+                        'type': 'string',
+                        'description': ('The library ID from a search result\'s location '
+                                        '(Calibre book id, Zotero key, vault path id)')
+                    },
+                    'page': {
+                        'type': 'integer',
+                        'description': ('The physical page to open a PDF at: location.page_number, '
+                                        'not the printed label')
+                    },
+                    'in_calibre': {
+                        'type': 'boolean',
+                        'description': 'Select the book in Calibre instead of opening the file (Calibre sources only)',
+                        'default': False
+                    }
+                },
+                'required': ['id']
             }
         },
         {

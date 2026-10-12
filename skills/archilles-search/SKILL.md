@@ -24,6 +24,7 @@ they are for.
 | A bibliography file (BibTeX, RIS, …) | `export_bibliography` |
 | Annotations from one specific file | `get_book_annotations` |
 | To check a citation they already have | `verify_citation` |
+| To see the original of a passage | `open_original` |
 | The index brought up to date | `watchdog_scan` |
 
 The common mistake is reaching for `search_books_with_citations` to answer

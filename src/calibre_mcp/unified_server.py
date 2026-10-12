@@ -122,7 +122,7 @@ _AGGREGATION_TOOLS = {
 }
 # Tools that take an optional `source` parameter (default = master default_source).
 _SOURCE_OPTIONAL = _AGGREGATION_TOOLS | {"get_book_details", "set_research_interests",
-                                         "verify_citation"}
+                                         "verify_citation", "open_original"}
 
 
 class UnifiedMCPServer:
@@ -768,6 +768,35 @@ class UnifiedMCPServer:
                 return res
         return answer
 
+    def open_original_tool(
+        self,
+        id: str,
+        page: Optional[int] = None,
+        in_calibre: bool = False,
+        source: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Open an original from one source or from whichever source knows
+        the ID — the same search order as :meth:`verify_citation_tool`."""
+        if source is not None:
+            try:
+                self.resolve_source(source)
+            except KeyError as e:
+                return {"error": str(e), "available_sources": self.source_names}
+            names = [source]
+        else:
+            names = sorted(self.servers, key=lambda n: n != self.default_source)
+
+        answer: dict[str, Any] = {"status": "unknown_volume", "id": str(id)}
+        for name in names:
+            res = self.servers[name].open_original_tool(id=id, page=page, in_calibre=in_calibre)
+            if not isinstance(res, dict):
+                continue
+            res["source"] = name
+            answer = res
+            if res.get("status") != "unknown_volume":
+                return res
+        return answer
+
     # ── Global state ─────────────────────────────────────────────────────
 
     def set_research_interests_tool(
@@ -991,7 +1020,7 @@ def create_unified_tools(server: UnifiedMCPServer) -> list[dict]:
                     "a baseline to every source's searches via the effective "
                     "merge layer."
                 )
-            elif name == "verify_citation":
+            elif name in ("verify_citation", "open_original"):
                 # A book_id belongs to one library, and a client that got it
                 # from a merged search result has no reason to know which.
                 description = (

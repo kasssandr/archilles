@@ -90,6 +90,7 @@ TOOL_MAP = {
     'list_tags': 'list_tags_tool',
     'search_books_with_citations': 'search_books_with_citations_tool',
     'verify_citation': 'verify_citation_tool',
+    'open_original': 'open_original_tool',
     'set_research_interests': 'set_research_interests_tool',
     'watchdog_scan': 'watchdog_scan_tool',
 }

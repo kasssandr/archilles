@@ -247,7 +247,7 @@ Each search result includes: author, title, year, and either page number/page la
 ### 5.4 calibre:// URI Links
 The Markdown export carries both `file://` URIs (percent-encoded, for Markdown apps like Joplin/Obsidian) and `calibre://show-book/_/<id>` URIs that select the book in the open Calibre library. Calibre's URL scheme has no page anchor, so the page stays in the citation.
 
-MCP search results carry no links: Claude Desktop does not follow custom schemes such as `calibre://`. Instead each raw result has a `location` (library ID — Calibre book id, Zotero key or vault path — and the file path while it exists on disk), which Claude names with the citation.
+MCP search results carry no links: Claude Desktop does not follow custom schemes such as `calibre://`. Instead each raw result has a `location` (library ID — Calibre book id, Zotero key or vault path — and the file path while it exists on disk), which Claude names with the citation. The `open_original` tool takes that ID and opens the work on the local machine: a PDF at the physical page in SumatraPDF or Acrobat (found automatically; `ARCHILLES_PDF_VIEWER` overrides), anything else in its default program, or the book selected in Calibre. Only files the library resolves from an ID are opened, and only document types.
 
 ---
 

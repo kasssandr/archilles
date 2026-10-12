@@ -82,7 +82,7 @@ Consumers: MCP Server | Web UI (Streamlit) | CLI
 - **The Scriptor seam** — `archilles-scriptor` is a hard runtime dependency in one direction: Archilles imports `scriptor.document` (the format reader), the marker grammar and the region vocabulary; Scriptor imports nothing from here. A bundle under `<library>/.archilles/scriptor/<key>/` replaces a book's *text source* in `Indexer._text_source`, never its identity — metadata, annotations and `source_file` stay with the book file. Bundles are built by `scripts/scriptor_prepare.py`. See `docs/DECISIONS.md` ADR-032.
 - **`src/archilles/pipeline.py`** — `ModularPipeline`: experimental since July 2026, reachable only behind `--use-modular-pipeline`, set by no routine. Not the production path; do not build on it (ADR-004, September addendum).
 - **`src/storage/lancedb_store.py`** — LanceDB backend. One `chunks` table for book content, annotations and Calibre comments, told apart by `chunk_type`; 1024-dim BGE-M3 vectors with rich metadata. New columns are added by schema migration with a default, so existing rows stay untouched.
-- **`src/calibre_mcp/server.py`** — MCP server exposing 13 tools (search, metadata, citations, annotations, stats). Carefully manages stdout/stderr: any stray write corrupts the JSON-RPC protocol.
+- **`src/calibre_mcp/server.py`** — MCP server exposing 15 tools (search, metadata, citations, annotations, stats). Carefully manages stdout/stderr: any stray write corrupts the JSON-RPC protocol.
 - **`mcp_server.py`** — Entry point for Claude Desktop MCP integration.
 - **`scripts/rag_demo.py`** — Thin CLI around the engine. Index, query, stats, list-indexed.
 

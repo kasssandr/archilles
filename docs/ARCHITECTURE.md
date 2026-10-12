@@ -311,7 +311,7 @@ The primary interface. Implements the Model Context Protocol for integration wit
 
 Both transports expose the same tools via the same `CalibreMCPServer` and `create_mcp_tools()`. The SSE path uses `mcp.server.Server` (low-level MCP SDK) with `mcp.server.sse.SseServerTransport`; tool dispatch runs in a thread pool (`run_in_executor`) because `ArchillesService` calls are synchronous.
 
-**Exposed tools** (13 tools via `create_mcp_tools()`):
+**Exposed tools** (15 tools via `create_mcp_tools()`):
 
 | Tool | Description |
 | --- | --- |
@@ -320,6 +320,8 @@ Both transports expose the same tools via the same `CalibreMCPServer` and `creat
 | `list_annotated_books` | Lists all books with indexed annotations |
 | `get_book_annotations` | Get annotations for a specific book by path |
 | `get_book_details` | Full metadata for a specific Calibre book ID |
+| `verify_citation` | Checks whether a page still carries a quoted wording (ADR-034) |
+| `open_original` | Opens a work's file on the local machine — a PDF at a physical page via SumatraPDF/Acrobat — resolved from the library ID in a result's `location` |
 | `list_books_by_author` | All titles by an author, directly from Calibre metadata (partial match, optional tag/year filter) |
 | `export_bibliography` | Bibliography in BibTeX, RIS, EndNote, JSON, CSV |
 | `detect_duplicates` | Find duplicate books by title+author, ISBN, or exact title |
@@ -329,7 +331,7 @@ Both transports expose the same tools via the same `CalibreMCPServer` and `creat
 | `compute_annotation_hash` | Compute Calibre annotation hash for a book path |
 | `get_doublette_tag_instruction` | Helper for Calibre duplicate tagging workflow |
 
-> The unified multi-library server (`src/calibre_mcp/unified_server.py`) exposes the same tool set with adapter-aware gating: `detect_duplicates` and `watchdog_scan` are Calibre-only (`_CALIBRE_ONLY_TOOLS`), while aggregation tools and `set_research_interests`/`get_book_details` accept an optional `source`.
+> The unified multi-library server (`src/calibre_mcp/unified_server.py`) exposes the same tool set with adapter-aware gating: `detect_duplicates` and `watchdog_scan` are Calibre-only (`_CALIBRE_ONLY_TOOLS`), while aggregation tools and `set_research_interests`/`get_book_details`/`verify_citation`/`open_original` accept an optional `source`.
 
 Each search result includes sufficient metadata for academic citation: author, title, year, and either page number/page label (PDF) or chapter/section (EPUB). A result read from a Scriptor bundle also carries `label_source`; a label that was inferred rather than printed is flagged in the CLI output and reaches Claude's prompt as `Page: 88 (inferred)` (citation contract: `WATCHDOG_AND_WIKI.md` §II.5/§II.6).
 
@@ -579,7 +581,7 @@ archilles/
 │   │   └── config.py             # Citation style config (CSL-ready, Zotero-compatible)
 │   │
 │   ├── calibre_mcp/               # MCP server + annotation infrastructure
-│   │   ├── server.py              # CalibreMCPServer + create_mcp_tools() (13 tools)
+│   │   ├── server.py              # CalibreMCPServer + create_mcp_tools() (15 tools)
 │   │   ├── unified_server.py      # Unified multi-library server (adapter-gated tools)
 │   │   ├── annotations.py         # Annotation extraction, hash mapping, text search
 │   │   ├── annotation_writer.py   # Writes annotation chunks into LanceDB

@@ -87,6 +87,18 @@ Answers:
 
 `ambiguous: true` means the page prints the wording more than once (common in legal and scholarly citation), so the position within the page is not decided. `checked_against` says which witness answered: `bundle` (the volume's prepared text, with its page markers — the strong answer) or `index` (the chunks, where a chunk boundary can cut a passage in half). `chunk_stale: true` means the chunk id you passed no longer holds the quotation, which says nothing about the citation itself — page and wording survive a re-indexing, chunk ids do not.
 
+**Naming and opening the original**
+
+Every search result carries a `location`: the library ID (Calibre book id, Zotero key, vault path id), the file path while the file exists, and `page_number`, the physical page. Name ID and file with a citation, so the user knows where the work lives. Do not write them as `calibre://`, `zotero://` or `file:///` links: Claude Desktop renders none of them.
+
+**`open_original`** opens the work on the user's computer when they ask to see, check or read on from a passage.
+
+Parameters:
+- `id` (required): `location.id` of the result.
+- `page`: `location.page_number`, the physical page, not the printed label. A PDF opens there in SumatraPDF or Acrobat; without either it opens at its start, and the answer says so.
+- `in_calibre`: select the book in Calibre instead of opening the file.
+- `source` (unified server): the result's source; omit it and each source is asked in turn.
+
 ### 3.4 Library navigation and metadata
 
 These tools work directly against Calibre metadata, not the vector index. For questions like "all books by author X" or "all titles with tag Y" they are the right approach — not `search_books_with_citations`.

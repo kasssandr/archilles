@@ -95,6 +95,8 @@ Archilles exposes the following tools to Claude:
 | `list_annotated_books` | Lists all books that have indexed annotations or comments. |
 | `get_book_annotations` | Retrieves all annotations for a specific book. |
 | `get_book_details` | Returns full metadata for a Calibre book by its ID. |
+| `verify_citation` | Checks whether a cited page still carries the quoted wording. |
+| `open_original` | Opens the original on your computer — a PDF at the cited page (SumatraPDF or Acrobat, if installed), anything else in its default program, or the book selected in Calibre. Claude Desktop cannot follow links to local files, so this is the way from a citation to the source. |
 | `list_books_by_author` | Lists all titles by an author straight from Calibre metadata (partial match, optional tag/year filter). The reliable way to find articles and short texts whose author name never appears in the indexed full text. |
 | `list_tags` | Lists all your Calibre tags with book counts. |
 | `export_bibliography` | Exports a bibliography in BibTeX, RIS, Chicago, APA, or other formats. |
@@ -104,7 +106,7 @@ Archilles exposes the following tools to Claude:
 | `compute_annotation_hash` | Technical tool for checking annotation state. |
 | `get_doublette_tag_instruction` | Workflow helper for tagging duplicate books in Calibre. |
 
-That is the full set of 13 tools exposed by the single-library server. You don't need to call these tools directly — just ask Claude in natural language and it will use the right tool automatically.
+That is the full set of 15 tools exposed by the single-library server. You don't need to call these tools directly — just ask Claude in natural language and it will use the right tool automatically.
 
 ### The bundled agent skill
 

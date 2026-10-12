@@ -310,7 +310,7 @@ Search through your collection of primary sources and secondary literature simul
 - Semantic + keyword hybrid search (LanceDB native)
 - Two-stage retrieval: RRF fusion + optional cross-encoder reranking
 - Calibre metadata integration (tags, comments, custom fields, annotation indexing)
-- MCP server — 13 tools for Claude Desktop (search, citation check, metadata, annotations, bibliography, utilities)
+- MCP server — 15 tools for Claude Desktop (search, citation check, opening the original, metadata, annotations, bibliography, utilities)
 - Multi-language support (75+ languages, stop-word removal for 12 languages)
 - BGE-M3 embeddings (multilingual, 1024 dimensions)
 - OCR support for scanned PDFs (Tesseract)
