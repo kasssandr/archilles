@@ -78,6 +78,7 @@ _KNOWN_LIBRARY_CONFIG_KEYS: frozenset[str] = frozenset({
     "languages",
     "library_path",
     "linked_attachment_base",
+    "metadata_only_tags",
     "mode",
     "name",
     "rag_db_path",
@@ -207,6 +208,39 @@ def get_excluded_tags(library_path: Path | None = None) -> list[str]:
         return [str(t) for t in custom]
 
     return list(DEFAULT_EXCLUDED_TAGS)
+
+
+# Tags that keep a Calibre book at its metadata: the bibliographic stub, the
+# Comments field and the annotations are indexed, the full text never is. The
+# softer sibling of ``excluded_tags`` -- for a translation, a duplicate, a book
+# whose own text does not belong in the search but whose description does.
+DEFAULT_METADATA_ONLY_TAGS: list[str] = ['metadata-only']
+
+
+def get_metadata_only_tags(library_path: Path | None = None) -> list[str]:
+    """Return the Calibre tags that index a book's metadata but not its text.
+
+    Reads ``metadata_only_tags`` from ``.archilles/config.json``; like
+    ``excluded_tags`` the config value **replaces** the defaults. Falls back
+    to :data:`DEFAULT_METADATA_ONLY_TAGS` (``['metadata-only']``) when there
+    is no library context, no config file, or no list under the key. An
+    excluded tag wins over a metadata-only one on the same book.
+
+    Example ``config.json``::
+
+        {
+          "excluded_tags": ["exclude"],
+          "metadata_only_tags": ["metadata-only", "Übersetzung"]
+        }
+    """
+    if library_path is None:
+        return list(DEFAULT_METADATA_ONLY_TAGS)
+
+    custom = _read_library_config(library_path).get("metadata_only_tags")
+    if isinstance(custom, list):
+        return [str(t) for t in custom]
+
+    return list(DEFAULT_METADATA_ONLY_TAGS)
 
 
 # Languages the system operates in. ``languages[0]`` is the operator/interface

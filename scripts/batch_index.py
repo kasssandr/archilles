@@ -81,6 +81,7 @@ from src.archilles.config import (
     DEFAULT_EXCLUDED_TAGS,
     get_excluded_tags,
     get_languages,
+    get_metadata_only_tags,
     get_library_path,
     get_mode,
 )
@@ -673,6 +674,26 @@ def get_books_by_author(library_path: Path, author_name: str, min_rating: int = 
 
     conn.close()
     return books
+
+
+def get_book_ids_with_tags(library_path: Path, tags: List[str]) -> set:
+    """Calibre IDs of the books carrying any of ``tags`` (case-insensitive).
+
+    Compared in Python: SQLite's LOWER() folds ASCII only, so ``Übersetzung``
+    would not match ``übersetzung``.
+    """
+    wanted = {t.lower() for t in tags}
+    if not wanted:
+        return set()
+    conn = connect_readonly(library_path / "metadata.db")
+    try:
+        rows = conn.execute(
+            "SELECT btl.book, t.name FROM books_tags_link btl "
+            "INNER JOIN tags t ON btl.tag = t.id"
+        ).fetchall()
+    finally:
+        conn.close()
+    return {int(book) for book, name in rows if name.lower() in wanted}
 
 
 def get_books_by_ids(library_path: Path, calibre_ids: List[int]) -> List[Dict[str, Any]]:
@@ -1678,8 +1699,9 @@ Profiles:
                         help='Override the configured tag exclusions '
                              '(see .archilles/config.json → excluded_tags, '
                              f'default: {", ".join(DEFAULT_EXCLUDED_TAGS)}) '
-                             'and include those books. User-specified '
-                             '--exclude-tag values still apply.')
+                             'and include those books; metadata-only books '
+                             '(→ metadata_only_tags) get their full text too. '
+                             'User-specified --exclude-tag values still apply.')
 
     # Author filter — additional, not mutually exclusive with --tag / --all / --author
     parser.add_argument('--filter-author', action='append', dest='filter_authors', metavar='AUTHOR',
@@ -2061,6 +2083,19 @@ def main():
 
         else:
             print(f"📖 Found {len(books)} books")
+
+            # Metadata-only books never get their full text: a fulltext run
+            # leaves them out, a --phase1-only or --reindex-comments run keeps
+            # them. --include-excluded lifts the hold like the exclusions.
+            if not (use_adapter or args.phase1_only or args.reindex_comments
+                    or args.include_excluded):
+                held = get_book_ids_with_tags(library_path, get_metadata_only_tags(library_path))
+                if held:
+                    before = len(books)
+                    books = [b for b in books if b['id'] not in held]
+                    if len(books) < before:
+                        print(f"  Metadata only, full text skipped: {before - len(books)} "
+                              f"book(s) (→ metadata_only_tags; --phase1-only indexes their stubs)")
 
             if args.limit:
                 books = books[:args.limit]

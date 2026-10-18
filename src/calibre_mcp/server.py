@@ -986,18 +986,20 @@ class CalibreMCPServer:
             }
 
         try:
-            from src.archilles.config import get_excluded_tags
+            from src.archilles.config import get_excluded_tags, get_metadata_only_tags
             from src.archilles import watchdog as _watchdog
 
-            scanner_cls = (
-                _watchdog.ZoteroWatchdogScanner if adapter_type == "zotero"
-                else _watchdog.WatchdogScanner
-            )
+            if adapter_type == "zotero":
+                scanner_cls, extra = _watchdog.ZoteroWatchdogScanner, {}
+            else:
+                scanner_cls = _watchdog.WatchdogScanner
+                extra = {"metadata_only_tags": get_metadata_only_tags(self.library_path)}
             scanner = scanner_cls(
                 library_path=self.library_path,
                 db_path=self.rag_db_path,
                 archilles_dir=self._archilles_dir,
                 excluded_tags=get_excluded_tags(self.library_path),
+                **extra,
             )
             results = scanner.scan(
                 dry_run=dry_run,

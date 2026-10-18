@@ -100,10 +100,21 @@ Filtering/refinement:
 | `--min-rating N` | Only books rated N stars or higher (1–5) |
 | `--rating N` | Only books with exactly N stars (0 = unrated) |
 | `--exclude-tag TAG` | Exclude books with this tag (repeatable) |
-| `--include-excluded` | Override default exclusion of `exclude` and `Übersetzung` tags |
+| `--include-excluded` | Override the configured tag exclusions (`excluded_tags`, default `exclude`) and the metadata-only hold (`metadata_only_tags`, default `metadata-only`) |
 | `--prefer-format pdf\|epub` | When a book has multiple formats, prefer this one |
 | `--limit N` | Process only the first N books (for testing) |
 | `--dry-run` | Preview what would be indexed, no actual indexing |
+
+**Two levels of exclusion (Calibre).** A book tagged `exclude` is left out entirely — no metadata, no Comments, no text. A book tagged `metadata-only` keeps its metadata, Comments field and annotations in the index, but its full text is never indexed: for a translation, a duplicate, a book whose description belongs in the search but whose text does not. Both lists are set in `.archilles/config.json`; a configured list replaces the default.
+
+```json
+{
+  "excluded_tags": ["exclude"],
+  "metadata_only_tags": ["metadata-only", "Übersetzung"]
+}
+```
+
+Tagging a book that is already fully indexed does not remove its text. Removing the tag puts the book back into the full-text backlog.
 
 Resume and maintenance:
 

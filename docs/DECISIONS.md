@@ -518,6 +518,28 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 
 ---
 
+### ADR-038: Zwei Stufen des Ausschlusses — `exclude` und `metadata-only` (Oktober 2026)
+
+**Kontext:** Ein Ausschluss-Tag (`excluded_tags`) nimmt ein Calibre-Buch ganz aus dem Index: keine Metadaten, kein Comments-Feld, keine Annotationen, kein Text. Im Bestand tragen 288 Titel `exclude` und 87 `Übersetzung`, und bei vielen davon gehört die eigene Beschreibung durchaus in die Suche — nur der Text nicht. Diese Titel einzeln zu sichten, kostet Zeit, die für eigene Texte fehlt. Der Maßstab des Nutzers: ein aufgeblähter Index ist das kleinere Übel, Unsichtbarkeit das größere.
+
+**Entscheidung:** Neben `excluded_tags` tritt `metadata_only_tags` (Standard `metadata-only`). Ein so markiertes Buch bekommt den Phase-1-Stub der Zwei-Phasen-Indexierung (Metadaten, Comments, Annotationen) und wird nie in den Volltext-Rückstand aufgenommen. Trägt ein Buch beide Arten von Tag, gewinnt der Ausschluss.
+
+**Begründung:**
+- *Der Stub existiert schon:* Phase 1 erzeugt genau den gewünschten Umfang. Neu ist nur, dass ein Buch auf dieser Stufe bleibt — kein eigener Chunk-Typ, kein eigener Indexpfad.
+- *Konfiguration statt Neumarkierung:* Ein vorhandener Tag wie `Übersetzung` wechselt durch einen Eintrag in der Config von der harten in die weiche Stufe; in Calibre ändert sich nichts.
+- *Umkehrbar:* Wird der Tag entfernt, steht der Stub wieder im Volltext-Rückstand und wird regulär nachgeholt.
+
+**Konsequenzen:**
+- Ein schon voll indexiertes Buch, das den Tag nachträglich erhält, wird **nicht** zurückgestuft. Sein Text bleibt, seine Metadaten werden weiter aktualisiert. Automatisches Löschen wäre hier der falsche Reflex — es macht unsichtbar, und Platz ist das kleinere Problem.
+- Der Watchdog hält einen `metadata-only`-Stub auch bei einem vollen Volltext-Lauf in Phase 2: Phase 4 holt ihn nie ab, also ist Phase 2 der einzige Weg, auf dem ein neuer Kommentar ankommt.
+- `batch_index.py` lässt solche Bücher in Volltext-Läufen aus; `--phase1-only` und `--reindex-comments` behandeln sie. `--include-excluded` hebt den Halt auf, wie die Ausschlüsse.
+- Der Dubletten-Tag (`duplicate_tag`) gehört bewusst **nicht** auf diese Liste. Markiert werden in der Praxis beide Exemplare eines Paares, denn die Entscheidung, welches bleibt, ist die eigentliche Arbeit — und dann wären beide im Volltext unsichtbar.
+- Nur Calibre. Zotero kennt keine Stub-Phase; dort bleibt es beim Ausschluss von Eintrag oder Anhang (ADR-037).
+
+**Implementierung:** `get_metadata_only_tags` in `src/archilles/config.py`, `WatchdogScanner` in `src/archilles/watchdog.py`, `get_book_ids_with_tags` in `scripts/batch_index.py`, Tests in `tests/test_metadata_only_tags.py`.
+
+---
+
 ### ADR-023: Structure-Aware PDF Chunking (März 2026)
 
 **Kontext:** Eine Analyse mit dem Chunk Inspector (19. März 2026, `BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) zeigte, dass PDF-Chunks 0% chapter/section_title-Abdeckung hatten, während EPUB-Chunks 96–100% erreichten. Der PDF-TOC wurde zwar extrahiert, aber nicht auf einzelne Chunks gemappt.

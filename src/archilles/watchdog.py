@@ -41,6 +41,7 @@ from src.archilles.book_files import discover_formats  # noqa: E402
 # tool, CLI) agrees; re-exported here for backward compatibility with
 # existing imports.
 from src.archilles.config import DEFAULT_EXCLUDED_TAGS  # noqa: E402, F401
+from src.archilles.config import DEFAULT_METADATA_ONLY_TAGS  # noqa: E402
 from src.archilles.indexer import IndexingCheckpoint  # noqa: E402
 from src.archilles.orphan_guard import (  # noqa: E402
     backup_orphan_chunks,
@@ -716,6 +717,7 @@ class WatchdogScanner:
         db_path: str,
         archilles_dir: Path,
         excluded_tags: list[str] | None = None,
+        metadata_only_tags: list[str] | None = None,
     ):
         self.library_path = library_path
         self.db_path = db_path
@@ -727,6 +729,14 @@ class WatchdogScanner:
         self.annotation_cache_file = archilles_dir / "watchdog_annotation_cache.json"
         self.excluded_tags_lower: set[str] = {
             t.lower() for t in (excluded_tags if excluded_tags is not None else DEFAULT_EXCLUDED_TAGS)
+        }
+        # Books carrying one of these keep their phase1 stub (metadata,
+        # Comments, annotations) and never enter the fulltext backlog.
+        self.metadata_only_tags_lower: set[str] = {
+            t.lower() for t in (
+                metadata_only_tags if metadata_only_tags is not None
+                else DEFAULT_METADATA_ONLY_TAGS
+            )
         }
         self._annotation_cache: dict[str, dict[str, Any]] | None = None
         self._annotation_cache_dirty = False
@@ -799,6 +809,7 @@ class WatchdogScanner:
         results: dict[str, Any] = {
             'new_books':            [],
             'fulltext_pending':     [],  # phase1-stub books that need full content indexing
+            'metadata_only':        [],  # books held at their stub by a metadata-only tag
             'metadata_changed':    [],
             'annotations_changed': [],
             'unchanged':           [],
@@ -867,12 +878,22 @@ class WatchdogScanner:
             if not formats:
                 continue  # no supported file on disk
 
+            # An excluded tag wins over a metadata-only one (checked above).
+            metadata_only = bool(self.metadata_only_tags_lower) and any(
+                t.lower() in self.metadata_only_tags_lower for t in meta.get('tags', [])
+            )
+            if metadata_only:
+                results['metadata_only'].append(cid)
+
             if cid not in indexed_hashes:
-                results['new_books'].append({
+                entry = {
                     'calibre_id': cid,
                     'title':      meta['title'],
                     'book_id':    str(cid),
-                })
+                }
+                if metadata_only:
+                    entry['metadata_only'] = True
+                results['new_books'].append(entry)
                 continue
 
             stored = indexed_hashes[cid]
@@ -897,7 +918,7 @@ class WatchdogScanner:
             if annot_changed:
                 results['annotations_changed'].append(cid)
 
-            if cid in phase1_only_ids:
+            if cid in phase1_only_ids and not metadata_only:
                 # Track for fulltext backlog; metadata/annotation changes handled in Phase 2
                 results['fulltext_pending'].append({
                     'calibre_id': cid,
@@ -943,7 +964,9 @@ class WatchdogScanner:
             set(results['metadata_changed']) | set(results['annotations_changed'])
         )
         if phase4_will_process_all_stubs:
-            books_to_update -= phase1_only_ids
+            # A metadata-only stub is not in the backlog: Phase 2 is the only
+            # path that ever refreshes it.
+            books_to_update -= phase1_only_ids - set(results['metadata_only'])
         if books_to_update and not dry_run:
             rag = self._load_rag()
             dt0 = time.time()
@@ -1042,7 +1065,7 @@ class WatchdogScanner:
                         continue
                     print(f"\n[{already_done + j}/{total_p3}] {meta.get('author', '')}: {entry['title']}")
                     try:
-                        if index_metadata_only:
+                        if index_metadata_only or entry.get('metadata_only'):
                             rag.index_book(formats[0]['path'], str(cid), phase='phase1')
                         else:
                             res = rag.index_book(formats[0]['path'], str(cid), force=False)
@@ -1358,6 +1381,7 @@ class WatchdogScanner:
             f"{ts} SCAN completed in {results['total_time']}s",
             f"  new_books: {n_new}" + (f" {new_ids}" if new_ids else ""),
             f"  fulltext_pending: {len(results.get('fulltext_pending', []))}",
+            f"  metadata_only: {len(results.get('metadata_only', []))}",
             f"  metadata_changed: {n_meta}"
             + (f" {results['metadata_changed']}" if n_meta else ""),
             f"  annotations_changed: {n_anno}"

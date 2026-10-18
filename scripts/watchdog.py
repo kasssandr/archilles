@@ -214,7 +214,9 @@ def main() -> None:
     parser.add_argument(
         '--include-excluded', action='store_true',
         help='Process books carrying any of the configured excluded tags '
-             '(see .archilles/config.json → excluded_tags, default: "exclude")'
+             '(see .archilles/config.json → excluded_tags, default: "exclude"), '
+             'and index the full text of metadata-only books '
+             '(→ metadata_only_tags, default: "metadata-only")'
     )
     parser.add_argument(
         '--json', dest='json_mode', action='store_true',
@@ -266,8 +268,9 @@ def main() -> None:
 
     library_path, db_path, archilles_dir = _resolve_paths()
 
-    from src.archilles.config import get_excluded_tags
+    from src.archilles.config import get_excluded_tags, get_metadata_only_tags
     excluded = [] if args.include_excluded else get_excluded_tags(library_path)
+    metadata_only = [] if args.include_excluded else get_metadata_only_tags(library_path)
     scanner_type = _detect_scanner_type(library_path)
 
     if scanner_type == "zotero":
@@ -285,6 +288,7 @@ def main() -> None:
             db_path=db_path,
             archilles_dir=archilles_dir,
             excluded_tags=excluded,
+            metadata_only_tags=metadata_only,
         )
 
     if args.log_file:
