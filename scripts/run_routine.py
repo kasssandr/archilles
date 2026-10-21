@@ -18,6 +18,9 @@ successful completion.  On the next invocation the runner skips when:
 * ``--frequency daily``  and the marker is dated today, or
 * ``--frequency weekly`` and the marker falls in the same ISO calendar week.
 
+Without ``--frequency`` the source's ``schedule`` from the master config
+applies (daily if unset); ``schedule: manual`` skips every run unless forced.
+
 Use ``--force`` to ignore the marker and ``--dry-run`` to print the planned
 command without executing.
 
@@ -59,6 +62,16 @@ def _should_skip(marker: Path, frequency: str, now: datetime) -> tuple[bool, str
     if frequency == "weekly" and last.isocalendar()[:2] == now.isocalendar()[:2]:
         return True, last_iso
     return False, None
+
+
+def _resolve_frequency(cli_frequency: str | None, schedule: str | None) -> str:
+    """The cadence this run obeys: ``--frequency``, else the source's schedule.
+
+    An explicit flag wins so that scheduler tasks registered with a fixed
+    ``--frequency`` keep behaving exactly as before; tasks registered without
+    one follow whatever the setup page last saved. Unset everywhere → daily.
+    """
+    return cli_frequency or schedule or "daily"
 
 
 def _append_history(history_file: Path, record: dict) -> None:
@@ -207,7 +220,10 @@ def main() -> int:
     )
     parser.add_argument("--source", required=True,
                         help="Source name from master config (e.g. 'archilles-lab')")
-    parser.add_argument("--frequency", required=True, choices=["daily", "weekly"])
+    parser.add_argument("--frequency", choices=["daily", "weekly"], default=None,
+                        help="Cadence for this run. Default: the source's 'schedule' "
+                             "in the master config (daily if unset); a 'manual' "
+                             "schedule skips every run without --force.")
     parser.add_argument("--force", action="store_true",
                         help="Ignore marker and run unconditionally")
     parser.add_argument("--dry-run", action="store_true",
@@ -263,11 +279,19 @@ def main() -> int:
     log_file = archilles_dir / "routine.log"
     history_file = archilles_dir / "routine_history.jsonl"
 
+    frequency = _resolve_frequency(args.frequency, getattr(src, "schedule", None))
     now = datetime.now().astimezone()
-    skip, last_iso = (False, None) if args.force else _should_skip(marker, args.frequency, now)
+    if frequency == "manual" and not args.force:
+        msg = (f"[{now.isoformat()}] {args.source}: SKIP "
+               f"(schedule=manual, run with --force)")
+        print(msg)
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        return 0
+    skip, last_iso = (False, None) if args.force else _should_skip(marker, frequency, now)
     if skip:
         msg = (f"[{now.isoformat()}] {args.source}: SKIP "
-               f"(last run {last_iso}, frequency={args.frequency})")
+               f"(last run {last_iso}, frequency={frequency})")
         print(msg)
         with log_file.open("a", encoding="utf-8") as f:
             f.write(msg + "\n")
@@ -415,7 +439,7 @@ def main() -> int:
             marker.write_text(end.isoformat(), encoding="utf-8")
             record = {
                 "timestamp": start.isoformat(), "source": args.source,
-                "adapter": adapter, "frequency": args.frequency,
+                "adapter": adapter, "frequency": frequency,
                 "exit_code": -1, "duration_s": duration,
                 "error": "timeout (>8h)", "stats": {},
                 "intent": _derive_intent(cmd),
@@ -454,7 +478,7 @@ def main() -> int:
 
         record = {
             "timestamp": start.isoformat(), "source": args.source,
-            "adapter": adapter, "frequency": args.frequency,
+            "adapter": adapter, "frequency": frequency,
             "exit_code": returncode, "duration_s": round(duration, 1),
             "stats": stats, "intent": _derive_intent(cmd),
         }

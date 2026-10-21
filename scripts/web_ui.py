@@ -6,7 +6,9 @@ Usage:
     streamlit run scripts/web_ui.py
 
 Environment:
-    ARCHILLES_LIBRARY_PATH: Path to library (required; legacy: CALIBRE_LIBRARY_PATH)
+    ARCHILLES_LIBRARY_PATH: Path to library (legacy: CALIBRE_LIBRARY_PATH).
+    Without it the master config's default source is searched; without
+    either, only the setup tab is shown.
 """
 
 import os
@@ -18,11 +20,18 @@ from typing import Any, Dict, List, Optional
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.archilles.config import get_languages, get_library_path
+from src.archilles.config import (
+    get_languages,
+    get_library_path,
+    get_rag_db_path,
+    load_master_config,
+)
 from src.archilles.constants import ChunkType, SectionType
 from src.archilles.i18n import t
 
 import streamlit as st
+
+from scripts.web_ui_setup import render_setup_tab
 
 # Page config must be first Streamlit command
 st.set_page_config(
@@ -33,9 +42,25 @@ st.set_page_config(
 )
 
 
+def _active_library_path() -> Optional[Path]:
+    """The library to search: the environment variable, else the master
+    config's default source, else none (setup only)."""
+    library_path = get_library_path(required=False)
+    if library_path:
+        return library_path
+    try:
+        master = load_master_config()
+    except (ValueError, OSError):
+        return None
+    if master is None:
+        return None
+    name = master.default_source or master.sources[0].name
+    return next(s.library_path for s in master.sources if s.name == name)
+
+
 def _ui_lang() -> str:
     """Operator/interface language (``get_languages(...)[0]``, default 'en')."""
-    return get_languages(get_library_path(required=False))[0]
+    return get_languages(_active_library_path())[0]
 
 
 def _safe_str(value: Any) -> str:
@@ -53,25 +78,29 @@ def _safe_str(value: Any) -> str:
 
 
 @st.cache_resource
-def load_service():
+def load_service(db_path: str):
     """Load ARCHILLES service (cached for performance)."""
     from src.service import ArchillesService
 
-    lang = _ui_lang()
-    library_path = get_library_path(required=False)
-    if not library_path:
-        st.error(t("webui.error_no_library", lang))
-        st.info(t("webui.hint_set_library", lang))
-        st.stop()
-
-    db_path = str(library_path / ".archilles" / "rag_db")
-
-    if not Path(db_path).exists():
-        st.error(t("webui.error_db_not_found", lang).format(path=db_path))
-        st.info(t("webui.hint_run_index", lang))
-        st.stop()
-
     return ArchillesService(db_path=db_path)
+
+
+def _service_or_none(lang: str):
+    """The search service, or None (with the reason shown) when there is
+    nothing to search yet -- the page then offers setup only."""
+    library_path = _active_library_path()
+    if not library_path:
+        st.info(t("webui.error_no_library", lang))
+        st.caption(t("webui.hint_set_library", lang))
+        return None
+
+    db_path = get_rag_db_path(library_path)
+    if not Path(db_path).exists():
+        st.info(t("webui.error_db_not_found", lang).format(path=db_path))
+        st.caption(t("webui.hint_run_index", lang))
+        return None
+
+    return load_service(db_path)
 
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
@@ -430,8 +459,11 @@ def main():
     )
     st.caption("Semantic Search for Your Book Collection")
 
-    # Load ARCHILLES service
-    service = load_service()
+    # Load ARCHILLES service; without a searchable index only setup is offered
+    service = _service_or_none(lang)
+    if service is None:
+        render_setup_tab(lang)
+        return
 
     # Get stats (with fallback for empty/new databases)
     try:
@@ -440,7 +472,9 @@ def main():
         stats = {'total_books': 0, 'total_chunks': 0, 'languages': {}, 'file_types': {}}
 
     # Tabs
-    tab_search, tab_books = st.tabs([t('webui.tab_search', lang), t('webui.tab_books', lang)])
+    tab_search, tab_books, tab_setup = st.tabs([
+        t('webui.tab_search', lang), t('webui.tab_books', lang), t('webui.tab_setup', lang),
+    ])
 
     # Sidebar
     with st.sidebar:
@@ -676,6 +710,9 @@ def main():
     # Books tab
     with tab_books:
         render_books_tab(service, stats, lang=lang)
+
+    with tab_setup:
+        render_setup_tab(lang)
 
     # Footer
     st.divider()
