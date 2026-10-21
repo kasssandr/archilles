@@ -418,6 +418,11 @@ def get_embedder_config(library_path: Path | None = None) -> dict:
 
 CURRENT_CONFIG_VERSION = 2
 
+# How often a source's scheduled routine runs. ``manual`` keeps the scheduler
+# task registered but makes every scheduled run a no-op; only a forced run
+# (``run_routine.py --force``, the web UI's "run now") indexes.
+VALID_SCHEDULES: tuple[str, ...] = ("daily", "weekly", "manual")
+
 
 @dataclass
 class SourceConfig:
@@ -445,6 +450,9 @@ class SourceConfig:
     # Path to an external vault-maintenance script (used by
     # scripts/run_link_vault.py); None = vault linking not configured.
     link_vault_script: Path | None = None
+    # Routine cadence, one of VALID_SCHEDULES; None = not configured (the
+    # routine falls back to daily). An explicit ``--frequency`` wins.
+    schedule: str | None = None
 
 
 @dataclass
@@ -540,6 +548,12 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
                 f"Source '{src['name']}': priority_collections must be a list, "
                 f"got {type(priority_coll).__name__}"
             )
+        schedule = src.get("schedule")
+        if schedule is not None and schedule not in VALID_SCHEDULES:
+            raise ValueError(
+                f"Source '{src['name']}': schedule must be one of "
+                f"{list(VALID_SCHEDULES)}, got {schedule!r}"
+            )
         linked = src.get("linked_attachment_base")
         link_vault = src.get("link_vault_script")
         sources.append(SourceConfig(
@@ -554,6 +568,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             enable_reranking=src.get("enable_reranking"),
             reranker_device=src.get("reranker_device"),
             link_vault_script=Path(link_vault).expanduser() if link_vault else None,
+            schedule=schedule,
         ))
 
     names = [s.name for s in sources]
