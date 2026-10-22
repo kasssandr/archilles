@@ -71,7 +71,6 @@ MIN_PAGE_LIST_LABELS = 10
 # the other 7 over 3000 -- collected-studies volumes listing only their front
 # matter -- and none between. A dense two-column page reaches ~1300.
 MAX_WORDS_PER_LABEL = 1500
-_GUTENBERG = re.compile(rb'gutenberg\.org|Project Gutenberg', re.IGNORECASE)
 _NCX_LABEL = re.compile(r'<pageTarget\b.*?<text>(.*?)</text>', re.S | re.I)
 _NAV_PAGE_LIST = re.compile(r'<nav\b[^>]*page-list.*?</nav>', re.S | re.I)
 _NAV_LABEL = re.compile(r'<a\b[^>]*>(.*?)</a>', re.S | re.I)
@@ -83,11 +82,12 @@ _epub_verdicts: dict[tuple, bool] = {}
 def epub_outranks_pdf(epub_path) -> bool:
     """Whether a book's EPUB is indexed before its PDF.
 
-    It is when it states the printed pages -- a page list whose labels, read
+    It is when it states the printed pages: a page list whose labels, read
     by the extractor's own rule, name every page rather than a few
-    (MIN_PAGE_LIST_LABELS, MAX_WORDS_PER_LABEL) -- or when it is a Project Gutenberg text,
-    proofread against the page images. Either way the EPUB gives the text
-    a PDF has to be read for, and its structure besides. Cached per file
+    (MIN_PAGE_LIST_LABELS, MAX_WORDS_PER_LABEL). It then gives the page-exact
+    citation a PDF is read for, and its structure besides. A proofread text
+    alone -- a Gutenberg EPUB without page list -- does not: it would trade
+    the citation for the better text. Cached per file
     state: this runs on every watchdog scan.
     """
     try:
@@ -108,9 +108,6 @@ def _read_epub_verdict(epub_path) -> bool:
     try:
         with zipfile.ZipFile(epub_path) as z:
             names = [n for n in z.namelist() if n.lower().endswith(('.opf', '.ncx', '.xhtml', '.html', '.htm'))]
-            package = b''.join(z.read(n) for n in names if n.lower().endswith('.opf'))
-            if _GUTENBERG.search(package):
-                return True
             labels = words = 0
             for name in names:
                 try:

@@ -1,6 +1,7 @@
-"""An EPUB that states the printed pages, or is a Gutenberg text, is indexed before the PDF.
+"""An EPUB that states the printed pages is indexed before the PDF.
 
-Otherwise the PDF comes first, as it always did.
+Otherwise the PDF comes first, as it always did -- also for a proofread
+Gutenberg text without page list, which would trade the citation away.
 """
 
 import zipfile
@@ -40,9 +41,9 @@ def _first(book_dir: Path) -> str:
     return discover_formats(book_dir)[0]["format"]
 
 
-def test_a_gutenberg_epub_comes_first(tmp_path):
+def test_a_gutenberg_epub_without_page_list_stays_behind_the_pdf(tmp_path):
     book = _book(tmp_path, meta="<dc:source>https://www.gutenberg.org/ebooks/74500</dc:source>")
-    assert _first(book) == "EPUB"
+    assert _first(book) == "PDF"
 
 
 def test_a_page_list_of_printed_pages_comes_first(tmp_path):
@@ -90,13 +91,13 @@ def test_the_calibre_adapter_reads_the_same_file(tmp_path):
     adapter = CalibreAdapter.__new__(CalibreAdapter)
     adapter._library_path = tmp_path
     (tmp_path / "A").mkdir()
-    _book(tmp_path / "A", meta="<dc:publisher>Project Gutenberg</dc:publisher>")
+    _book(tmp_path / "A", labels=[str(n) for n in range(1, 13)])
     assert adapter._find_primary_file("A").suffix == ".epub"
 
 
 def test_batch_index_follows_the_library_order_unless_a_format_is_forced(tmp_path):
     from scripts.batch_index import _select_best_format as select
 
-    formats = discover_formats(_book(tmp_path, meta="<dc:source>gutenberg.org</dc:source>"))
+    formats = discover_formats(_book(tmp_path, labels=[str(n) for n in range(1, 13)]))
     assert select(formats)["format"] == "EPUB"
     assert select(formats, "pdf")["format"] == "PDF"

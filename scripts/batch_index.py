@@ -1778,8 +1778,8 @@ Profiles:
     parser.add_argument('--prefer-format', choices=['pdf', 'epub', 'mobi', 'azw3'],
                         default=None,
                         help='Preferred file format when a book has multiple formats '
-                             '(default: pdf, unless the EPUB has a page list or is a '
-                             'Project Gutenberg text). Use "epub" to prefer EPUB over PDF — '
+                             '(default: pdf, unless the EPUB has a page list that names '
+                             'every page). Use "epub" to prefer EPUB over PDF — '
                              'faster indexing, no page-number citations.')
     parser.add_argument('--cleanup-orphans', action='store_true',
                         help='Remove index entries for books deleted from Calibre. '
