@@ -560,4 +560,5 @@ D:\Calibre Library\
 - [FEATURES.md](FEATURES.md) — Complete feature catalog
 - [ARCHITECTURE.md](ARCHITECTURE.md) — Technical details
 - [MCP_GUIDE.md](MCP_GUIDE.md) — Claude Desktop configuration
+- [CHAT_INBOX.md](CHAT_INBOX.md) — Filing AI chats into an Obsidian vault
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Common issues
