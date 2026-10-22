@@ -66,19 +66,26 @@ def prepared_jsonl_name(book_id: str) -> str:
 # An EPUB's page list names the printed pages; fewer than this many do not
 # carry a book's citations.
 MIN_PAGE_LIST_LABELS = 10
+# A list that names only some pages leaves many words to each label. Measured
+# on the library (2026-10-22): 481 of 488 page lists under 600 words a label,
+# the other 7 over 3000 -- collected-studies volumes listing only their front
+# matter -- and none between. A dense two-column page reaches ~1300.
+MAX_WORDS_PER_LABEL = 1500
 _GUTENBERG = re.compile(rb'gutenberg\.org|Project Gutenberg', re.IGNORECASE)
 _NCX_LABEL = re.compile(r'<pageTarget\b.*?<text>(.*?)</text>', re.S | re.I)
 _NAV_PAGE_LIST = re.compile(r'<nav\b[^>]*page-list.*?</nav>', re.S | re.I)
 _NAV_LABEL = re.compile(r'<a\b[^>]*>(.*?)</a>', re.S | re.I)
 _TAG = re.compile(r'<[^>]+>')
+_BODY = re.compile(r'<body\b.*?</body>', re.S | re.I)
 _epub_verdicts: dict[tuple, bool] = {}
 
 
 def epub_outranks_pdf(epub_path) -> bool:
     """Whether a book's EPUB is indexed before its PDF.
 
-    It is when it states the printed pages -- a page list with readable labels,
-    read by the extractor's own rule -- or when it is a Project Gutenberg text,
+    It is when it states the printed pages -- a page list whose labels, read
+    by the extractor's own rule, name every page rather than a few
+    (MIN_PAGE_LIST_LABELS, MAX_WORDS_PER_LABEL) -- or when it is a Project Gutenberg text,
     proofread against the page images. Either way the EPUB gives the text
     a PDF has to be read for, and its structure besides. Cached per file
     state: this runs on every watchdog scan.
@@ -104,21 +111,25 @@ def _read_epub_verdict(epub_path) -> bool:
             package = b''.join(z.read(n) for n in names if n.lower().endswith('.opf'))
             if _GUTENBERG.search(package):
                 return True
-            labels = 0
+            labels = words = 0
             for name in names:
-                data = z.read(name)
-                if b'pageTarget' not in data and b'page-list' not in data:
+                try:
+                    data = z.read(name)
+                except (zipfile.BadZipFile, OSError):  # a damaged member is skipped
                     continue
+                listed = b'pageTarget' in data or b'page-list' in data
                 text = data.decode('utf-8', errors='replace')
-                found = _NCX_LABEL.findall(text)
-                for nav in _NAV_PAGE_LIST.findall(text):
-                    found += _NAV_LABEL.findall(nav)
-                labels += sum(1 for t in found if _page_label(_TAG.sub('', t)))
-                if labels >= MIN_PAGE_LIST_LABELS:
-                    return True
+                if listed:
+                    found = _NCX_LABEL.findall(text)
+                    for nav in _NAV_PAGE_LIST.findall(text):
+                        found += _NAV_LABEL.findall(nav)
+                    labels += sum(1 for t in found if _page_label(_TAG.sub('', t)))
+                elif not name.lower().endswith(('.opf', '.ncx')):
+                    for body in _BODY.findall(text):
+                        words += len(_TAG.sub(' ', body).split())
     except (OSError, zipfile.BadZipFile, KeyError):
         return False
-    return False
+    return labels >= MIN_PAGE_LIST_LABELS and words <= labels * MAX_WORDS_PER_LABEL
 
 
 def discover_formats(book_dir: Path) -> list[dict[str, str]]:

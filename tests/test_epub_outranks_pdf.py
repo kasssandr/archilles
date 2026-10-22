@@ -17,7 +17,7 @@ _OPF = ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" vers
         '</metadata><manifest/><spine toc="ncx"/></package>')
 
 
-def _epub(path: Path, *, meta: str = "", labels=()) -> Path:
+def _epub(path: Path, *, meta: str = "", labels=(), words: int = 1) -> Path:
     targets = "".join(f'<pageTarget id="p{i}" value="{i}" type="normal" playOrder="{i}">'
                       f'<navLabel><text>{label}</text></navLabel><content src="t.xhtml#p{i}"/></pageTarget>'
                       for i, label in enumerate(labels, 1))
@@ -26,7 +26,7 @@ def _epub(path: Path, *, meta: str = "", labels=()) -> Path:
         z.writestr("mimetype", "application/epub+zip")
         z.writestr("OEBPS/content.opf", _OPF.format(meta=meta))
         z.writestr("OEBPS/toc.ncx", ncx)
-        z.writestr("OEBPS/t.xhtml", "<html><body><p>Text</p></body></html>")
+        z.writestr("OEBPS/t.xhtml", f"<html><body><p>{' '.join(['Wort'] * words)}</p></body></html>")
     return path
 
 
@@ -53,6 +53,19 @@ def test_a_page_list_of_printed_pages_comes_first(tmp_path):
 def test_a_few_labels_do_not_carry_the_citations(tmp_path):
     book = _book(tmp_path, labels=["1", "2", "3"])
     assert _first(book) == "PDF"
+
+
+def test_a_list_of_the_front_matter_only_does_not_count(tmp_path):
+    # A collected-studies volume: i..xii listed, the articles' pages not.
+    labels = ["i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii"]
+    book = _book(tmp_path, labels=labels, words=len(labels) * 6000)
+    assert _first(book) == "PDF"
+
+
+def test_a_dense_page_still_counts(tmp_path):
+    labels = [str(n) for n in range(1, 13)]
+    book = _book(tmp_path, labels=labels, words=len(labels) * 1300)
+    assert _first(book) == "EPUB"
 
 
 def test_labels_that_name_no_page_do_not_count(tmp_path):
