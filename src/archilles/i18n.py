@@ -201,6 +201,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "setup.registered": "Registered: {output}",
         "setup.no_tasks": "No ARCHILLES tasks are registered.",
         "setup.other_tasks_warning": "Further routine tasks exist: {tasks}. If one of them serves this library too, it runs twice; tasks registered with a fixed --frequency also ignore the rhythm set here. Remove duplicates in the Task Scheduler.",
+        # Chat inbox review note (scripts/chat_inbox.py)
+        "chat_inbox.review_title": "AI chat review",
+        "chat_inbox.instructions": "Ticked = goes into the archive. Title, summary and tags can be edited right here (source mode). When you are done, tick \"Review done\": the next run files the ticked chats and moves the others to `{rejected}`.",
+        "chat_inbox.done": "Review done: file on the next run",
+        "chat_inbox.section_keep": "Suggested",
+        "chat_inbox.section_untriaged": "Not pre-sorted",
+        "chat_inbox.section_trivial": "Probably trivial",
+        "chat_inbox.summary": "Summary",
+        "chat_inbox.tags": "Tags",
+        "chat_inbox.open": "open",
+        "chat_inbox.words": "{n} words",
+        "chat_inbox.empty": "Nothing waiting.",
     },
     "de": {
         "page.pdf": "PDF S.",
@@ -374,6 +386,18 @@ MESSAGES: dict[str, dict[str, str]] = {
         "setup.registered": "Eingetragen: {output}",
         "setup.no_tasks": "Keine ARCHILLES-Aufgaben eingetragen.",
         "setup.other_tasks_warning": "Es gibt weitere Routine-Aufgaben: {tasks}. Bedient eine davon ebenfalls diese Bibliothek, läuft sie doppelt; Aufgaben mit festem --frequency ignorieren zudem den hier gewählten Rhythmus. Doppelte in der Aufgabenplanung entfernen.",
+        # Chat inbox review note (scripts/chat_inbox.py)
+        "chat_inbox.review_title": "KI-Chat-Review",
+        "chat_inbox.instructions": "Angehakt = kommt ins Archiv. Titel, Kurzfassung und Tags lassen sich hier direkt ändern (Quellmodus). Wenn du fertig bist, „Review abgeschlossen“ anhaken: Der nächste Lauf legt die angehakten Chats ab und verschiebt die übrigen nach `{rejected}`.",
+        "chat_inbox.done": "Review abgeschlossen: beim nächsten Lauf ablegen",
+        "chat_inbox.section_keep": "Vorschläge",
+        "chat_inbox.section_untriaged": "Nicht vorsortiert",
+        "chat_inbox.section_trivial": "Vermutlich trivial",
+        "chat_inbox.summary": "Kurzfassung",
+        "chat_inbox.tags": "Tags",
+        "chat_inbox.open": "öffnen",
+        "chat_inbox.words": "{n} Wörter",
+        "chat_inbox.empty": "Nichts offen.",
     },
 }
 
