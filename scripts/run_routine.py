@@ -141,6 +141,20 @@ def _build_command(
     ]
 
 
+def _chat_inbox_command(library_path: Path, options: dict | None) -> list[str] | None:
+    """The chat-inbox pre-step for a vault source (None when not configured).
+
+    It files reviewed chats and lists new ones before the indexing run, so
+    the scheduled routine and the web UI's "run now" both pick them up.
+    """
+    if options is None:
+        return None
+    cmd = [sys.executable, str(REPO_ROOT / "scripts" / "chat_inbox.py"), "run", str(library_path)]
+    if options.get("lang"):
+        cmd += ["--lang", str(options["lang"])]
+    return cmd
+
+
 def _derive_intent(cmd: list[str]) -> dict[str, bool]:
     """What the run was *asked* to do, read back from the command just built.
 
@@ -307,10 +321,25 @@ def main() -> int:
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"
 
+    inbox_cmd = (_chat_inbox_command(library_path, getattr(src, "chat_inbox", None))
+                 if adapter == "obsidian" else None)
+
     if args.dry_run:
+        if inbox_cmd:
+            print(f"DRY-RUN — would run first: {' '.join(inbox_cmd)}")
         print(f"DRY-RUN — would run: {' '.join(cmd)}\n"
               f"  ARCHILLES_LIBRARY_PATH={library_path}")
         return 0
+
+    if inbox_cmd:
+        # No GPU work (triage runs remotely), so it runs outside the lock; a
+        # failure is logged and never blocks the indexing run.
+        print("--- chat inbox ---")
+        inbox_rc = subprocess.run(inbox_cmd, env=env, cwd=str(REPO_ROOT)).returncode
+        with log_file.open("a", encoding="utf-8") as f:
+            f.write(f"[{datetime.now().astimezone().isoformat()}] {args.source}: "
+                    f"chat inbox exit {inbox_rc}\n")
+        print("--- indexing ---")
 
     if not runtime_lock.acquire(f"run_routine({args.source})", wait_s=args.wait_for_lock):
         # Log it like the frequency SKIP above. This abort used to leave no

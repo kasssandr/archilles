@@ -80,7 +80,7 @@ KEY_ORDER = [
 DISPLAY = {
     "claude": "Claude", "chatgpt": "ChatGPT", "gemini": "Gemini",
     "perplexity": "Perplexity", "grok": "Grok", "brave": "Brave",
-    "notebooklm": "NotebookLM",
+    "notebooklm": "Gemini Notebook",    # formerly NotebookLM; key kept for the archive
 }
 _LLM_ALIASES = {
     "claude": "claude", "claude.ai": "claude", "anthropic": "claude",
@@ -88,12 +88,14 @@ _LLM_ALIASES = {
     "gpt": "chatgpt", "gemini": "gemini", "google-ai": "gemini",
     "google": "gemini", "bard": "gemini", "perplexity": "perplexity",
     "grok": "grok", "brave": "brave", "notebooklm": "notebooklm",
+    "gemini notebook": "notebooklm",
 }
 # Order matters: subdomains of google.com before google.com itself.
 _HOSTS = [
     ("claude.ai", "claude"), ("chatgpt.com", "chatgpt"),
     ("chat.openai.com", "chatgpt"), ("gemini.google.com", "gemini"),
     ("aistudio.google.com", "gemini"), ("notebooklm.google.com", "notebooklm"),
+    ("notebook.google.com", "notebooklm"),
     ("google.com", "gemini"), ("perplexity.ai", "perplexity"),
     ("grok.com", "grok"), ("search.brave.com", "brave"),
 ]

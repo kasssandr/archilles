@@ -66,3 +66,32 @@ class TestZoteroIndexNew:
         cmd = _build_command("zotero", max_new=None, priority_collections=["Current Project"])
         assert "--first-collection" in cmd
         assert "Current Project" in cmd
+
+
+class TestChatInboxPreStep:
+    def test_none_without_config(self, tmp_path):
+        from scripts.run_routine import _chat_inbox_command
+
+        assert _chat_inbox_command(tmp_path, None) is None
+
+    def test_runs_chat_inbox_with_lang(self, tmp_path):
+        from scripts.run_routine import _chat_inbox_command
+
+        cmd = _chat_inbox_command(tmp_path, {"lang": "de"})
+
+        assert cmd[1].endswith("chat_inbox.py")
+        assert cmd[2:] == ["run", str(tmp_path), "--lang", "de"]
+
+    def test_master_config_rejects_non_object(self, tmp_path):
+        import json
+
+        import pytest
+
+        from src.archilles.config import load_master_config
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({"sources": [
+            {"name": "lab", "library_path": str(tmp_path), "chat_inbox": "de"}]}),
+            encoding="utf-8")
+        with pytest.raises(ValueError, match="chat_inbox"):
+            load_master_config(cfg)

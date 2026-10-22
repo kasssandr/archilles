@@ -453,6 +453,9 @@ class SourceConfig:
     # Routine cadence, one of VALID_SCHEDULES; None = not configured (the
     # routine falls back to daily). An explicit ``--frequency`` wins.
     schedule: str | None = None
+    # Obsidian only: run scripts/chat_inbox.py before indexing; options such
+    # as {"lang": "de"}. None = no chat inbox.
+    chat_inbox: dict | None = None
 
 
 @dataclass
@@ -554,6 +557,12 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
                 f"Source '{src['name']}': schedule must be one of "
                 f"{list(VALID_SCHEDULES)}, got {schedule!r}"
             )
+        chat_inbox = src.get("chat_inbox")
+        if chat_inbox is not None and not isinstance(chat_inbox, dict):
+            raise ValueError(
+                f"Source '{src['name']}': chat_inbox must be an object such as "
+                f'{{"lang": "de"}}, got {type(chat_inbox).__name__}'
+            )
         linked = src.get("linked_attachment_base")
         link_vault = src.get("link_vault_script")
         sources.append(SourceConfig(
@@ -569,6 +578,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
             reranker_device=src.get("reranker_device"),
             link_vault_script=Path(link_vault).expanduser() if link_vault else None,
             schedule=schedule,
+            chat_inbox=chat_inbox,
         ))
 
     names = [s.name for s in sources]
