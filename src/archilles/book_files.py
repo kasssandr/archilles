@@ -63,8 +63,69 @@ def prepared_jsonl_name(book_id: str) -> str:
     return f"{safe}.jsonl"
 
 
+# An EPUB's page list names the printed pages; fewer than this many do not
+# carry a book's citations.
+MIN_PAGE_LIST_LABELS = 10
+_GUTENBERG = re.compile(rb'gutenberg\.org|Project Gutenberg', re.IGNORECASE)
+_NCX_LABEL = re.compile(r'<pageTarget\b.*?<text>(.*?)</text>', re.S | re.I)
+_NAV_PAGE_LIST = re.compile(r'<nav\b[^>]*page-list.*?</nav>', re.S | re.I)
+_NAV_LABEL = re.compile(r'<a\b[^>]*>(.*?)</a>', re.S | re.I)
+_TAG = re.compile(r'<[^>]+>')
+_epub_verdicts: dict[tuple, bool] = {}
+
+
+def epub_outranks_pdf(epub_path) -> bool:
+    """Whether a book's EPUB is indexed before its PDF.
+
+    It is when it states the printed pages -- a page list with readable labels,
+    read by the extractor's own rule -- or when it is a Project Gutenberg text,
+    proofread against the page images. Either way the EPUB gives the text
+    a PDF has to be read for, and its structure besides. Cached per file
+    state: this runs on every watchdog scan.
+    """
+    try:
+        st = os.stat(epub_path)
+    except OSError:
+        return False
+    key = (str(epub_path), st.st_mtime_ns, st.st_size)
+    if key not in _epub_verdicts:
+        _epub_verdicts[key] = _read_epub_verdict(epub_path)
+    return _epub_verdicts[key]
+
+
+def _read_epub_verdict(epub_path) -> bool:
+    import zipfile
+
+    from src.extractors.epub_extractor import _page_label
+
+    try:
+        with zipfile.ZipFile(epub_path) as z:
+            names = [n for n in z.namelist() if n.lower().endswith(('.opf', '.ncx', '.xhtml', '.html', '.htm'))]
+            package = b''.join(z.read(n) for n in names if n.lower().endswith('.opf'))
+            if _GUTENBERG.search(package):
+                return True
+            labels = 0
+            for name in names:
+                data = z.read(name)
+                if b'pageTarget' not in data and b'page-list' not in data:
+                    continue
+                text = data.decode('utf-8', errors='replace')
+                found = _NCX_LABEL.findall(text)
+                for nav in _NAV_PAGE_LIST.findall(text):
+                    found += _NAV_LABEL.findall(nav)
+                labels += sum(1 for t in found if _page_label(_TAG.sub('', t)))
+                if labels >= MIN_PAGE_LIST_LABELS:
+                    return True
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return False
+    return False
+
+
 def discover_formats(book_dir: Path) -> list[dict[str, str]]:
     """The book files in ``book_dir``, in PREFERRED_FORMATS order.
+
+    The one exception: an EPUB that outranks the PDF (``epub_outranks_pdf``)
+    comes first.
 
     One directory scan instead of one glob per extension -- this runs for
     every library book on every watchdog scan.
@@ -80,9 +141,14 @@ def discover_formats(book_dir: Path) -> list[dict[str, str]]:
                     by_ext.setdefault(suffix, []).append(entry.path)
     except OSError:
         return []
+    order = list(PREFERRED_FORMATS)
+    epubs = by_ext.get('.epub', ())
+    if '.pdf' in by_ext and any(epub_outranks_pdf(p) for p in epubs):
+        order.remove('.epub')
+        order.insert(order.index('.pdf'), '.epub')
     return [
         {'format': ext[1:].upper(), 'path': path}
-        for ext in PREFERRED_FORMATS
+        for ext in order
         for path in sorted(by_ext.get(ext, ()))
     ]
 

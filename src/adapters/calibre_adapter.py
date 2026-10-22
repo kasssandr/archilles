@@ -15,6 +15,7 @@ from src.adapters.base import (
     DocumentTimestamps,
     SourceAdapter,
 )
+from src.archilles.book_files import epub_outranks_pdf
 from src.archilles.sqlite_ro import connect_readonly
 from src.calibre_db import CalibreDB
 from src.calibre_mcp.annotations import (
@@ -268,6 +269,9 @@ class CalibreAdapter(SourceAdapter):
             if f.is_file() and f.suffix:
                 files_by_ext[f.suffix.lower().lstrip(".")] = f
 
+        if "pdf" in files_by_ext and "epub" in files_by_ext \
+                and epub_outranks_pdf(files_by_ext["epub"]):
+            return files_by_ext["epub"]
         for fmt in _FORMAT_PRIORITY:
             if fmt in files_by_ext:
                 return files_by_ext[fmt]
