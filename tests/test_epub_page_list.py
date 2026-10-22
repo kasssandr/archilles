@@ -17,6 +17,7 @@ from src.extractors.epub_extractor import EPUBExtractor, _page_label, _paragraph
 @pytest.mark.parametrize("text, label", [
     ("5", "5"), ("[S. 5]", "5"), ("p. xiv", "xiv"), ("Seite 12", "12"),
     ("XIV", "XIV"), ("12a", "12a"), ("Kapitel 3", None), ("", None),
+    ("{626}", "626"), ("[Pg 23]", "23"), ("Pg. xiv", "xiv"),
 ])
 def test_a_label_is_read_not_guessed(text, label):
     assert _page_label(text) == label

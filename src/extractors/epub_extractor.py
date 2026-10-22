@@ -138,17 +138,18 @@ def _blocks(root, sentinel_re: Optional['re.Pattern'] = None) -> List[tuple]:
 _PAGE_OPEN, _PAGE_CLOSE = chr(0xE002), chr(0xE003)
 _PAGE_SENTINEL_RE = re.compile(re.escape(_PAGE_OPEN) + r"(\d+)" + re.escape(_PAGE_CLOSE))
 
-# A page-list label as the reader sees it: "[S. 5]", "p. xiv", "Seite 12".
+# A page-list label as the reader sees it: "[S. 5]", "p. xiv", "Seite 12",
+# and Project Gutenberg's "{626}" or "[Pg 23]".
 # The prefix is the reader's language, not the page (Befund Gliederung §6.1).
 _LABEL_PREFIX = re.compile(
-    r"^\[?\s*(?:s\.|seite|p\.|pp\.|page|pag\.|pág\.|bl\.)?\s*", re.IGNORECASE)
+    r"^[\[{]?\s*(?:s\.|seite|p\.|pp\.|pg\.?|page|pag\.|pág\.|bl\.)?\s*", re.IGNORECASE)
 # What is read as a label at all; anything else is not guessed.
 _LABEL_OK = re.compile(r"^(?:\d{1,4}[a-z]?|[ivxlcdm]{1,8})$", re.IGNORECASE)
 
 
 def _page_label(text: str) -> Optional[str]:
     """The printed page a page-list entry names, or None if it names none."""
-    label = _LABEL_PREFIX.sub('', ' '.join((text or '').split())).rstrip('] ').strip()
+    label = _LABEL_PREFIX.sub('', ' '.join((text or '').split())).rstrip('}] ').strip()
     return label if _LABEL_OK.match(label) else None
 
 
