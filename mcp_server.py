@@ -37,6 +37,7 @@ sys.stdout = sys.stderr
 import asyncio
 import json
 import threading
+import time
 
 # Repo-Wurzel auf den Pfad — kanonische Import-Wurzel ist `src.*` (Review 5.14)
 sys.path.insert(0, str(Path(__file__).parent))
@@ -113,6 +114,68 @@ def _reconfigure_stdio_utf8(*streams) -> None:
                 )
             except Exception as e:
                 logger.warning(f"Could not reconfigure stdio stream: {e}")
+
+
+class _PipeLineReader:
+    """Read a Windows stdin pipe line by line without parking in a blocking read.
+
+    A thread blocked in the C runtime's read() holds that descriptor's lock,
+    and other CRT calls on the descriptor wait for it (lseek() and setmode()
+    did in a probe). Loading scipy's Fortran runtime, which
+    sentence-transformers imports, makes such a call on stdin, so the
+    model-preload thread hung in that import until the next request arrived:
+    3.5 hours on 2026-10-25. Peeking at the pipe and reading through the Win32
+    handle only what is already there never takes the CRT lock.
+    """
+
+    POLL_SECONDS = 0.05
+
+    def __init__(self, handle: int):
+        self._handle = handle
+        self._buf = bytearray()
+        self._eof = False
+
+    def readline(self) -> str:
+        """The next line with its newline; '' once the client has closed the pipe."""
+        import _winapi
+
+        while True:
+            end = self._buf.find(b"\n") + 1
+            if not end and self._eof:
+                end = len(self._buf)
+            if end:
+                line = bytes(self._buf[:end])
+                del self._buf[:end]
+                # Decoded per whole line, so a character split across two
+                # writes arrives intact.
+                return line.decode("utf-8", errors="replace")
+            if self._eof:
+                return ""
+            try:
+                available, _ = _winapi.PeekNamedPipe(self._handle)
+                if available:
+                    data, _ = _winapi.ReadFile(self._handle, available)
+                    self._buf += data
+                else:
+                    time.sleep(self.POLL_SECONDS)
+            except OSError:  # ERROR_BROKEN_PIPE: the client is gone
+                self._eof = True
+
+
+def _stdin_line_reader(stdin):
+    """A :class:`_PipeLineReader` when stdin is a Windows pipe, else ``stdin`` itself."""
+    if sys.platform != "win32":
+        return stdin
+    try:
+        import _winapi
+        import msvcrt
+
+        handle = msvcrt.get_osfhandle(stdin.fileno())
+        if _winapi.GetFileType(handle) == _winapi.FILE_TYPE_PIPE:
+            return _PipeLineReader(handle)
+    except (OSError, ValueError, AttributeError):
+        pass  # no OS-level descriptor (a test double, a closed stream)
+    return stdin
 
 
 def _start_preload(server, enabled: bool) -> threading.Thread | None:
@@ -345,8 +408,9 @@ async def stdio_server(server, tools: list[dict]):
     for tool in tools:
         logger.info(f"  - {tool['name']}: {tool['description'][:50]}...")
 
+    reader = _stdin_line_reader(sys.stdin)
     while True:
-        line = sys.stdin.readline()
+        line = reader.readline()
         if not line:
             break
         if not line.strip():
@@ -610,6 +674,14 @@ def main():
     parser.add_argument("--ssl-certfile", default=None, help="TLS certificate file (enables HTTPS)")
     parser.add_argument("--ssl-keyfile", default=None, help="TLS private key file (enables HTTPS)")
     args = parser.parse_args()
+
+    # Every call here has a person waiting, and an MCP client gives up after
+    # 60 s: a locked Calibre or Zotero database must fail within seconds.
+    from src.archilles.sqlite_ro import (
+        INTERACTIVE_BUSY_TIMEOUT_MS,
+        set_default_busy_timeout,
+    )
+    set_default_busy_timeout(INTERACTIVE_BUSY_TIMEOUT_MS)
 
     # ── Mode selection: master config wins over legacy single-source ──
     from src.archilles.config import load_master_config, master_config_path
