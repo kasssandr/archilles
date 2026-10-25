@@ -36,15 +36,18 @@ import pytest
 
 
 class TestBusyTimeoutIsLongEnoughForASync:
-    def test_default_is_no_longer_five_seconds(self):
+    def test_default_is_no_longer_five_seconds(self, tmp_path):
         """5 s was tuned for "a brief writer lock"; a sync is not brief."""
-        import inspect
-
         from src.archilles.sqlite_ro import connect_readonly
 
-        default = inspect.signature(connect_readonly).parameters[
-            "busy_timeout_ms"
-        ].default
+        db = tmp_path / "x.sqlite"
+        sqlite3.connect(db).close()
+
+        conn = connect_readonly(db)
+        try:
+            default = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        finally:
+            conn.close()
         assert default >= 30_000, "a Zotero sync routinely exceeds 5 s"
 
     def test_the_pragma_actually_carries_the_value(self, tmp_path):
@@ -273,10 +276,87 @@ class TestTheScanStartFailsFast:
 
     def test_the_general_default_stays_long(self):
         """Everything not explicitly shortened keeps the mid-run value."""
-        import inspect
+        from src.archilles import sqlite_ro
 
-        from src.archilles.sqlite_ro import connect_readonly
+        assert sqlite_ro.DEFAULT_BUSY_TIMEOUT_MS >= 30_000
+        assert sqlite_ro._default_busy_timeout_ms >= 30_000, (
+            "only the MCP server may lower the process default"
+        )
 
-        assert inspect.signature(connect_readonly).parameters[
-            "busy_timeout_ms"
-        ].default >= 30_000
+
+class TestAnInteractiveProcessFailsFast:
+    """An open Zotero app keeps zotero.sqlite locked for as long as it runs.
+
+    Observed 2026-10-23: list_tags and list_books_by_author ask every source
+    in parallel and wait for the slowest. The Zotero source waited the full
+    60 s default, ~85 s on Windows, and the MCP client gave up after 60 s,
+    every time. The search tools read only LanceDB and were unaffected.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _restore_default(self, monkeypatch):
+        from src.archilles import sqlite_ro
+
+        monkeypatch.setattr(
+            sqlite_ro, "_default_busy_timeout_ms", sqlite_ro._default_busy_timeout_ms
+        )
+
+    @pytest.fixture
+    def locked_db(self, tmp_path):
+        """A WAL database held the way Zotero holds it: exclusive locking mode."""
+        db = tmp_path / "zotero.sqlite"
+        con = sqlite3.connect(db, isolation_level=None)
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("CREATE TABLE items (itemID INTEGER PRIMARY KEY)")
+        con.execute("PRAGMA locking_mode=EXCLUSIVE")
+        con.execute("BEGIN EXCLUSIVE")
+        yield db
+        con.execute("ROLLBACK")
+        con.close()
+
+    def test_the_process_default_reaches_new_connections(self, tmp_path):
+        from src.archilles.sqlite_ro import connect_readonly, set_default_busy_timeout
+
+        db = tmp_path / "x.sqlite"
+        sqlite3.connect(db).close()
+        set_default_busy_timeout(1_500)
+
+        conn = connect_readonly(db)
+        try:
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 1_500
+        finally:
+            conn.close()
+
+    def test_an_explicit_timeout_still_wins(self, tmp_path):
+        from src.archilles.sqlite_ro import connect_readonly, set_default_busy_timeout
+
+        db = tmp_path / "x.sqlite"
+        sqlite3.connect(db).close()
+        set_default_busy_timeout(1_500)
+
+        conn = connect_readonly(db, busy_timeout_ms=5_000)
+        try:
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5_000
+        finally:
+            conn.close()
+
+    def test_a_locked_zotero_answers_within_seconds(self, locked_db):
+        import time
+
+        from src.adapters.zotero_adapter import ZoteroAdapter
+        from src.archilles.sqlite_ro import set_default_busy_timeout
+
+        set_default_busy_timeout(200)
+        adapter = ZoteroAdapter(locked_db.parent, linked_attachment_base=None)
+
+        start = time.perf_counter()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            adapter.list_works()
+        assert time.perf_counter() - start < 5
+
+    def test_the_interactive_value_fits_a_tool_call(self):
+        from src.archilles.sqlite_ro import INTERACTIVE_BUSY_TIMEOUT_MS
+
+        # Windows stretches SQLite's busy sleeps by ~1.4x; three sources wait
+        # in parallel, so this is roughly what a locked source adds.
+        assert INTERACTIVE_BUSY_TIMEOUT_MS * 1.5 < 10_000

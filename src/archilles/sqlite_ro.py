@@ -19,41 +19,62 @@ import sqlite3
 from pathlib import Path
 from typing import Callable, Optional, Union
 
+# 60 s, not 5 (finding 1.16): 5 s was tuned for "a brief writer lock", but a
+# Zotero sync holds longer. On 2026-09-04 a routine run died of exactly that,
+# 21 minutes into *one* book (1160 s of embedding on the T1000), so a long
+# exposure to a database the user works in at the same time. Waiting costs
+# such a caller nothing; it runs for minutes anyway, while an abort loses the
+# whole run.
+DEFAULT_BUSY_TIMEOUT_MS = 60_000
+
+# What a process answering a person sets instead: an MCP client gives up on a
+# tool call after 60 s, and an open Zotero app holds zotero.sqlite locked for
+# as long as it runs, so waiting gains nothing there. 60 s became ~85 s on
+# Windows and turned every list_tags into a timeout (2026-10-23).
+INTERACTIVE_BUSY_TIMEOUT_MS = 3_000
+
+_default_busy_timeout_ms = DEFAULT_BUSY_TIMEOUT_MS
+
+
+def set_default_busy_timeout(ms: int) -> None:
+    """Set the lock wait for every later connection that names none.
+
+    Process-wide on purpose: the MCP server calls it once at startup, which
+    reaches every adapter and analyzer it builds without threading a
+    parameter through each of them. Explicit ``busy_timeout_ms`` still wins.
+    """
+    global _default_busy_timeout_ms
+    _default_busy_timeout_ms = int(ms)
+
 
 def connect_readonly(
     db_path: Union[str, Path],
     *,
     immutable: bool = False,
-    busy_timeout_ms: int = 60_000,
+    busy_timeout_ms: Optional[int] = None,
     row_factory: Optional[Callable] = None,
 ) -> sqlite3.Connection:
-    """Oeffnet ``db_path`` schreibgeschuetzt (``mode=ro``).
+    """Open ``db_path`` read-only (``mode=ro``).
 
     Args:
-        db_path: Pfad zur SQLite-Datei.
-        immutable: zusaetzlich ``immutable=1`` (nur fuer unveraenderliche DBs;
-            bei Live-DBs weglassen -- sonst ignoriert SQLite das WAL und liest
-            veraltete oder halb-geschriebene Seiten, Befund 4.4).
-        busy_timeout_ms: Wartezeit auf einen Lock, bevor ``SQLITE_BUSY``
-            geworfen wird. 0 schaltet das Warten ab.
-
-            60 s, nicht 5 (Befund 1.16): 5 s war auf "einen kurzzeitigen
-            Schreib-Lock" ausgelegt, aber ein Zotero-Sync haelt laenger. Am
-            2026-09-04 starb ein Routinelauf genau daran -- nach 21 Minuten in
-            *einem* Buch (1160 s Embedding auf der T1000), also mit sehr langer
-            Exposition gegenueber einer Datenbank, die der Nutzer parallel
-            benutzt. Warten kostet hier nichts: der Aufrufer laeuft ohnehin
-            minutenlang, waehrend ein Abbruch den ganzen Lauf verliert.
-            Interaktive Pfade, die schnell scheitern wollen, setzen den Wert
-            explizit herunter.
-        row_factory: optionale ``row_factory`` (z. B. ``sqlite3.Row``).
+        db_path: path to the SQLite file.
+        immutable: add ``immutable=1`` (only for databases that cannot change;
+            leave it off for live ones, or SQLite ignores the WAL and reads
+            stale or half-written pages, finding 4.4).
+        busy_timeout_ms: how long to wait on a lock before ``SQLITE_BUSY``;
+            0 disables waiting. ``None`` takes the process default
+            (:data:`DEFAULT_BUSY_TIMEOUT_MS` unless
+            :func:`set_default_busy_timeout` changed it).
+        row_factory: optional ``row_factory`` (e.g. ``sqlite3.Row``).
 
     Returns:
-        Eine read-only ``sqlite3.Connection``. Schreibversuche werfen
+        A read-only ``sqlite3.Connection``; write attempts raise
         ``sqlite3.OperationalError``.
     """
-    # as_posix() liefert Forward-Slashes inkl. Windows-Laufwerksbuchstaben
-    # (D:/...), die als file:-URI verlaesslich parsen.
+    if busy_timeout_ms is None:
+        busy_timeout_ms = _default_busy_timeout_ms
+    # as_posix() gives forward slashes, drive letter included (D:/...), which
+    # parse reliably as a file: URI.
     uri = f"file:{Path(db_path).as_posix()}?mode=ro"
     if immutable:
         uri += "&immutable=1"
