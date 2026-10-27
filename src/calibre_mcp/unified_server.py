@@ -103,6 +103,28 @@ def merge_source_results(per_source: list, top_k: int) -> list:
     return merged
 
 
+def _unavailable_sources(per_source: dict[str, Any]) -> dict[str, Any]:
+    """``{"unavailable_sources": {name: reason}}`` for every failed source, else ``{}``.
+
+    The aggregations counted a failed source as 0 hits and said no more, so
+    "Zotero has none" and "Zotero could not be read" looked alike. A lock
+    gets its remedy spelled out: Zotero locks zotero.sqlite while it is open.
+    """
+    failed: dict[str, str] = {}
+    for name, res in per_source.items():
+        if isinstance(res, dict) and "error" not in res:
+            continue
+        reason = str(res["error"]) if isinstance(res, dict) else "no result"
+        if "database is locked" in reason:
+            reason += (
+                " — the program that owns this database holds it locked (Zotero"
+                " does while it is open), so this source is missing from the"
+                " result; close it and ask again"
+            )
+        failed[name] = reason
+    return {"unavailable_sources": failed} if failed else {}
+
+
 # ── Tool classification (used by create_unified_tools) ────────────────────
 
 _REMOVED_TOOLS = {"get_doublette_tag_instruction"}
@@ -505,6 +527,7 @@ class UnifiedMCPServer:
             "search_type": "semantic",
             "result_count": len(merged),
             "per_source_counts": per_source_counts,
+            **_unavailable_sources(per_source),
             "results": merged,
         }
 
@@ -558,6 +581,7 @@ class UnifiedMCPServer:
             "count": len(all_books),
             "author_query": author,
             "per_source_counts": per_source_counts,
+            **_unavailable_sources(per_source),
         }
 
     def list_tags_tool(
@@ -597,6 +621,7 @@ class UnifiedMCPServer:
             "returned_tags": len(limited),
             "tags": limited,
             "per_source_counts": per_source_counts,
+            **_unavailable_sources(per_source),
             "usage": (
                 'Use these tag names in the "tags" parameter; '
                 'pass "source" to scope to one library.'
@@ -632,6 +657,7 @@ class UnifiedMCPServer:
             "total_books": len(all_books),
             "books": all_books,
             "per_source_counts": per_source_counts,
+            **_unavailable_sources(per_source),
         }
 
     def export_bibliography_tool(
@@ -677,6 +703,7 @@ class UnifiedMCPServer:
             "data": "\n\n".join(chunks),
             "book_count": sum(per_source_counts.values()),
             "per_source_counts": per_source_counts,
+            **_unavailable_sources(per_source),
         }
 
     # ── Single-source tools (path-inferred) ──────────────────────────────

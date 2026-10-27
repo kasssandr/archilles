@@ -793,7 +793,7 @@ class WatchdogScanner:
                                Applies independently to index_fulltext_pending.
                                None = no limit (run until done or CTRL+C).
         first_authors          Substring list — books whose author matches come first.
-        first_tags             Substring list — books carrying a matching tag come first.
+        first_tags             Exact tag names (case-insensitive) — books carrying one come first.
         first_titles           Substring list — books whose title matches come first.
         rating_filter          Restrict the fulltext-pending backlog (Phase 4) to books
                                with exactly this star rating. 0 = unrated, 1–5 = N stars.

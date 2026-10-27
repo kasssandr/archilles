@@ -178,12 +178,16 @@ def _format_label(book: Dict[str, Any], best: Dict[str, str]) -> str:
     return 'SCRIPTOR' if book.get('bundle') else best['format']
 
 
-def _select_best_format(formats: List[Dict[str, str]], prefer_format: str = 'PDF') -> Dict[str, str]:
+def _select_best_format(formats: List[Dict[str, str]], prefer_format: Optional[str] = None) -> Dict[str, str]:
     """Select the best format from available formats.
 
-    Tries prefer_format first, then falls back through the remaining
-    PREFERRED_FORMATS order, then returns whatever is available.
+    Without prefer_format, the library's order decides (``discover_formats``:
+    PDF first, unless the EPUB outranks it). With it, that format is tried
+    first, then the remaining PREFERRED_FORMATS order, then whatever is
+    available.
     """
+    if not prefer_format:
+        return formats[0]
     order = [prefer_format.upper()] + [
         f[1:].upper() for f in PREFERRED_FORMATS
         if f[1:].upper() != prefer_format.upper()
@@ -300,7 +304,7 @@ def _select_best_format_by_quality(
     formats: List[Dict[str, str]],
     rag,
     book_id: str,
-    prefer_format: str = 'PDF',
+    prefer_format: Optional[str] = None,
 ) -> tuple:
     """Prepare multiple formats, score them, return (best_format_entry, scores_dict).
 
@@ -1265,7 +1269,7 @@ def batch_prepare(
     rag: ArchillesRAG,
     output_dir: str = './prepared_chunks',
     dry_run: bool = False,
-    prefer_format: str = 'PDF',
+    prefer_format: Optional[str] = None,
     quality_select: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1374,7 +1378,7 @@ def batch_index(
     safe_indexer: Optional[SafeIndexer] = None,
     phase: str = 'phase2',
     db_path: str = None,
-    prefer_format: str = 'PDF',
+    prefer_format: Optional[str] = None,
     quality_select: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1772,9 +1776,10 @@ Profiles:
                              'to watchdog change detection). Use ModularPipeline architecture '
                              '(parser -> chunker -> embedder).')
     parser.add_argument('--prefer-format', choices=['pdf', 'epub', 'mobi', 'azw3'],
-                        default='pdf',
+                        default=None,
                         help='Preferred file format when a book has multiple formats '
-                             '(default: pdf). Use "epub" to prefer EPUB over PDF — '
+                             '(default: pdf, unless the EPUB has a page list that names '
+                             'every page). Use "epub" to prefer EPUB over PDF — '
                              'faster indexing, no page-number citations.')
     parser.add_argument('--cleanup-orphans', action='store_true',
                         help='Remove index entries for books deleted from Calibre. '

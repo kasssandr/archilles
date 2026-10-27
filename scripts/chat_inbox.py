@@ -3,8 +3,8 @@
 
 One folder receives every new chat, however it arrives — a Web Clipper note,
 or a platform export (Claude or ChatGPT ``conversations.json``, or the export
-ZIP) dropped there as is. ``run`` does the rest, once per logon from the Lab
-routine wrapper:
+ZIP) dropped there as is. ``run`` does the rest; ``run_routine.py`` calls it
+before indexing when the source has a ``chat_inbox`` block:
 
 1. **apply** — if the review note is ticked as done, file the ticked chats
    into ``<chats>/YYYY-MM/<date>_<platform>_<slug>.md`` and move the unticked
