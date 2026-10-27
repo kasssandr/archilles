@@ -10,6 +10,9 @@ Usage:
     python import_chatgpt_to_vault.py conversations.json D:/MyVault --limit 10
     python import_chatgpt_to_vault.py conversations.json D:/MyVault --interactive
     python import_chatgpt_to_vault.py conversations.json D:/MyVault --dry-run
+
+Re-running on a newer export is safe: chat_sync recognizes notes it wrote
+before (and web clips of the same chat) and only adds what is new.
 """
 
 import json
@@ -19,7 +22,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from vault_import import make_filename, render_markdown, select_conversations
+from chat_sync import (
+    ChatConversation,
+    ChatMessage,
+    add_sync_arguments,
+    content_id,
+    run_sync,
+)
+from vault_import import select_conversations
 
 
 def format_timestamp(unix_ts: Optional[float]) -> Optional[str]:
@@ -32,117 +42,120 @@ def format_timestamp(unix_ts: Optional[float]) -> Optional[str]:
         return None
 
 
-def get_month_folder(unix_ts: Optional[float]) -> str:
-    """Get YYYY-MM folder name from timestamp."""
+def to_datetime(unix_ts: Optional[float]) -> Optional[datetime]:
+    """Convert a Unix timestamp to a datetime (None if missing or invalid)."""
     if not unix_ts:
-        return "undated"
+        return None
     try:
-        return datetime.fromtimestamp(unix_ts).strftime("%Y-%m")
-    except (ValueError, OSError):
-        return "undated"
+        return datetime.fromtimestamp(unix_ts)
+    except (ValueError, OSError, TypeError):
+        return None
+
+
+def _current_branch(mapping: dict, current_node: Optional[str]) -> list[str]:
+    """Node ids of the branch the chat shows, root first.
+
+    The export names the visible leaf in ``current_node``; walking its parents
+    gives the branch the user actually continued. Older exports without it
+    fall back to following the last child from the root.
+    """
+    if current_node in mapping:
+        path, seen = [], set()
+        node_id = current_node
+        while node_id and node_id not in seen:
+            seen.add(node_id)
+            path.append(node_id)
+            node_id = mapping.get(node_id, {}).get("parent")
+        return path[::-1]
+
+    root_id = next((nid for nid, node in mapping.items() if node.get("parent") is None), None)
+    path, seen = [], set()
+    node_id = root_id
+    while node_id and node_id not in seen:
+        seen.add(node_id)
+        path.append(node_id)
+        children = mapping.get(node_id, {}).get("children", [])
+        node_id = children[-1] if children else None
+    return path
 
 
 def extract_messages(conversation: dict) -> list[dict]:
     """Extract messages from ChatGPT conversation format.
-    
-    ChatGPT uses a tree structure (mapping) rather than a flat list.
-    We follow the chain from root to leaves.
+
+    ChatGPT uses a tree structure (mapping) rather than a flat list; edited
+    prompts and regenerated answers are branches. We take the visible one.
     """
     mapping = conversation.get("mapping", {})
     if not mapping:
         return []
-    
-    # Find root node (no parent)
-    root_id = None
-    for node_id, node in mapping.items():
-        if node.get("parent") is None:
-            root_id = node_id
-            break
-    
-    if not root_id:
-        return []
-    
-    # Walk the tree following the last child at each level
+
+    path = _current_branch(mapping, conversation.get("current_node"))
+
     messages = []
-    current_id = root_id
-    visited = set()
-    
-    while current_id and current_id not in visited:
-        visited.add(current_id)
-        node = mapping.get(current_id, {})
+    for node_id in path:
+        node = mapping.get(node_id, {})
         msg = node.get("message")
-        
-        if msg and msg.get("content", {}).get("parts"):
-            role = msg.get("author", {}).get("role", "unknown")
-            # Skip system messages
-            if role in ("user", "assistant"):
-                parts = msg["content"]["parts"]
-                text_parts = [p for p in parts if isinstance(p, str) and p.strip()]
-                if text_parts:
-                    messages.append({
-                        "role": role,
-                        "text": "\n\n".join(text_parts),
-                        "timestamp": msg.get("create_time"),
-                    })
-        
-        # Follow children (take the last one — ChatGPT's "current" branch)
-        children = node.get("children", [])
-        current_id = children[-1] if children else None
-    
+        if not (msg and msg.get("content", {}).get("parts")):
+            continue
+        role = msg.get("author", {}).get("role", "unknown")
+        # Skip system and tool messages
+        if role not in ("user", "assistant"):
+            continue
+        parts = msg["content"]["parts"]
+        text_parts = [p for p in parts if isinstance(p, str) and p.strip()]
+        if text_parts:
+            messages.append({
+                "id": msg.get("id") or node_id,
+                "role": role,
+                "text": "\n\n".join(text_parts),
+                "timestamp": msg.get("create_time"),
+            })
+
     return messages
 
 
-def conversation_to_markdown(conversation: dict) -> tuple[str, str, str]:
-    """Convert a single conversation to Markdown with frontmatter.
-    
-    Returns:
-        (filename, markdown_content, month_folder)
+def _other_branch_texts(conversation: dict, shown: set[str]) -> list[str]:
+    """Texts of the messages on branches the chat does not show.
+
+    Importers before chat_sync followed the last child, not ``current_node``;
+    their notes may hold a branch that is no longer the visible one.
     """
-    title = conversation.get("title", "Untitled")
+    texts = []
+    for node_id, node in conversation.get("mapping", {}).items():
+        msg = node.get("message") or {}
+        if (msg.get("id") or node_id) in shown:
+            continue
+        if msg.get("author", {}).get("role") not in ("user", "assistant"):
+            continue
+        parts = msg.get("content", {}).get("parts") or []
+        text = "\n\n".join(p for p in parts if isinstance(p, str) and p.strip())
+        if text:
+            texts.append(text)
+    return texts
+
+
+def to_conversation(conversation: dict) -> ChatConversation:
+    """Convert one ChatGPT export entry into a :class:`ChatConversation`."""
     create_time = conversation.get("create_time")
     update_time = conversation.get("update_time")
-    
-    date_str = format_timestamp(create_time) or "unknown"
-    month_folder = get_month_folder(create_time)
-    filename = make_filename(date_str, "chatgpt", title)
-    
-    # Extract messages
-    messages = extract_messages(conversation)
-    
-    if not messages:
-        return filename, "", month_folder
-    
-    # Detect dominant model (if available)
-    model_slug = conversation.get("default_model_slug", "")
-    
-    # Build frontmatter
-    tags = ["chat-protokoll", "KI-generiert"]
-    
-    # Try to detect topic-related tags from title
-    # (kept minimal — user can add tags later in Obsidian)
-    
-    safe_title = title.replace('"', "'")  # Avoid YAML breakage from nested quotes
-    
-    frontmatter_lines = [
-        "---",
-        f'title: "{safe_title}"',
-        "authors: [ChatGPT]",
-        f"tags: [{', '.join(tags)}]",
-        "type: chat",
-        "source_llm: chatgpt",
-        "source_platform: chatgpt.com",
+    messages = [
+        ChatMessage(m["id"], m["role"], m["text"], to_datetime(m["timestamp"]))
+        for m in extract_messages(conversation)
     ]
-    if model_slug:
-        frontmatter_lines.append(f"model: {model_slug}")
-    frontmatter_lines.append(f"created: {date_str}")
-    if update_time:
-        frontmatter_lines.append(f"modified: {format_timestamp(update_time)}")
-    frontmatter_lines.append(f"message_count: {len(messages)}")
-    frontmatter_lines.append("---")
-
-    markdown = render_markdown(frontmatter_lines, title, messages, "**ChatGPT:**")
-
-    return filename, markdown, month_folder
+    return ChatConversation(
+        provider="chatgpt",
+        chat_id=(conversation.get("conversation_id") or conversation.get("id")
+                 or content_id(create_time, conversation.get("title"))),
+        title=conversation.get("title") or "Untitled",
+        messages=messages,
+        assistant_label="**ChatGPT:**",
+        authors="ChatGPT",
+        source_platform="chatgpt.com",
+        created=to_datetime(create_time),
+        updated=to_datetime(update_time),
+        model=conversation.get("default_model_slug") or "",
+        match_texts=_other_branch_texts(conversation, {m.id for m in messages}),
+    )
 
 
 def _describe(conv: dict) -> tuple[str, int, str]:
@@ -193,6 +206,9 @@ def main():
         help="Skip conversations with fewer messages (default: 2)"
     )
     
+    add_sync_arguments(parser)
+
+
     args = parser.parse_args()
     
     # Validate inputs
@@ -234,46 +250,8 @@ def main():
         print("No conversations selected.")
         return
     
-    print(f"\nImporting {len(conversations)} conversations...")
-    
-    # Convert and write
-    output_base = args.vault_path / args.output_folder
-    written = 0
-    skipped = 0
-    
-    for conv in conversations:
-        filename, markdown, month_folder = conversation_to_markdown(conv)
-        
-        if not markdown.strip():
-            skipped += 1
-            continue
-        
-        output_dir = output_base / month_folder
-        output_path = output_dir / filename
-        
-        # Handle duplicates
-        if output_path.exists():
-            stem = output_path.stem
-            for i in range(2, 100):
-                alt_path = output_dir / f"{stem}-{i}.md"
-                if not alt_path.exists():
-                    output_path = alt_path
-                    break
-        
-        if args.dry_run:
-            title = conv.get("title", "Untitled")[:50]
-            msgs = len(extract_messages(conv))
-            print(f"  [DRY RUN] {output_path.relative_to(args.vault_path)}  ({msgs} msgs)  {title}")
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(markdown, encoding="utf-8")
-            written += 1
-    
-    if args.dry_run:
-        print(f"\nDry run complete. Would write {len(conversations) - skipped} files.")
-    else:
-        print(f"\nDone. Written: {written}, Skipped (empty): {skipped}")
-        print(f"Output: {output_base}")
+    print(f"\nSyncing {len(conversations)} conversations...")
+    run_sync([to_conversation(c) for c in conversations], args)
 
 
 if __name__ == "__main__":

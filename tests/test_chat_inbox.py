@@ -222,6 +222,37 @@ def test_scan_imports_export_once_and_lists_it(tmp_path):
     assert layout.review.read_text(encoding="utf-8") == review
 
 
+def test_filed_export_note_is_continued_by_a_later_export(tmp_path):
+    import import_claude_to_vault
+    from chat_sync import Syncer
+
+    layout = _layout(tmp_path)
+    layout.inbox.mkdir(parents=True)
+    (layout.inbox / "conversations.json").write_text(json.dumps(CLAUDE_EXPORT), encoding="utf-8")
+    cmd_scan(layout, "de", _runner, no_triage=False, log=_quiet)
+    review = layout.review.read_text(encoding="utf-8").replace("- [ ] **Review", "- [x] **Review")
+    layout.review.write_text(review, encoding="utf-8")
+    assert cmd_apply(layout, "de", log=_quiet) == 1
+    filed = layout.chats / "2026-06" / "2026-06-02_claude_germanisches-koenigtum.md"
+    before = read_note(filed).fm
+    assert before["chat_id"] == "u-1" and "BBB" in before["tags"]
+
+    continued = json.loads(json.dumps(CLAUDE_EXPORT[0]))
+    continued["chat_messages"] += [
+        {"sender": "human", "content": [{"type": "text", "text": "Nachfrage"}],
+         "created_at": "2026-06-04T10:00:00Z"},
+        {"sender": "assistant", "content": [{"type": "text", "text": "Ergänzung"}],
+         "created_at": "2026-06-04T10:01:00Z"},
+    ]
+    result = Syncer(tmp_path).sync([import_claude_to_vault.to_conversation(continued)])
+    assert [(a.kind, a.path) for a in result.actions] == [("updated", filed)]
+    note = read_note(filed)
+    assert "Ergänzung" in note.body
+    for key in ("title", "description", "tags", "source"):
+        assert note.fm[key] == before[key]
+    assert list(layout.chats.rglob("*.md")) == [filed]
+
+
 def test_failed_triage_is_retried(tmp_path):
     layout = _layout(tmp_path)
     layout.inbox.mkdir(parents=True)

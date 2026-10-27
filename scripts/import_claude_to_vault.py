@@ -13,6 +13,9 @@ Usage:
     python import_claude_to_vault.py conversations.json D:/MyVault --limit 10
     python import_claude_to_vault.py conversations.json D:/MyVault --interactive
     python import_claude_to_vault.py conversations.json D:/MyVault --dry-run
+
+Re-running on a newer export is safe: chat_sync recognizes notes it wrote
+before (and web clips of the same chat) and only adds what is new.
 """
 
 import json
@@ -22,13 +25,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from vault_import import (
-    format_date,
-    get_month_folder,
-    make_filename,
-    render_markdown,
-    select_conversations,
+from chat_sync import (
+    ChatConversation,
+    ChatMessage,
+    add_sync_arguments,
+    content_id,
+    run_sync,
 )
+from vault_import import format_date, select_conversations
 
 
 def parse_iso_date(iso_str: Optional[str]) -> Optional[datetime]:
@@ -90,6 +94,7 @@ def extract_messages(conversation: dict) -> list[dict]:
         created = parse_iso_date(msg.get("created_at"))
 
         messages.append({
+            "id": msg.get("uuid") or content_id(role, msg.get("created_at"), text_parts[0]),
             "role": "user" if role == "human" else "assistant",
             "text": "\n\n".join(text_parts),
             "timestamp": created,
@@ -98,49 +103,26 @@ def extract_messages(conversation: dict) -> list[dict]:
     return messages
 
 
-def conversation_to_markdown(conversation: dict) -> tuple[str, str, str]:
-    """Convert a single conversation to Markdown with frontmatter.
-
-    Returns:
-        (filename, markdown_content, month_folder)
-    """
-    title = conversation.get("name", "").strip() or "Untitled"
-    summary = conversation.get("summary", "").strip()
-
-    created = parse_iso_date(conversation.get("created_at"))
-    updated = parse_iso_date(conversation.get("updated_at"))
-
-    date_str = format_date(created)
-    month_folder = get_month_folder(created)
-    filename = make_filename(date_str, "claude", title)
-
-    messages = extract_messages(conversation)
-    if not messages:
-        return filename, "", month_folder
-
-    # Build frontmatter
-    tags = ["chat-protokoll", "KI-generiert"]
-    safe_title = title.replace('"', "'")
-
-    frontmatter_lines = [
-        "---",
-        f'title: "{safe_title}"',
-        "authors: [Claude]",
-        f"tags: [{', '.join(tags)}]",
-        "type: chat",
-        "source_llm: claude",
-        "source_platform: claude.ai",
-        f"created: {date_str}",
+def to_conversation(conversation: dict) -> ChatConversation:
+    """Convert one Claude export entry into a :class:`ChatConversation`."""
+    messages = [
+        ChatMessage(m["id"], m["role"], m["text"], m["timestamp"])
+        for m in extract_messages(conversation)
     ]
-    if updated:
-        frontmatter_lines.append(f"modified: {format_date(updated)}")
-    frontmatter_lines.append(f"message_count: {len(messages)}")
-    frontmatter_lines.append("---")
-
-    markdown = render_markdown(
-        frontmatter_lines, title, messages, "**Claude:**", summary=summary
+    created = parse_iso_date(conversation.get("created_at"))
+    return ChatConversation(
+        provider="claude",
+        chat_id=conversation.get("uuid") or content_id(conversation.get("created_at"),
+                                                       conversation.get("name")),
+        title=conversation.get("name", "").strip() or "Untitled",
+        messages=messages,
+        assistant_label="**Claude:**",
+        authors="Claude",
+        source_platform="claude.ai",
+        created=created,
+        updated=parse_iso_date(conversation.get("updated_at")),
+        summary=conversation.get("summary", "").strip(),
     )
-    return filename, markdown, month_folder
 
 
 def _describe(conv: dict) -> tuple[str, int, str]:
@@ -190,6 +172,7 @@ def main():
         default=2,
         help="Skip conversations with fewer messages (default: 2)"
     )
+    add_sync_arguments(parser)
 
     args = parser.parse_args()
 
@@ -231,46 +214,8 @@ def main():
         print("No conversations selected.")
         return
 
-    print(f"\nImporting {len(conversations)} conversations...")
-
-    # Convert and write
-    output_base = args.vault_path / args.output_folder
-    written = 0
-    skipped = 0
-
-    for conv in conversations:
-        filename, markdown, month_folder = conversation_to_markdown(conv)
-
-        if not markdown.strip():
-            skipped += 1
-            continue
-
-        output_dir = output_base / month_folder
-        output_path = output_dir / filename
-
-        # Handle duplicates
-        if output_path.exists():
-            stem = output_path.stem
-            for i in range(2, 100):
-                alt_path = output_dir / f"{stem}-{i}.md"
-                if not alt_path.exists():
-                    output_path = alt_path
-                    break
-
-        if args.dry_run:
-            title = (conv.get("name") or "Untitled")[:50]
-            msgs = len(extract_messages(conv))
-            print(f"  [DRY RUN] {output_path.relative_to(args.vault_path)}  ({msgs} msgs)  {title}")
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(markdown, encoding="utf-8")
-            written += 1
-
-    if args.dry_run:
-        print(f"\nDry run complete. Would write {len(conversations) - skipped} files.")
-    else:
-        print(f"\nDone. Written: {written}, Skipped (empty): {skipped}")
-        print(f"Output: {output_base}")
+    print(f"\nSyncing {len(conversations)} conversations...")
+    run_sync([to_conversation(c) for c in conversations], args)
 
 
 if __name__ == "__main__":

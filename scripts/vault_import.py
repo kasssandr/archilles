@@ -10,7 +10,9 @@ that were copy-pasted across all four:
 * :func:`make_filename`         — ``<date>_<platform>_<slug>.md``
 * :func:`parse_selection`       — ``"0,3,5-10"`` / ``"all"`` → list of indices
 * :func:`select_conversations`  — interactive preview table + selection prompt
-* :func:`render_markdown`       — frontmatter + body skeleton
+
+Rendering and writing notes is :mod:`chat_sync`'s job, which also keeps a
+re-import from duplicating notes.
 
 These scripts are run directly (``python scripts/import_X_to_vault.py``), so the
 sibling import ``from vault_import import ...`` resolves against ``scripts/``.
@@ -98,26 +100,3 @@ def select_conversations(
     selection = input("> ").strip()
     indices = parse_selection(selection, len(conversations))
     return [conversations[i] for i in indices]
-
-
-def render_markdown(
-    frontmatter_lines: list[str],
-    title: str,
-    messages: list[dict],
-    assistant_label: str,
-    *,
-    summary: str = "",
-) -> str:
-    """Assemble the shared note: frontmatter block + ``# title`` + message log.
-
-    ``messages`` are dicts with ``role`` (``"user"``/``"assistant"``) and
-    ``text``. ``assistant_label`` is e.g. ``"**Claude:**"``. An optional
-    ``summary`` is rendered as a leading blockquote.
-    """
-    body = [f"# {title}", ""]
-    if summary:
-        body += [f"> {summary[:500]}", "", "---", ""]
-    for msg in messages:
-        label = "**User:**" if msg["role"] == "user" else assistant_label
-        body += [label, "", msg["text"], "", "---", ""]
-    return "\n".join(frontmatter_lines) + "\n\n" + "\n".join(body)

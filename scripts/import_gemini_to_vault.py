@@ -17,6 +17,10 @@ Usage:
     python import_gemini_to_vault.py activity.html D:/MyVault --dry-run
     python import_gemini_to_vault.py activity.html D:/MyVault --interactive
     python import_gemini_to_vault.py activity.html D:/MyVault --limit 10
+
+Re-running on a newer Takeout is safe: chat_sync recognizes notes it wrote
+before (and web clips of the same chat, by fingerprint) and only adds what
+is new.
 """
 
 import re
@@ -28,13 +32,8 @@ from pathlib import Path
 from html.parser import HTMLParser
 from typing import Optional
 
-from vault_import import (
-    format_date,
-    get_month_folder,
-    make_filename,
-    render_markdown,
-    select_conversations,
-)
+from chat_sync import ChatConversation, ChatMessage, add_sync_arguments, content_id, run_sync
+from vault_import import format_date, select_conversations
 
 
 class HTMLToText(HTMLParser):
@@ -236,47 +235,43 @@ def _finalize(entries: list[dict]) -> dict:
 
     messages = []
     for e in entries:
-        messages.append({"role": "user", "text": e["prompt"]})
+        messages.append({"role": "user", "text": e["prompt"], "timestamp": e["timestamp"]})
         if e["response"]:
-            messages.append({"role": "assistant", "text": e["response"]})
+            messages.append({"role": "assistant", "text": e["response"], "timestamp": e["timestamp"]})
 
     return {
         "title": title,
         "messages": messages,
         "timestamp": entries[0]["timestamp"],
+        "last_timestamp": entries[-1]["timestamp"],
         "message_count": len(messages),
     }
 
 
-def conversation_to_markdown(conv: dict) -> tuple[str, str, str]:
-    title = conv["title"]
+def to_conversation(conv: dict) -> ChatConversation:
+    """Convert one grouped Gemini conversation into a :class:`ChatConversation`.
+
+    Takeout carries no conversation ids, so the id is derived from the first
+    prompt and its time: a conversation continued later keeps its start, and
+    with it its id.
+    """
     ts = conv["timestamp"]
-    messages = conv["messages"]
-
-    if not messages:
-        return "", "", ""
-
-    date_str = format_date(ts)
-    month_folder = get_month_folder(ts)
-    filename = make_filename(date_str, "gemini", title)
-
-    safe_title = title.replace('"', "'")  # Avoid YAML breakage from nested quotes
-
-    frontmatter_lines = [
-        "---",
-        f'title: "{safe_title}"',
-        "authors: [Gemini]",
-        "tags: [chat-protokoll, KI-generiert]",
-        "type: chat",
-        "source_llm: gemini",
-        "source_platform: gemini.google.com",
-        f"created: {date_str}",
-        f"message_count: {conv['message_count']}",
-        "---",
+    messages = [
+        ChatMessage(content_id(m["role"], m.get("timestamp"), m["text"][:200]), m["role"], m["text"])
+        for m in conv["messages"]
     ]
-
-    markdown = render_markdown(frontmatter_lines, title, messages, "**Gemini:**")
-    return filename, markdown, month_folder
+    first_prompt = conv["messages"][0]["text"] if conv["messages"] else ""
+    return ChatConversation(
+        provider="gemini",
+        chat_id=content_id(ts.isoformat() if ts else None, first_prompt[:200]),
+        title=conv["title"],
+        messages=messages,
+        assistant_label="**Gemini:**",
+        authors="Gemini",
+        source_platform="gemini.google.com",
+        created=ts,
+        updated=conv.get("last_timestamp"),
+    )
 
 
 def _describe(conv: dict) -> tuple[str, int, str]:
@@ -293,6 +288,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--min-messages", type=int, default=2)
     ap.add_argument("--gap-minutes", type=int, default=30, help="Minutes between entries to split conversations (default: 30)")
+
+    add_sync_arguments(ap)
+
 
     args = ap.parse_args()
 
@@ -325,37 +323,8 @@ def main():
     if not convs:
         print("No conversations selected."); return
 
-    print(f"\nImporting {len(convs)} conversations...")
-    out_base = args.vault_path / args.output_folder
-    written = skipped = 0
-
-    for conv in convs:
-        fn, md, mf = conversation_to_markdown(conv)
-        if not md.strip():
-            skipped += 1; continue
-
-        out_dir = out_base / mf
-        out_path = out_dir / fn
-
-        if out_path.exists():
-            stem = out_path.stem
-            for i in range(2, 100):
-                alt = out_dir / f"{stem}-{i}.md"
-                if not alt.exists():
-                    out_path = alt; break
-
-        if args.dry_run:
-            print(f"  [DRY RUN] {out_path.relative_to(args.vault_path)}  ({conv['message_count']} msgs)  {conv['title'][:50]}")
-        else:
-            out_dir.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(md, encoding="utf-8")
-            written += 1
-
-    if args.dry_run:
-        print(f"\nDry run complete. Would write {len(convs) - skipped} files.")
-    else:
-        print(f"\nDone. Written: {written}, Skipped: {skipped}")
-        print(f"Output: {out_base}")
+    print(f"\nSyncing {len(convs)} conversations...")
+    run_sync([to_conversation(c) for c in convs], args)
 
 
 if __name__ == "__main__":

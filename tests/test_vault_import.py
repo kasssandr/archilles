@@ -11,7 +11,6 @@ from scripts.vault_import import (
     make_filename,
     parse_selection,
     select_conversations,
-    render_markdown,
 )
 
 
@@ -89,30 +88,3 @@ def test_select_conversations_all(monkeypatch):
              {"date": "2020-01-02", "n": 2, "title": "B"}]
     monkeypatch.setattr("builtins.input", lambda _="": "all")
     assert select_conversations(convs, _describe) == convs
-
-
-# ── render_markdown ─────────────────────────────────────────────────────
-
-def test_render_markdown_basic():
-    fm = ["---", "title: \"X\"", "source_llm: claude", "---"]
-    messages = [
-        {"role": "user", "text": "Hi"},
-        {"role": "assistant", "text": "Hello"},
-    ]
-    md = render_markdown(fm, "X", messages, "**Claude:**")
-    assert md.startswith("---\ntitle: \"X\"\nsource_llm: claude\n---\n\n# X\n")
-    assert "**User:**\n\nHi\n" in md
-    assert "**Claude:**\n\nHello\n" in md
-    assert md.count("---") >= 3  # frontmatter delimiters + message separators
-
-
-def test_render_markdown_summary_blockquote():
-    md = render_markdown(["---", "---"], "T", [], "**Claude:**", summary="A summary")
-    assert "> A summary" in md
-
-
-def test_render_markdown_summary_truncated():
-    long = "x" * 600
-    md = render_markdown(["---", "---"], "T", [], "**Claude:**", summary=long)
-    assert "> " + "x" * 500 in md
-    assert "x" * 501 not in md
