@@ -1,5 +1,6 @@
 """Plain text extractor."""
 
+import re
 import zipfile
 from pathlib import Path
 import chardet
@@ -7,6 +8,10 @@ import chardet
 from .base import BaseExtractor
 from .models import ExtractedText, ChunkMetadata
 from .exceptions import ExtractionError
+
+# Markers chat_sync writes around a generated chat (scripts/chat_sync.py).
+# They structure the note for the sync, not for search.
+_CHAT_SYNC_MARKER = re.compile(r'^[ \t]*<!-- archilles:chat:[a-z]+(?: [^>]*)? -->[ \t]*\n?', re.M)
 
 
 class TXTExtractor(BaseExtractor):
@@ -91,6 +96,7 @@ class TXTExtractor(BaseExtractor):
                     end = text.find('\n---', 3)
                     if end != -1:
                         text = text[end + 4:].lstrip('\n')
+                text = _CHAT_SYNC_MARKER.sub('', text)
 
             # Create base metadata
             base_metadata = ChunkMetadata(

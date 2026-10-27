@@ -540,6 +540,26 @@ Der Inspector ist kein Produktions-Feature, sondern ein Entwicklungs- und Debugg
 
 ---
 
+### ADR-039: KI-Chats im Vault — die Notiz gehört dem Nutzer, der Import hängt nur an (Oktober 2026)
+
+**Kontext:** Chats kommen auf zwei Wegen ins Lab: als Web-Clip (Obsidian Web Clipper, sofort, aber bei Chat-Oberflächen oft nur ein Bruchteil des Verlaufs) und als Export der Anbieter (vollständig, aber nur periodisch). Die vier Importer schrieben bei jedem Lauf neue Dateien und hängten bei Namensgleichheit `-2`, `-3` an; ein zweiter Export erzeugte zuverlässig Dubletten. Zugleich wird eine importierte Notiz in Obsidian weiterbearbeitet — inhaltlich ergänzt, umgebaut, gekürzt —, und der Chat selbst geht beim Anbieter weiter.
+
+**Entscheidung (Nutzer, 27. Oktober 2026):**
+
+- **Identität über die ID, nicht über den Text.** Ein Chat ist `(Anbieter, chat_id)`. Der Import schreibt beides in die Frontmatter; ein Clip trägt die ID in seiner Quell-URL. Clip und Export desselben Chats treffen sich damit auf der ID, gleich wie stark eine Seite bearbeitet wurde. Gemini liefert keine IDs; dort wird sie aus erstem Prompt und Zeitpunkt abgeleitet.
+- **Die Notiz gehört dem Nutzer.** Der generierte Verlauf steht zwischen `<!-- archilles:chat:start -->` und `<!-- archilles:chat:end -->`; die Frontmatter hält den Hash dieses Bereichs und die ID der letzten geschriebenen Nachricht (`chat_last_message`). Ist der Bereich unberührt, wird er neu erzeugt. Ist er bearbeitet — Ergänzungen, Umbau, Kürzungen, beliebig gemischt —, wird nichts darin angefasst; neue Nachrichten werden vor der Endmarke angehängt. Weil die Anschlussstelle aus der ID kommt und nicht aus dem Text, bleiben gelöschte Passagen gelöscht.
+- **Inhaltliche und kosmetische Bearbeitung werden gleich behandelt.** Beides bleibt erhalten; der Unterschied wird nur berichtet („eigene Absätze“ gegenüber „nur Form“), nicht entschieden. Eine Klassifikation, von der abhinge, ob etwas überschrieben wird, wäre eine Heuristik an der falschen Stelle.
+- **Unscharfer Abgleich nur ohne Synchronisationsstand.** Für Altimporte und Clips bestimmen Wort-Fünfgramme, wie viel vom Chat die Notiz schon enthält: Ein Präfix wird übernommen und fortgesetzt; ein fragmentarischer Clip wird aus dem Export neu aufgebaut, wobei Absätze des Clips, die der Export nicht enthält, als „Eigene Ergänzungen“ erhalten bleiben. Eine Notiz ohne ID wird nur zugeordnet, wenn genau ein Chat sie deutlich abdeckt.
+- **Nichts wird gelöscht.** Jede veränderte Notiz wird vorher nach `.archilles/chat-sync-backup/` kopiert. Dubletten, Konflikte (Verlauf beim Anbieter umgeschrieben und Notiz bearbeitet) und mehrdeutige Zuordnungen werden berichtet, nicht aufgelöst.
+
+**Konsequenzen:** Der Export ist das vollständige Archiv, der Clip der schnelle Weg für einen einzelnen Chat; beide laufen auf dieselbe Notiz zu. Die Frontmatter-Schlüssel `modified`, `message_count` und `chat_*` gehören dem Import, alle anderen dem Nutzer und werden zeilengenau erhalten. Die Markierungen werden beim Indexieren entfernt (`TXTExtractor`). Für Altimporte ohne ID gilt eine Grenze: Hat der Nutzer dort die letzten Nachrichten gelöscht, kann der Fingerabdruck das von einem kürzeren Stand nicht unterscheiden und hängt sie wieder an.
+
+**Verworfen:** Den Export stets gewinnen zu lassen (zerstört Bearbeitungen). Abgleich allein über Textähnlichkeit (ein fortgesetzter Chat und ein gekürzter sehen sich zu ähnlich, und die Frontmatter weicht ohnehin ab). Automatisches Zusammenführen von Dubletten.
+
+**Implementierung:** `scripts/chat_sync.py`; die vier `scripts/import_<anbieter>_to_vault.py` übergeben ihm nur noch geparste Gespräche. `python scripts/chat_sync.py <vault>` listet Notizen, die sich eine Chat-ID teilen. Tests: `tests/test_chat_sync.py`.
+
+---
+
 ### ADR-023: Structure-Aware PDF Chunking (März 2026)
 
 **Kontext:** Eine Analyse mit dem Chunk Inspector (19. März 2026, `BRIEFING_STRUCTURE_AWARE_CHUNKING.md`) zeigte, dass PDF-Chunks 0% chapter/section_title-Abdeckung hatten, während EPUB-Chunks 96–100% erreichten. Der PDF-TOC wurde zwar extrahiert, aber nicht auf einzelne Chunks gemappt.

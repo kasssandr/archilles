@@ -10,6 +10,9 @@ Usage:
     python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --limit 10
     python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --interactive
     python import_grok_to_vault.py prod-grok-backend.json D:/MyVault --dry-run
+
+Re-running on a newer export is safe: chat_sync recognizes notes it wrote
+before (and web clips of the same chat) and only adds what is new.
 """
 
 import json
@@ -19,7 +22,14 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-from vault_import import make_filename, render_markdown, select_conversations
+from chat_sync import (
+    ChatConversation,
+    ChatMessage,
+    add_sync_arguments,
+    content_id,
+    run_sync,
+)
+from vault_import import select_conversations
 
 
 def parse_grok_timestamp(ts) -> datetime:
@@ -95,6 +105,8 @@ def extract_messages(conv_data: dict) -> list[dict]:
         model = resp.get("model", "")
         
         messages.append({
+            "id": (_grok_id(resp.get("_id")) or _grok_id(resp.get("id"))
+                   or content_id(role, create_time, text[:200])),
             "role": role,
             "text": text.strip(),
             "timestamp": create_time,
@@ -104,68 +116,41 @@ def extract_messages(conv_data: dict) -> list[dict]:
     return messages
 
 
-def conversation_to_markdown(conv_data: dict) -> tuple[str, str, str]:
-    """Convert a single Grok conversation to Markdown with frontmatter.
-    
-    Returns:
-        (filename, markdown_content, month_folder)
-    """
+def _grok_id(value) -> str:
+    """Grok ids come as plain strings or MongoDB-style ``{"$oid": ...}``."""
+    if isinstance(value, dict):
+        value = value.get("$oid")
+    return str(value) if value else ""
+
+
+def to_conversation(conv_data: dict) -> ChatConversation:
+    """Convert one Grok export entry into a :class:`ChatConversation`."""
     conv_meta = conv_data.get("conversation", {})
-    title = conv_meta.get("title", "Untitled Grok Chat")
-    create_time_str = conv_meta.get("create_time", "")
-    modify_time_str = conv_meta.get("modify_time", "")
-    
-    # Parse creation time
-    if create_time_str:
-        dt = parse_grok_timestamp(create_time_str)
-    else:
-        dt = datetime.now(timezone.utc)
-    
-    date_str = dt.strftime("%Y-%m-%d")
-    month_folder = dt.strftime("%Y-%m")
-    
-    # Extract messages
-    messages = extract_messages(conv_data)
-    
-    if not messages:
-        return "", "", ""
-    
-    # Detect model from first assistant message
-    model = ""
-    for msg in messages:
-        if msg["role"] == "assistant" and msg.get("model"):
-            model = msg["model"]
-            break
-    
-    filename = make_filename(date_str, "grok", title)
-    
-    # Build frontmatter
-    tags = ["chat-protokoll", "KI-generiert"]
-    
-    # Escape quotes in title for YAML
-    safe_title = title.replace('"', "'")  # Avoid YAML breakage from nested quotes
-    
-    frontmatter_lines = [
-        "---",
-        f'title: "{safe_title}"',
-        "authors: [Grok]",
-        f"tags: [{', '.join(tags)}]",
-        "type: chat",
-        "source_llm: grok",
-        "source_platform: grok.com",
+    title = conv_meta.get("title") or "Untitled Grok Chat"
+    create_time = conv_meta.get("create_time")
+    modify_time = conv_meta.get("modify_time")
+    created = parse_grok_timestamp(create_time) if create_time else None
+
+    raw = extract_messages(conv_data)
+    model = next((m["model"] for m in raw if m["role"] == "assistant" and m.get("model")), "")
+    messages = [
+        ChatMessage(m["id"], m["role"], m["text"],
+                    parse_grok_timestamp(m["timestamp"]) if m["timestamp"] else None)
+        for m in raw
     ]
-    if model:
-        frontmatter_lines.append(f"model: {model}")
-    frontmatter_lines.append(f"created: {date_str}")
-    if modify_time_str:
-        modify_dt = parse_grok_timestamp(modify_time_str)
-        frontmatter_lines.append(f"modified: {modify_dt.strftime('%Y-%m-%d')}")
-    frontmatter_lines.append(f"message_count: {len(messages)}")
-    frontmatter_lines.append("---")
-
-    markdown = render_markdown(frontmatter_lines, title, messages, "**Grok:**")
-
-    return filename, markdown, month_folder
+    return ChatConversation(
+        provider="grok",
+        chat_id=(_grok_id(conv_meta.get("id")) or _grok_id(conv_meta.get("_id"))
+                 or content_id(create_time, title)),
+        title=title,
+        messages=messages,
+        assistant_label="**Grok:**",
+        authors="Grok",
+        source_platform="grok.com",
+        created=created,
+        updated=parse_grok_timestamp(modify_time) if modify_time else None,
+        model=model,
+    )
 
 
 def _describe(conv_data: dict) -> tuple[str, int, str]:
@@ -218,6 +203,9 @@ def main():
         help="Skip conversations with fewer messages (default: 2)"
     )
     
+    add_sync_arguments(parser)
+
+
     args = parser.parse_args()
     
     if not args.input_file.exists():
@@ -262,47 +250,8 @@ def main():
         print("No conversations selected.")
         return
     
-    print(f"\nImporting {len(conversations)} conversations...")
-    
-    # Convert and write
-    output_base = args.vault_path / args.output_folder
-    written = 0
-    skipped = 0
-    
-    for conv_data in conversations:
-        filename, markdown, month_folder = conversation_to_markdown(conv_data)
-        
-        if not markdown.strip():
-            skipped += 1
-            continue
-        
-        output_dir = output_base / month_folder
-        output_path = output_dir / filename
-        
-        # Handle duplicates
-        if output_path.exists():
-            stem = output_path.stem
-            for i in range(2, 100):
-                alt_path = output_dir / f"{stem}-{i}.md"
-                if not alt_path.exists():
-                    output_path = alt_path
-                    break
-        
-        if args.dry_run:
-            conv_meta = conv_data.get("conversation", {})
-            title = conv_meta.get("title", "Untitled")[:50]
-            msgs = len(extract_messages(conv_data))
-            print(f"  [DRY RUN] {output_path.relative_to(args.vault_path)}  ({msgs} msgs)  {title}")
-        else:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(markdown, encoding="utf-8")
-            written += 1
-    
-    if args.dry_run:
-        print(f"\nDry run complete. Would write {len(conversations) - skipped} files.")
-    else:
-        print(f"\nDone. Written: {written}, Skipped (empty): {skipped}")
-        print(f"Output: {output_base}")
+    print(f"\nSyncing {len(conversations)} conversations...")
+    run_sync([to_conversation(c) for c in conversations], args)
 
 
 if __name__ == "__main__":
