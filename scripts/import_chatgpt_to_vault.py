@@ -114,6 +114,26 @@ def extract_messages(conversation: dict) -> list[dict]:
     return messages
 
 
+def _other_branch_texts(conversation: dict, shown: set[str]) -> list[str]:
+    """Texts of the messages on branches the chat does not show.
+
+    Importers before chat_sync followed the last child, not ``current_node``;
+    their notes may hold a branch that is no longer the visible one.
+    """
+    texts = []
+    for node_id, node in conversation.get("mapping", {}).items():
+        msg = node.get("message") or {}
+        if (msg.get("id") or node_id) in shown:
+            continue
+        if msg.get("author", {}).get("role") not in ("user", "assistant"):
+            continue
+        parts = msg.get("content", {}).get("parts") or []
+        text = "\n\n".join(p for p in parts if isinstance(p, str) and p.strip())
+        if text:
+            texts.append(text)
+    return texts
+
+
 def to_conversation(conversation: dict) -> ChatConversation:
     """Convert one ChatGPT export entry into a :class:`ChatConversation`."""
     create_time = conversation.get("create_time")
@@ -134,6 +154,7 @@ def to_conversation(conversation: dict) -> ChatConversation:
         created=to_datetime(create_time),
         updated=to_datetime(update_time),
         model=conversation.get("default_model_slug") or "",
+        match_texts=_other_branch_texts(conversation, {m.id for m in messages}),
     )
 
 

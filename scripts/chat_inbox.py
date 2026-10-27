@@ -27,7 +27,9 @@ Schema (key order as written)::
 
 The inbox, the rejected folder and the review note must be excluded from
 indexing (``exclude_patterns`` in the vault's ``.archilles/config.json``).
-Known gap: a conversation that continues after it was filed is not updated.
+A conversation that continues after it was filed is not updated here: the
+inbox skips chats it has seen. Running the platform's vault importer on a
+newer export continues the filed note (``chat_sync``, ADR-039).
 
 Usage:
     python scripts/chat_inbox.py run D:\\Archilles-Lab --lang de
@@ -60,6 +62,7 @@ for _p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+import chat_sync  # noqa: E402
 import import_chatgpt_to_vault  # noqa: E402
 import import_claude_to_vault  # noqa: E402
 from src.archilles.i18n import t  # noqa: E402
@@ -545,21 +548,24 @@ def import_exports(vault: Path, inbox: Path, ledger: dict, index: VaultIndex,
             log(f"  ! {export.name}: not a Claude or ChatGPT export, left in place")
             continue
         module = import_claude_to_vault if platform == "claude" else import_chatgpt_to_vault
+        today = date.today().isoformat()
         new = known = short = 0
         for conv in conversations:
-            if len(module.extract_messages(conv)) < min_messages:
+            chat = module.to_conversation(conv)
+            if len(chat.messages) < min_messages:
                 short += 1
                 continue
             url = _conversation_url(platform, conv)
-            filename, markdown, _month = module.conversation_to_markdown(conv)
-            note_fm = read_note_text(markdown).fm
-            created = _iso_date(note_fm.get("created")) or ""
-            title = str(note_fm.get("title") or "")
+            # chat_sync's note carries the sync state, so a later export of
+            # the same chat continues the filed note instead of duplicating it.
+            note = read_note_text(chat_sync.new_note_text(chat, today))
+            created = _iso_date(note.fm.get("created")) or ""
+            title = str(note.fm.get("title") or "")
+            filename = make_filename(created or "unknown", platform, chat.title)
             if url in ledger["seen"] or index.knows(filename, url, created, title):
                 known += 1
                 continue
             target = _free_path(inbox / filename)
-            note = read_note_text(markdown)
             note.fm["source"] = url
             write_note(target, note)
             index.sources.add(url)

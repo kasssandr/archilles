@@ -322,6 +322,29 @@ def test_legacy_duplicates_reported_not_deleted(vault):
     assert first.exists()
 
 
+def test_note_claimed_twice_goes_to_the_chat_whose_opening_it_holds(vault):
+    path = _legacy(vault, "2026-09-01_claude_bund-und-blut.md", 4)
+    retry = conversation(3, chat_id="retry")       # same prompt sent again, then elsewhere
+    retry.messages.append(ChatMessage("r3", "assistant",
+                                      "Eine ganz andere Antwort über Gärten, Wetter und die Bahn im Herbst."))
+    result = Syncer(vault, now=datetime(2026, 10, 27)).sync([conversation(4), retry])
+    assert sorted((a.kind, a.conversation.chat_id) for a in result.actions) == [
+        ("adopted", CHAT_ID), ("created", "retry")]
+    assert only(result, "adopted").path == path
+
+
+def test_tie_between_two_chats_is_reported_and_creates_nothing(vault):
+    path = _legacy(vault, "2026-09-01_claude_bund-und-blut.md", 4)
+    before = path.read_bytes()
+    twin = conversation(4, chat_id="ffffffff-0000-0000-0000-000000000000")
+    result = Syncer(vault, now=datetime(2026, 10, 27)).sync([conversation(4), twin])
+    action = only(result)
+    assert action.kind == "ambiguous" and action.path == path
+    assert "https://claude.ai/chat/ffffffff-0000-0000-0000-000000000000" in action.detail
+    assert path.read_bytes() == before
+    assert len(list(vault.rglob("*.md"))) == 1
+
+
 def test_unrelated_note_not_matched(vault):
     other = vault / "KI-Chats" / "andere.md"
     other.parent.mkdir(parents=True)
@@ -376,6 +399,37 @@ def test_chatgpt_follows_current_node(monkeypatch):
     assert [m.id for m in result.messages] == ["u1", "a1"]
     del conv["current_node"]
     assert [m.id for m in chatgpt.to_conversation(conv).messages] == ["u1", "a2"]
+
+
+def test_chatgpt_legacy_note_of_another_branch_is_found(vault, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    sys.modules.pop("import_chatgpt_to_vault", None)
+    import import_chatgpt_to_vault as chatgpt
+
+    def node(nid, parent, children, role=None, text=None):
+        msg = {"id": nid, "author": {"role": role}, "content": {"parts": [text]}} if role else None
+        return {"id": nid, "parent": parent, "children": children, "message": msg}
+
+    # The old importer followed the last child (a2); the chat shows a1.
+    conv = chatgpt.to_conversation({
+        "id": "c1", "title": "Bund und Blut", "create_time": 1_756_684_800, "current_node": "a1",
+        "mapping": {
+            "root": node("root", None, ["u1"]),
+            "u1": node("u1", "root", ["a1", "a2"], "user", TEXTS[0]),
+            "a1": node("a1", "u1", [], "assistant", TEXTS[3]),
+            "a2": node("a2", "u1", [], "assistant", TEXTS[1]),
+        },
+    })
+    path = vault / "KI-Chats" / "2025-09" / "2025-09-01_chatgpt_bund-und-blut.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("---\ntitle: Bund und Blut\ntype: chat\nsource_llm: chatgpt\nmessage_count: 2\n---\n\n"
+                    f"**User:**\n\n{TEXTS[0]}\n\n---\n\n**ChatGPT:**\n\n{TEXTS[1]}\n\n---\n",
+                    encoding="utf-8")
+
+    action = only(Syncer(vault, now=datetime(2026, 10, 27)).sync([conv]))
+    assert action.kind == "adopted" and action.path == path
+    assert TEXTS[3] in path.read_text(encoding="utf-8")
+    assert list((vault / "KI-Chats").rglob("*.md")) == [path]
 
 
 # ── indexing ignores the sync markers ───────────────────────────────────

@@ -2,7 +2,7 @@
 
 The ``import_<platform>_to_vault.py`` scripts parse their platform's export
 into :class:`ChatConversation` objects and hand them to
-:func:`sync_conversations`. This module decides, per conversation, whether a
+:func:`run_sync`. This module decides, per conversation, whether a
 note already exists and what may be done to it.
 
 Identity
@@ -29,8 +29,9 @@ Notes without sync state (old imports, web clips)
     note already holds. A note holding a prefix of the chat is adopted and the
     rest appended. A fragmentary clip is rebuilt from the export; paragraphs
     of the clip that the export does not contain are kept as the user's own
-    additions. A note without an id is matched by fingerprint alone, and only
-    when one note clearly covers one conversation.
+    additions. A note without an id is matched by fingerprint alone. When
+    several conversations claim it, the one whose opening it holds furthest
+    gets it; a tie is reported and none of the tied chats is created.
 
 Every note that is changed is first copied to
 ``<vault>/.archilles/chat-sync-backup/<timestamp>/``. Nothing is deleted:
@@ -130,6 +131,10 @@ class ChatConversation:
     updated: Optional[datetime] = None
     summary: str = ""
     model: str = ""
+    # Texts of the export's other branches (regenerated answers, edited
+    # prompts). Never written; they let the fingerprint find a note an older
+    # importer wrote from a different branch.
+    match_texts: list[str] = field(default_factory=list)
 
     @property
     def url(self) -> str:
@@ -499,12 +504,20 @@ class VaultIndex:
         return pool
 
 
-def fuzzy_matches(conversations: list[ChatConversation], pool: list[Note],
-                  index: VaultIndex) -> tuple[dict[str, list[tuple[Note, float]]], list[Action]]:
+def _held_prefix(note: Note, conv: ChatConversation) -> int:
+    """Number of the conversation's opening messages the note holds."""
+    end = prefix_end(locate_messages(note.body, conv.messages))
+    return 0 if end is None else end + 1
+
+
+def fuzzy_matches(conversations: list[ChatConversation], pool: list[Note], index: VaultIndex
+                  ) -> tuple[dict[str, list[tuple[Note, float]]], list[Action], set[str]]:
     """Match id-less notes to conversations by shared shingles.
 
-    A note whose best match is shared by several conversations is reported as
-    ambiguous and left alone.
+    A note claimed by several conversations (a prompt sent twice, a chat that
+    quotes another) goes to the one whose opening it holds furthest. On a tie
+    it is reported as ambiguous and left alone, and the ids of the tied
+    conversations are returned so that none of them is created as a new note.
     """
     postings: dict[str, list[int]] = defaultdict(list)
     for i, note in enumerate(pool):
@@ -516,8 +529,8 @@ def fuzzy_matches(conversations: list[ChatConversation], pool: list[Note],
     for conv in conversations:
         shared: dict[int, int] = defaultdict(int)
         conv_shingles = set()
-        for msg in conv.messages:
-            conv_shingles |= shingles(msg.text)
+        for text in [m.text for m in conv.messages] + conv.match_texts:
+            conv_shingles |= shingles(text)
         for sh in conv_shingles:
             hits = postings.get(sh, ())
             if len(hits) > COMMON_SHINGLE:
@@ -532,13 +545,26 @@ def fuzzy_matches(conversations: list[ChatConversation], pool: list[Note],
                 claimed[pool[i].path].append(conv)
 
     actions = []
+    blocked: set[str] = set()
+    notes = {note.path: note for note in pool}
     for path, convs in claimed.items():
-        if len(convs) > 1:
-            titles = ", ".join(f"„{c.title}“" for c in convs)
-            actions.append(Action("ambiguous", None, path, f"matches {len(convs)} chats: {titles}"))
-            for conv in convs:
-                candidates[conv.chat_id] = [(n, s) for n, s in candidates[conv.chat_id] if n.path != path]
-    return candidates, actions
+        if len(convs) < 2:
+            continue
+        held = {c.chat_id: _held_prefix(notes[path], c) for c in convs}
+        ranked = sorted(convs, key=lambda c: -held[c.chat_id])
+        if held[ranked[0].chat_id] > held[ranked[1].chat_id]:
+            losers = ranked[1:]
+        else:
+            losers = convs
+            blocked.update(c.chat_id for c in convs)
+            listed = ", ".join(f"„{c.title}“ {c.url or c.chat_id}" for c in convs)
+            actions.append(Action(
+                "ambiguous", None, path,
+                f"matches {len(convs)} chats equally: {listed}; none created. "
+                f"Put the right chat's URL into the note's source: to settle it"))
+        for conv in losers:
+            candidates[conv.chat_id] = [(n, s) for n, s in candidates[conv.chat_id] if n.path != path]
+    return candidates, actions, blocked
 
 
 # ── Sync ───────────────────────────────────────────────────────────────────
@@ -672,9 +698,11 @@ class Syncer:
         for conv in conversations:
             if not groups[conv.chat_id]:
                 by_provider[conv.provider].append(conv)
+        blocked: set[str] = set()
         for provider, convs in by_provider.items():
-            candidates, actions = fuzzy_matches(convs, index.fuzzy_pool(provider, matched), index)
+            candidates, actions, tied = fuzzy_matches(convs, index.fuzzy_pool(provider, matched), index)
             result.actions += actions
+            blocked |= tied
             for conv in convs:
                 ranked = sorted(candidates.get(conv.chat_id, []), key=lambda ns: -ns[1])
                 groups[conv.chat_id] = [(n, "fingerprint") for n, _ in ranked]
@@ -682,7 +710,8 @@ class Syncer:
         for conv in conversations:
             group = groups[conv.chat_id]
             if not group:
-                result.actions.append(self.create(conv))
+                if conv.chat_id not in blocked:   # a tie is reported, not guessed
+                    result.actions.append(self.create(conv))
                 continue
             primary, how = self._primary(group, conv)
             if primary.managed:
