@@ -131,6 +131,8 @@ def _parse_chat_history_html(html_path: Path) -> str:
 
     The HTML file uses per-line prefixes: ``MODEL: <p>...</p>`` or ``USER: <p>...</p>``.
     Each prefix marks one turn; paragraphs within a turn are separated by newlines.
+    Takeout lists the turns newest first (each answer above its question), so
+    they are reversed to read in conversation order.
     """
     try:
         text = html_path.read_text(encoding='utf-8', errors='replace')
@@ -165,9 +167,9 @@ def _parse_chat_history_html(html_path: Path) -> str:
         # Fallback: treat the whole file as HTML and convert directly
         return _html_to_markdown(text)
 
-    # Convert each turn to Markdown
+    # Convert each turn to Markdown, oldest first
     md_parts: list[str] = []
-    for role, html_content in turns:
+    for role, html_content in reversed(turns):
         label = "**User:**" if role == 'USER' else "**Gemini:**"
         # Join accumulated lines with newlines to preserve HTML block structure
         full_html = html_content if isinstance(html_content, str) else '\n'.join(html_content)
