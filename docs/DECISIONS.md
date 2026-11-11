@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 18. September 2026 (ADR-033 Gliederungsmodell, ADR-034 Adresse einer Stelle; zuvor 11. September: ADR-032 Naht Scriptor → Archilles, Nachtrag zu ADR-004)
+**Letzte Überarbeitung:** 11. November 2026 (ADR-040 Themenkarte und Fernverwandtschaften, Entwurf; zuvor 18. September: ADR-033 Gliederungsmodell, ADR-034 Adresse einer Stelle)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -871,6 +871,56 @@ Die Lücke liegt eine Schicht weiter. Der reale Halluzinationsfall in einer geis
 **Konsequenzen:** Die Abstinenzrate ist die einzige Zahl aus dem Anlass-Material, die sich in der Kommunikation gegen jedes Second-Brain-System stellen lässt, und sie gehört damit neben die Citation-Accuracy in das veröffentlichte Benchmark (ADR-030: Launch-Asset). Kosten insgesamt: ein Enum-Wert, ein Dutzend Goldset-Fälle, ein Prompt-Absatz, ein Test.
 
 **Verworfen:** Die Kategorie nachträglich einzuziehen, wenn der Antwortpfad steht (Schemabruch). Ein LLM-Judge für die Abstinenzprüfung (Kosten, Reproduzierbarkeit — und unnötig, sobald Regel 2 eine Form hat). `weak-evidence` als Spielart von `negative` zu führen: Die beiden messen verschiedene Schichten, und sie in einen Nenner zu werfen verdeckt genau den Unterschied, auf den es ankommt.
+
+---
+
+### ADR-040: Themenkarte und Fernverwandtschaften — die Bibliothek als Ganzes lesen, mit Fundstellen (Entwurf, November 2026)
+
+**Status:** Entwurf vom 11. November 2026, zur Bestätigung durch den Nutzer. Gebaut wird nichts; die [ROADMAP](ROADMAP.md) führt das Vorhaben als Nebenlinie nach v1.0.
+
+**Kontext:** Im Gespräch über ein selbst trainiertes Sprachmodell als Alternative zu ARCHILLES kam heraus, was ein solches Modell voraushätte: Es hat „alles gelesen". ARCHILLES sieht bei jeder Anfrage nur die zehn bis dreißig Treffer, nach denen gefragt wurde, also einen Ausschnitt wie durchs Schlüsselloch. Zusammenhänge, nach denen niemand fragt, bleiben unsichtbar. Das trainierte Modell kennt sie, kann sie aber nicht belegen; dass der Weg über Training für einen Einzelforscher ohnehin nicht offensteht, hält Abschnitt I fest („Warum RAG und nicht Fine-Tuning"). Die Embeddings des Bestands enthalten diese Zusammenhänge längst. Angesehen werden sie nur stückweise, Anfrage für Anfrage. Calibre 8.16 empfiehlt zwar ähnliche Bücher, stützt sich dabei aber wie seine übrigen KI-Funktionen auf externes Wissen und nennt keine Stelle (Abschnitt I).
+
+**Entscheidung (Entwurf):**
+
+- **Drei Bausteine aus den vorhandenen Vektoren**, ohne neue Embeddings. *Themenkarte:* Gruppierung zuerst auf Buchebene (ein Vektor je Buch, gemittelt aus seinen Haupttext-Chunks), danach auf Abschnittsebene. *Fernverwandtschaften:* Bücher oder Abschnitte, die einander nahe sind, obwohl sie weder Autor noch Tag, Sammlung oder Sprache teilen. *Abgleich mit der Kuratierung:* Die Karte wird gegen Tags und Sammlungen gelegt; der Befund sind die Abweichungen (Cluster quer zu den Tags, Tags, die in mehrere Cluster zerfallen).
+- **Die Kuratierung des Nutzers bleibt maßgeblich.** Die Karte befragt sie und korrigiert sie nicht. Sie schreibt nichts zurück.
+- **Belegbarkeit.** Jedes Themenfeld und jede Fernverwandtschaft trägt ihre Fundstellen als Adresse nach ADR-034 (Band, Seite, Wortlaut; die `chunk_id` höchstens als Cache). Ein Themenfeld ohne nachprüfbare Fundstellen gibt es nicht.
+- **Kandidaten, keine Behauptungen.** Eine Fernverwandtschaft ist ein Vorschlag mit Ähnlichkeitswert und als solcher ausgewiesen. Der Wert ordnet nur. Belegt wird durch die gegenübergestellten Stellen. Das ist die Regel aus ADR-035, angewandt auf einen neuen Fall: Wo Stellen existieren, die ein Leser vergleichen kann, ist die Zahl kein Beleg.
+- **Read-only.** Ausgabe in den Index-Bereich (`.archilles/`), optional als Markdown ins Lab, dort außerhalb der Reichweite des Lab-Indexlaufs. Nichts geht nach Calibre oder Zotero (ADR-005).
+- **Schwache Hardware.** Die Gruppierung läuft ohne Grafikkarte. Die Buchebene muss auf dem 4-GB-Gerät in vertretbarer Zeit durchlaufen; die Abschnittsebene darf auf Stichproben oder externe Rechenläufe ausweichen (analog ADR-028).
+- **Benennung zuerst ohne LLM**, über die charakteristischen Begriffe je Cluster; LLM-Benennung optional.
+- **Nur Haupttext** (`section_type == "main"`). Bücher, die nur als Metadaten-Stub im Index stehen, fehlen; die Karte nennt ihre Zahl.
+
+**Begründung:**
+
+- *Weniger Code, mehr Architektur.* Die Vektoren existieren und sind bezahlt; ein voller Embed-Lauf kostet auf der T1000 rund 27 GPU-Tage (ADR-034). Ein Lesedurchgang über sie erschließt eine zweite Nutzung, ohne dass ein Modell geladen wird.
+- *Belegbarkeit ist der Unterschied zum trainierten Modell.* Eine Karte ohne Fundstellen wäre genau die vage Ahnung, die das trainierte Modell bietet, nur schlechter. Mit Fundstellen ist sie etwas, das das Modell nicht kann.
+- *Abweichungen statt Übereinstimmungen.* Eine Karte, die die Tags bestätigt, sagt dem Nutzer nichts, was er nicht weiß. Erkenntniswert hat nur, was quer zu seiner eigenen Ordnung liegt.
+- *Ohne LLM erzeugbar.* Das Souveränitätsmotiv (ADR-029) verlangt, dass eine Erschließung des eigenen Bestands an keinem Anbieter hängt. Die Benennung über charakteristische Begriffe genügt dafür; das LLM macht die Namen nur lesbarer.
+- *Fehlertoleranz als Eigenschaft.* Auf der Ebene ganzer Bücher und Themenfelder mitteln sich zufällige OCR- und Extraktionsfehler weitgehend heraus, anders als in der Einzeltreffer-Suche. Systematische Fehler mitteln sich nicht heraus, sondern bilden eigene Cluster und sind damit sichtbar.
+
+**Einordnung: eigenständig, nicht als Vorstufe des Wiki-Generators.** Erwogen war, die Karte als Vorstufe des Wiki-Generators in v1.5 zu führen: Sie liefert das Gerüst der Themen-Seiten, die Fernverwandtschaften die Querverweise. Das Bild stimmt, die Abhängigkeit nicht.
+
+1. Das Wiki-Konzept (`archilles-scriptor/docs/internal/KONZEPT_wiki_zitatgraph_v1.md` §B.6) baut in der Reihenfolge Buch-Seiten → `index.md`/`log.md` → Verifikationspass → Entitäten → Themen. Themen-Seiten sind die letzte Stufe, und sie werden dort aus Tag-Clustern und Entitäts-Häufungen vorgeschlagen. Eine Vorstufe würde erst an der letzten Stufe gebraucht.
+2. Der Wiki ist LLM-gestützt, die Karte bewusst nicht. Als Vorstufe gälte sie als Zubehör eines LLM-Produkts, und ihr stärkstes Argument, ohne Cloud-Anbieter erzeugbar zu sein, ginge unter.
+3. Die Karte hat einen Nutzen, der nicht auf den Wiki wartet: Fernverwandtschaften und Abweichungen von den Tags sind unmittelbar Lektüre- und Kuratierungsanlass.
+4. Die Methode ist ungeprüft (siehe Konsequenzen, Mittelwertvektoren). Hängt der Wiki an ihr, erbt er ein Forschungsrisiko. Steht sie daneben, beginnt der Wiki wie geplant mit den Tag-Clustern und nimmt die Karte auf, sobald sie sich bewährt hat.
+
+Für die Vorstufe spricht zweierlei: Ein Vorhaben ohne Abnehmer kann zur Spielerei werden, und eine eigenständige Karte drängt zur Anwendung (Visualisierung, Oberfläche) und damit gegen die Grenze aus ADR-022. Beides wird anders aufgefangen. Die Karte bekommt einen eigenen Prüfstein: Der Nutzer sichtet eine Stichprobe von Fernverwandtschaften und zählt, wie viele echte, ihm unbekannte Verbindungen darunter sind. Ihre Ausgabe bleibt Daten und Markdown, keine Oberfläche. Wiki und Graph RAG sind Abnehmer, nicht Voraussetzung; in v2.0 ist die Karte eine billige Vorform der Wissensvernetzung, die ohne Entitäten-Extraktion auskommt.
+
+**Konsequenzen:**
+
+- Roadmap: Nebenlinie nach dem Benchmark-Harness (v1.0), ohne Verschiebung bestehender Prioritäten; je ein Satz beim Wiki-Generator (v1.5) und bei Graph RAG (v2.0).
+- *Mittelwertvektoren sind die bekannte Schwachstelle.* Der Vault-Linker hat sie am Lab gemessen (Umbau vom 24. August 2026): Ein Dokumentvektor über eine lange, gemischte Notiz landet in der Mitte des Raums, bei einer Schwelle von 0,75 hatte eine Notiz im Schnitt 123 „Nachbarn"; geholfen hat eine Anker-Regel statt der flachen Schwelle. Für Bücher gilt das verschärft. Der Buchvektor trägt deshalb nur die grobe Karte. Eine Fernverwandtschaft wird aus Paaren nahe beieinanderliegender Abschnitte begründet, und diese Paare sind zugleich ihre Fundstellen.
+- *Weitere Buchsignale* (Nachtrag 11. November 2026, auf Rückfrage des Nutzers): ein um den Bestandsmittelwert bereinigter Vektor oder mehrere Vektoren je Buch (je Kapitel, je Schwerpunkt); Inhaltsverzeichnis und Calibre-Kommentar als verdichtete, scharfe Texte, der Kommentar auch für Stubs; Annotationen als Verwandtschaft in der Lektüre; später gemeinsame zitierte Literatur (bibliographische Kopplung, wartet auf Scriptors Referenz-Gewinnung). **Tags und Sammlungen sind keine Eingabe der Karte**, sondern Maßstab des Abgleichs; sonst fände der Abgleich nur wieder, was hineingegeben wurde.
+- *Zotero:* Automatische Tags (Katalog-Schlagwörter) sind getrennt von den manuellen zu lesen und ergeben eine zweite, fremde Kuratierung für den Abgleich; der `ZoteroAdapter` mischt beide heute. Zoteros „Verwandt"-Verknüpfungen ohne gemeinsamen Autor oder Tag sind bestätigte Fernverwandtschaften für den Prüfstein.
+- Dubletten, Übersetzungen und Ausgaben desselben Werks werden vorher ausgeschieden, die Calibre-Spiegelung in Zotero eingeschlossen. Sonst füllen sie die Spitze jeder Kandidatenliste.
+- Die Karte hängt am Embedding-Modell. Wechselt die Identitätsschicht (Embedder-Gate, ADR-030), wird sie neu gerechnet; auf Buchebene kostet das einen Lesedurchgang, keine GPU-Zeit.
+- Ein MCP-Werkzeug (etwa `explore_themes` / `find_distant_relatives`) ist Ausblick und hier nicht spezifiziert.
+
+**Verworfen:** Ein eigenes trainiertes Modell als Weg zum „alles gelesen" (Kosten, und es kann nicht belegen). Benennung der Themenfelder allein per LLM (bindet die Karte an einen Anbieter). Tags aus der Karte nachzutragen oder zu korrigieren (verletzt die Write-Policy und kehrt das Verhältnis von Nutzer und Maschine um). Fernverwandtschaft allein aus dem Abstand zweier Buchmittelwerte (Vault-Linker-Befund). Die Karte als Vorstufe des Wiki-Generators (siehe Einordnung).
+
+**Umsetzungsstand (November 2026): nicht begonnen.** Kein Code, keine Messung.
 
 ---
 
