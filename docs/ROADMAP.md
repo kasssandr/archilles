@@ -3,7 +3,7 @@
 > **Your Intelligent Research Archive**
 > *Mein Korpus, meine Wahl.*
 
-**Last updated:** September 2026
+**Last updated:** November 2026
 
 > **Spiegel-Notiz (Familie), 2026-07-19:** Scriptor S1 ist umgesetzt — das
 > Übergabeformat der Familie ist als versionierte Spezifikation normiert:
@@ -253,6 +253,49 @@ Das Archilles Lab (Obsidian-Vault über den ObsidianAdapter) bleibt als funktion
 
 ---
 
+## Nebenlinie: Themenkarte und Fernverwandtschaften (nach v1.0, ohne Termin)
+
+**Fokus:** Die Bibliothek als Ganzes lesen, nicht nur durch die Anfrage.
+
+**Motiv: das Schlüsselloch.** Jede Anfrage an ARCHILLES sieht zehn bis dreißig Treffer, nämlich die, nach denen gefragt wurde. Ein auf dem Bestand trainiertes Sprachmodell hätte ARCHILLES eines voraus: Es hat alles gelesen. Zusammenhänge, nach denen niemand fragt, bleiben im Retrieval unsichtbar; im trainierten Modell wären sie vorhanden, aber unbelegt. Die vorhandenen Embeddings enthalten diese Zusammenhänge längst, sie werden nur nie als Ganzes angesehen. Das Vorhaben holt den Vorzug des „alles gelesen" in ARCHILLES, mit Fundstellen statt Ahnung ([ADR-040](DECISIONS.md), Entwurf).
+
+Drei Bausteine, in dieser Reihenfolge:
+
+1. **Themenkarte.** Die Embeddings des Bestands werden gruppiert (Clustering), zuerst auf Buchebene (ein Vektor je Buch, gemittelt aus seinen Haupttext-Chunks), danach auf Abschnittsebene. Es entsteht eine Karte der Themenfelder über die ganze Bibliothek, unabhängig von jeder Anfrage.
+2. **Fernverwandtschaften.** Bücher oder Abschnitte, die einander inhaltlich nahe sind, obwohl sie weder Autor noch Tag, Sammlung oder Sprache teilen. Das sind die Verbindungen, die keine Suchanfrage findet, weil niemand weiß, dass er nach ihnen fragen müsste.
+3. **Abgleich mit der Kuratierung.** Die Maschinenkarte wird gegen die Tags und Sammlungen des Nutzers gelegt (Calibre, Zotero). Aufschlussreich sind nicht die Übereinstimmungen, sondern die Abweichungen: Cluster, die quer zu den Tags liegen; Tags, die in mehrere Cluster zerfallen. Die Kuratierung des Nutzers bleibt maßgeblich. Die Karte korrigiert sie nicht, sie befragt sie.
+
+**Leitplanken:**
+
+- *Belegbarkeit.* Jedes Themenfeld und jede Fernverwandtschaft trägt ihre Fundstellen, und zwar als Adresse nach [WATCHDOG_AND_WIKI.md §II.5](WATCHDOG_AND_WIKI.md): Band, Seite, Wortlaut; die `chunk_id` höchstens als Cache (ADR-034). Ein Themenfeld ohne nachprüfbare Fundstellen gibt es nicht.
+- *Kandidaten, keine Behauptungen.* Eine Fernverwandtschaft ist ein Vorschlag mit Ähnlichkeitswert und wird ausdrücklich als solcher ausgewiesen (Scriptor-Disziplin). Der Wert ordnet die Kandidaten. Belegt wird die Verwandtschaft durch die gegenübergestellten Stellen, die ein Leser selbst vergleichen kann, nicht durch die Zahl (ADR-035).
+- *Read-only.* Nichts wird in Calibre oder Zotero geschrieben. Die Ausgabe liegt im Index-Bereich (`.archilles/`), optional als Markdown im Lab. Dort gehört sie in eine Ablage, die der Lab-Indexlauf nicht erfasst; sonst fände die Suche später die Karte statt der Bücher.
+- *Schwache Hardware.* Die Gruppierung läuft ohne Grafikkarte, neue Embeddings werden nicht gerechnet. Die Buchebene muss auf dem 4-GB-Gerät in vertretbarer Zeit durchlaufen: ein Lesedurchgang über die vorhandenen Vektoren, danach ein Clustering über so viele Vektoren, wie es Bücher gibt. Die Abschnittsebene darf auf Stichproben oder externe Rechenläufe ausweichen, analog ADR-028.
+- *Benennung zuerst ohne LLM.* Ein Themenfeld heißt zunächst nach seinen charakteristischen Begriffen, also nach Wörtern, die im Cluster häufig und im übrigen Bestand selten sind (die Stoppwortlisten aus ADR-019 liegen bereit). Eine Benennung durch ein LLM ist optional. So bleibt die Karte auch ohne Cloud-Anbieter erzeugbar, im Sinne des Souveränitätsmotivs.
+- *Nur Haupttext.* Es zählen nur Inhalts-Chunks mit `section_type == "main"`, damit Register und Bibliographien die Karte nicht verzerren. Bücher, die nur als Metadaten-Stub im Index stehen (Phase A, `metadata-only`), fehlen damit auf der Karte. Die Karte nennt ihre Zahl, damit eine leere Gegend nicht als thematische Lücke gelesen wird.
+- *Fehlertoleranz.* Auf der Ebene ganzer Bücher und Themenfelder mitteln sich OCR- und Extraktionsfehler weitgehend heraus, anders als in der Einzeltreffer-Suche, wo ein verstümmelter Chunk ein verstümmelter Treffer ist. Das gilt für zufällige Fehler. Systematische (ein wiederkehrendes Download-Deckblatt, ein ungefilterter Kolumnentitel) mitteln sich nicht heraus, sondern bilden eigene Cluster und werden so nebenbei zur Diagnose der Extraktion.
+
+**Methodische Vorsicht.** Der Vault-Linker hat gezeigt, wohin ein gemittelter Vektor über einen langen, gemischten Text gerät: in die Mitte des Raums, wo alles gleich weit entfernt ist. Bei einer Schwelle von 0,75 hatte eine Lab-Notiz im Schnitt 123 „Nachbarn" (Umbau vom 24. August 2026, Anker-Regel statt Schwelle). Ein Buch ist länger und gemischter als jede Notiz. Für die grobe Karte genügt der Buchvektor; eine Fernverwandtschaft wird dagegen aus Paaren nahe beieinanderliegender Abschnitte begründet, nicht aus dem Abstand zweier Mittelwerte. Diese Paare sind zugleich die Fundstellen. Dubletten, Übersetzungen und Ausgaben desselben Werks sind keine Fernverwandtschaft und werden vorher ausgeschieden, die Calibre-Spiegelung in Zotero eingeschlossen. Sonst füllen sie die Spitze jeder Kandidatenliste.
+
+**Buchsignale neben dem Mittelwert.** Der Buchvektor muss weder ein schlichter Mittelwert sein noch allein stehen. Nach Kosten geordnet:
+
+- *Den Mittelwert verbessern.* Vor dem Mitteln den Mittelwert des ganzen Bestands abziehen; das entfernt den gemeinsamen Anteil, der alles in die Mitte zieht. Statt eines Vektors mehrere je Buch, einen je Kapitel (`chapter` steht an den Chunks) oder einige Schwerpunkte innerhalb des Buchs. Zwei Bücher sind dann verwandt, wenn einzelne Schwerpunkte zusammenfallen, nicht ihre Durchschnitte.
+- *Verdichtete Texte über das Buch.* Das Inhaltsverzeichnis, also die Kapitel- und Abschnittstitel, die ohnehin an den Chunks stehen, ist eine Zusammenfassung vom Autor selbst. Der Calibre-Kommentar (`calibre_comment`) ist es ebenfalls, wenn er Klappentext, Rezension oder eigene Notiz ist und nicht Verlagswerbung. Beide sind kurz, ihr Vektor ist scharf. Der Kommentar liegt außerdem auch für Bücher vor, die nur als Stub im Index stehen; seine Fundstelle ist dann das Kommentarfeld, nicht eine Seite, und wird so ausgewiesen.
+- *Annotationen.* Die eigenen Markierungen in einem Buch sind der Ausschnitt, den der Nutzer für wesentlich hielt. Verwandtschaft über sie ist Verwandtschaft in seiner Lektüre. Nur für annotierte Bücher.
+- *Gemeinsame Literatur (später).* Zwei Bücher, die dieselben Werke zitieren, sind verwandt, gleich in welcher Sprache und mit welchem Vokabular (bibliographische Kopplung). Für Fernverwandtschaften ist das das stärkste Signal. Es setzt die Referenz-Gewinnung aus Scriptors Zitatgraph-Konzept voraus (Teil C) und wartet auf sie.
+- *Nicht als Eingabe: Tags und Sammlungen.* Sie sind der Maßstab des Abgleichs. Flössen sie in die Karte ein, fände der Abgleich nur wieder, was hineingegeben wurde.
+
+**Zotero und Vorbilder.** Zotero unterscheidet manuelle von automatischen Tags; automatische kommen beim Import aus Katalogen mit, oft als Schlagwörter (GND, Library of Congress). Der `ZoteroAdapter` liest heute beide ohne Unterschied. Getrennt gelesen ergäben sie eine zweite, fremde Kuratierung für den Abgleich: eigene Tags, Schlagwörter der Bibliotheken, Maschinenkarte. Calibre kennt diese Trennung nicht, heruntergeladene Tags mischen sich dort mit den eigenen. Zoteros „Verwandt"-Verknüpfungen sind vom Nutzer gesetzte Beziehungen; was davon weder Autor noch Tag teilt, ist eine bestätigte Fernverwandtschaft und gehört in den Prüfstein. Werkzeuge wie ResearchRabbit oder Litmaps nehmen Zotero-Sammlungen als Ausgangspunkt, suchen aber im Zitationsgraphen externer Datenbanken: in der Cloud, über DOIs, schwach bei Monographien und älterer oder deutschsprachiger Literatur, und sie finden, was außerhalb der Bibliothek liegt, nicht darin. Methodisches Vorbild ist eher die Wissenschaftskartierung (VOSviewer, CiteSpace): Sie gruppiert ein Netz von Nachbarschaften statt einzelner Punkte und benennt Cluster über ihre Begriffe.
+
+**Einordnung:**
+
+- *Nicht auf dem kritischen Pfad.* Beginnt frühestens nach dem Benchmark-Harness (v1.0). Keine bestehende Priorität verschiebt sich, und die Karte ist kein Tor für v1.5.
+- *Eigenständig, mit zwei Abnehmern.* Die Karte ist ein abgeleitetes Artefakt mit eigenem Nutzen, keine Bauphase des Wiki-Generators (Begründung in ADR-040). Der Wiki (v1.5) erhält aus ihr eine zweite Quelle für seine Themen-Seiten, neben den Tag-Clustern, die das Wiki-Konzept vorsieht, und aus den Fernverwandtschaften Querverweise. Damit entsteht der Wiki nicht nur Buch für Buch von unten, sondern auch aus dem Ganzen. Graph RAG (v2.0) erhält eine billige Vorform der Wissensvernetzung, die ohne Entitäten-Extraktion auskommt.
+- *Prüfstein.* Weil kein Abnehmer die Karte abnimmt, bekommt sie einen eigenen Test: Der Nutzer sichtet eine Stichprobe von Fernverwandtschaften und zählt, wie viele echte Verbindungen darunter sind, die er nicht kannte. Fällt die Zahl niedrig aus, bleibt es bei der Karte.
+- *Ausblick.* Ein MCP-Werkzeug (etwa `explore_themes` oder `find_distant_relatives`) liegt nahe, wird hier aber nicht spezifiziert.
+
+---
+
 ## v1.5 — Community-Release und Open Source (Q4 2026)
 
 **Fokus:** ARCHILLES in die Hände der Zielgruppe bringen.
@@ -261,7 +304,7 @@ Open-Source-Veröffentlichung unter MIT-Lizenz. Domains sind gesichert (archille
 
 **Wiki-Generator (neu):** Ein LLM-gestützter Generator, der aus dem indexierten Bestand ein navigierbares Markdown-Wiki destilliert. Pro Buch (ab konfigurierbarem Rating-Schwellwert) werden Metadaten, Comments, Annotationen und die semantisch dichtesten Content-Chunks zusammengeführt und vom LLM in strukturierte Buch-Seiten, Entitäten-Seiten (Personen, Konzepte, Orte) und Themen-Seiten mit `[[Wikilinks]]` destilliert. Obsidian-kompatibel, aber nicht Obsidian-abhängig. Inkrementelle Updates via Watchdog-Änderungsprotokoll. Der Wiki ist ein leichtgewichtiger Wissensgraph in Textform — die menschenlesbare Vorstufe des formalen Graph RAG in v2.0. Spezifikation: [WATCHDOG_AND_WIKI.md](WATCHDOG_AND_WIKI.md).
 
-Das Architekturmuster ist inzwischen von außen bestätigt: Anthropics Claude Science (Juni 2026) setzt für die Lebenswissenschaften dieselbe Zwischenschicht ein — Sub-Agenten extrahieren aus tausenden Papers zentrale Claims und Kernbefunde in eine *evidence state database*, aus der Reviews sektionsweise generiert und von einem Reviewer-Agenten auf Zitattreue geprüft werden (Referenzfall: Lecoq/Allen Institute, Reviews in einem Zehntel der bisherigen Zeit). Der Wiki ist das geisteswissenschaftliche Pendant dieser Schicht: strukturierte, quellenverankerte Destillate zwischen Retrieval und Prosa. Daraus folgen zwei Anforderungen an die Spezifikation. Erstens trägt jede destillierte Aussage ihren Beleganker (`chunk_id`, Seite) — Auditierbarkeit ist Gattungsmerkmal, nicht Komfort; was in den Naturwissenschaften Reproduzierbarkeit heißt, heißt hier Belegbarkeit. Zweitens ein optionaler Verifikationspass nach der Generierung: Ein zweiter LLM-Durchlauf prüft gegen den LanceDB-Index, ob zitierte Passagen tatsächlich an der behaupteten Stelle stehen (Actor-Critic-Muster; zugleich Vorstufe eines allgemeinen `verify_citation`-MCP-Tools). Als quellenverankerte Claim-Sammlung ist der Wiki außerdem das natürliche Substrat für die Behandlung widersprüchlicher Quellen in v2.0.
+Das Architekturmuster ist inzwischen von außen bestätigt: Anthropics Claude Science (Juni 2026) setzt für die Lebenswissenschaften dieselbe Zwischenschicht ein — Sub-Agenten extrahieren aus tausenden Papers zentrale Claims und Kernbefunde in eine *evidence state database*, aus der Reviews sektionsweise generiert und von einem Reviewer-Agenten auf Zitattreue geprüft werden (Referenzfall: Lecoq/Allen Institute, Reviews in einem Zehntel der bisherigen Zeit). Der Wiki ist das geisteswissenschaftliche Pendant dieser Schicht: strukturierte, quellenverankerte Destillate zwischen Retrieval und Prosa. Daraus folgen zwei Anforderungen an die Spezifikation. Erstens trägt jede destillierte Aussage ihren Beleganker (`chunk_id`, Seite) — Auditierbarkeit ist Gattungsmerkmal, nicht Komfort; was in den Naturwissenschaften Reproduzierbarkeit heißt, heißt hier Belegbarkeit. Zweitens ein optionaler Verifikationspass nach der Generierung: Ein zweiter LLM-Durchlauf prüft gegen den LanceDB-Index, ob zitierte Passagen tatsächlich an der behaupteten Stelle stehen (Actor-Critic-Muster; zugleich Vorstufe eines allgemeinen `verify_citation`-MCP-Tools). Als quellenverankerte Claim-Sammlung ist der Wiki außerdem das natürliche Substrat für die Behandlung widersprüchlicher Quellen in v2.0. Für die Themen-Seiten kann er auf die Themenkarte zurückgreifen, für Querverweise auf die Fernverwandtschaften (Nebenlinie nach v1.0, siehe oben); beides ist Angebot, nicht Voraussetzung.
 
 Community-Aufbau über akademische Kanäle: r/DigitalHumanities, r/AskHistorians, GitHub Discussions, DH-Discord-Server und spezialisierte Foren (MobileRead als Priorität wegen der Calibre-Community). Der ARCHILLATOR (Browser-basierter akademischer Textübersetzer) dient als Lead Magnet.
 
@@ -273,7 +316,7 @@ Freemium-Modell: Kostenlose Basisversion ohne Bibliotheksbeschränkung. Premium-
 
 **Fokus:** Vom Suchen zum Verstehen — Beziehungen zwischen Entitäten, Ideen und Texten sichtbar machen.
 
-Hier wird ARCHILLES mehr als ein Suchwerkzeug. Graph RAG ermöglicht die Extraktion von Entitäten (Personen, Orte, Konzepte, Ereignisse), das Mapping ihrer Beziehungen und die Visualisierung als Netzwerkgraphen und Zeitleisten. Für Historiker bedeutet das: Prosopographie über die gesamte Bibliothek — wer kannte wen, wer zitierte wen, welche Ideen wanderten wohin.
+Hier wird ARCHILLES mehr als ein Suchwerkzeug. Graph RAG ermöglicht die Extraktion von Entitäten (Personen, Orte, Konzepte, Ereignisse), das Mapping ihrer Beziehungen und die Visualisierung als Netzwerkgraphen und Zeitleisten. Für Historiker bedeutet das: Prosopographie über die gesamte Bibliothek — wer kannte wen, wer zitierte wen, welche Ideen wanderten wohin. Eine billige Vorform dieser Vernetzung, ohne Entitäten-Extraktion, liefert die Themenkarte (Nebenlinie nach v1.0): Die Fernverwandtschaften zeigen, welche Bücher zusammengehören, bevor ein Graph sagt, warum.
 
 **Evaluierung:** LightRAG als potenzielles Backend, Wikidata und Wikipedia als Seed-Quellen für Entity-Disambiguierung. Evaluation geplant für Q2 2026, Implementation frühestens 2027.
 
