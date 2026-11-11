@@ -113,21 +113,33 @@ def calibredb(args: list[str], library: str) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
-def check_result(original: Path, result: Path, max_growth: float) -> tuple[bool, str]:
+def check_result(original: Path, result: Path, max_growth: float) -> tuple[bool, str, int]:
+    """(ok, detail, chars per page) for an OCR result against its original."""
     import fitz
     a, b = fitz.open(original), fitz.open(result)
     try:
         if a.page_count != b.page_count:
-            return False, f"page count {a.page_count} -> {b.page_count}"
+            return False, f"page count {a.page_count} -> {b.page_count}", 0
         chars = sum(len(p.get_text()) for p in b)
+        per_page = chars // max(b.page_count, 1)
         if chars == 0:
-            return False, "no text recognised"
+            return False, "no text recognised", 0
         growth = result.stat().st_size / max(original.stat().st_size, 1)
         if growth > max_growth:
-            return False, f"file grew x{growth:.1f} (limit x{max_growth})"
-        return True, f"{chars} chars, {chars // max(b.page_count, 1)}/page, size x{growth:.2f}"
+            return False, f"file grew x{growth:.1f} (limit x{max_growth})", per_page
+        return True, f"{chars} chars, {per_page}/page, size x{growth:.2f}", per_page
     finally:
         a.close(); b.close()
+
+
+def run_ocrmypdf(src: Path, out: Path, lang: str, redo: bool, args) -> int:
+    return subprocess.run([
+        sys.executable, "-m", "ocrmypdf", "-l", lang,
+        "--output-type", "pdf", "--optimize", "0",
+        "--redo-ocr" if redo else "--skip-text",
+        "--oversample", str(args.oversample),
+        "--jobs", str(args.jobs), str(src), str(out),
+    ]).returncode
 
 
 def main() -> None:
@@ -193,20 +205,29 @@ def main() -> None:
         lang = ocr_languages(b["langs"], installed)
         out = work / f"{b['id']}.pdf"
         t0 = time.time()
-        proc = subprocess.run([
-            sys.executable, "-m", "ocrmypdf", "-l", lang,
-            "--output-type", "pdf", "--optimize", "0",
-            "--redo-ocr" if args.redo else "--skip-text",
-            "--oversample", str(args.oversample),
-            "--jobs", str(args.jobs), str(b["pdf"]), str(out),
-        ])
-        entry = {"id": b["id"], "title": b["title"], "lang": lang,
-                 "seconds": round(time.time() - t0), "time": datetime.now().isoformat(timespec="seconds")}
+        code = run_ocrmypdf(b["pdf"], out, lang, args.redo, args)
+        entry = {"id": b["id"], "title": b["title"], "lang": lang}
+        if code == 4 and out.exists():
+            # Exit 4 = output failed validation. Seen when the original already
+            # carries a damaged image stream (CCITT fax): the stream is copied
+            # over unchanged, so the result is no worse than the source.
+            entry["warning"] = "output flagged invalid (damaged image stream carried over from the original)"
+            code = 0
 
-        if proc.returncode != 0 or not out.exists():
-            entry.update(status="ocr_failed", detail=f"ocrmypdf exit {proc.returncode}")
+        if code != 0 or not out.exists():
+            entry.update(status="ocr_failed", detail=f"ocrmypdf exit {code}")
         else:
-            ok, detail = check_result(b["pdf"], out, args.max_growth)
+            ok, detail, per_page = check_result(b["pdf"], out, args.max_growth)
+            if ok and per_page < 50 and not args.redo:
+                # --skip-text leaves pages alone that carry *any* text — a
+                # "Scanned by CamScanner" stamp or stray blanks are enough.
+                print("  almost no text: a stamp or blank text layer hid the pages — redoing", flush=True)
+                out.unlink()
+                code = run_ocrmypdf(b["pdf"], out, lang, True, args)
+                if code in (0, 4) and out.exists():
+                    ok, detail, per_page = check_result(b["pdf"], out, args.max_growth)
+                else:
+                    ok, detail = False, f"ocrmypdf exit {code} on redo"
             entry["detail"] = detail
             if not ok:
                 entry["status"] = "rejected"   # result stays in _work for a look
@@ -224,6 +245,7 @@ def main() -> None:
                     r = calibredb(["set_metadata", str(b["id"]), "--field", "tags:" + ",".join(tags)], target)
                     entry["status"] = "done" if r.returncode == 0 else "done_tags_failed"
                     out.unlink()
+        entry.update(seconds=round(time.time() - t0), time=datetime.now().isoformat(timespec="seconds"))
         print(f"  -> {entry['status']}: {entry.get('detail', '')}  ({entry['seconds']} s)", flush=True)
         with log_path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
