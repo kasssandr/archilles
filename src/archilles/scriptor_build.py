@@ -9,7 +9,9 @@ measured on the run itself (Naht §5, user's release of 2026-09-10):
    pages). A page is judged by all of its eight-word windows, not by two
    probes: a probe straddling a footnote boundary fails although the text is
    there, which made the two-probe measure call registers and tables of
-   contents lost.
+   contents lost. A page the windows miss is asked a second time, for its
+   words around its own place in any order: a genealogical table has its
+   words but not their order.
 2. **notes** -- the master defines at least as many footnotes as Scriptor's own
    audit counted with certainty. A gap is a silent loss of apparatus.
 3. **attested** -- the bundle only replaces the PDF if it brings citation
@@ -29,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -56,6 +59,20 @@ _AUDIT_CERTAIN = re.compile(r"(\d+) certain footnotes")
 # Everything the spec writes into the text that is not the text: page markers
 # and their anchors, region marks, footnote anchors and definition heads.
 _SPEC_MARKUP = re.compile(r"\[p\.[^\]]*\]|\{#p-[^}]*\}|\[region:[^\]]*\]|\[\^[^\]]+\]:?")
+
+# The second test, for a page the windows call lost. A genealogical table is
+# printed in two dimensions and its text layer runs in whatever order the
+# setter placed the boxes: Wolf, *Verwandtschaft – Erbrecht – Königswahlen*,
+# lost 66 pages to the windows, nearly all of them tables, while every word of
+# every one of them stood in the master (97 to 100 %, the gaps being the halves
+# of hyphenated words). Order is what the windows test; the words are what
+# the page is. They are looked for only around the page's own place -- from
+# the page before to the page after -- because in a book of a thousand pages
+# nearly every word of any page stands *somewhere*, and a page that went
+# missing would pass a search over the whole master.
+_MIN_LOCAL_SHARE = 0.95
+# Shorter words are found inside nearly any stretch of text and prove nothing.
+_MIN_LOCAL_WORD_CHARS = 4
 
 
 def _normalise(text: str) -> str:
@@ -133,6 +150,55 @@ def front_matter_pages(master: Path) -> set[int]:
     return out
 
 
+def page_neighbourhoods(master: Path) -> Callable[[int], str | None] | None:
+    """For a physical page, the master's text from the page before to the page after.
+
+    Normalised as the haystack is, with the definitions of the notes anchored
+    in that stretch added -- the master gathers them at its end (spec §4.3),
+    and a page's apparatus is part of the page. ``None`` where the master
+    cannot be read as a bundle: then there is no place to look, and no page
+    gets a second test.
+    """
+    from scriptor.document import load_bundle, parse_prepared
+
+    try:
+        bundle = load_bundle(master)
+    except Exception as exc:
+        logger.warning("%s: bundle not readable (%s) -- no second coverage test", master, exc)
+        return None
+    if bundle is None:
+        return None
+    doc = parse_prepared(bundle.text)
+    marks = [
+        (offset, entry.pos)
+        for (_label, offset), entry in zip(doc.page_marks, bundle.resolve_marks(doc))
+        if entry is not None
+    ]
+    if not marks:
+        return None
+    anchored = [(f.anchor_offset, f.definition) for f in doc.footnotes
+                if f.anchor_offset is not None]
+
+    def around(pos: int) -> str | None:
+        start = next((o for o, p in reversed(marks) if p < pos), 0)
+        end = next((o for o, p in marks if o > start and p > pos + 1), len(doc.body))
+        if not any(start <= o < end for o, p in marks if p == pos):
+            # The page has no marker of its own here: nothing says where it is.
+            return None
+        notes = " ".join(d for o, d in anchored if start <= o < end)
+        return _normalise(_SPEC_MARKUP.sub(" ", doc.body[start:end] + " " + notes))
+
+    return around
+
+
+def _words_in(words: list[str], local: str) -> bool:
+    """Whether the page's words stand in ``local``, order aside."""
+    norm = [w for w in (_normalise(t) for t in words) if len(w) >= _MIN_LOCAL_WORD_CHARS]
+    if not norm:
+        return False
+    return sum(w in local for w in norm) >= _MIN_LOCAL_SHARE * len(norm)
+
+
 def _windows(words: list[str]) -> list[str]:
     """Every eight-word window of a page, back to back."""
     out = [
@@ -143,7 +209,10 @@ def _windows(words: list[str]) -> list[str]:
 
 
 def text_coverage(
-    pdf_path: Path, master_text: str, skip_pages: set[int] | None = None
+    pdf_path: Path,
+    master_text: str,
+    skip_pages: set[int] | None = None,
+    neighbourhood: Callable[[int], str | None] | None = None,
 ) -> tuple[float | None, list[int]]:
     """Share of the PDF's pages whose text is in the master, and the lost ones.
 
@@ -159,6 +228,11 @@ def text_coverage(
     :func:`front_matter_pages`). Where that leaves no page to check -- a short
     extract that is front matter all through -- the share is ``None``: unknown,
     which is not the same as nothing found.
+
+    ``neighbourhood`` (see :func:`page_neighbourhoods`) gives a page the
+    windows call lost a second test: present if 95 % of its words stand in the
+    master around its own place, in any order. Without it, the windows decide
+    alone.
     """
     import pymupdf
 
@@ -178,6 +252,8 @@ def text_coverage(
                 continue
             checked += 1
             if sum(w in haystack for w in windows) >= len(windows) / 2:
+                present += 1
+            elif neighbourhood and (local := neighbourhood(number)) and _words_in(words, local):
                 present += 1
             else:
                 lost.append(number)
@@ -245,7 +321,8 @@ def check_bundle(master: Path, pdf_path: Path) -> BundleCheck:
     # 1 -- text coverage
     try:
         check.coverage, check.lost_pages = text_coverage(
-            pdf_path, master_text, front_matter_pages(master))
+            pdf_path, master_text, front_matter_pages(master),
+            page_neighbourhoods(master))
     except Exception as exc:
         check.error = f"coverage not measurable: {type(exc).__name__}: {exc}"
         return check
