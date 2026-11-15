@@ -214,6 +214,14 @@ def _dispatch_tool(server, tool_name: str, params: dict) -> dict:
     mode. Guarding here rather than per tool means the next scan-adjacent tool
     inherits the protection instead of re-opening the hole.
     """
+    started = time.monotonic()
+    result = _run_tool(server, tool_name, params)
+    if _query_log is not None:
+        _query_log.record(tool_name, params, result, time.monotonic() - started)
+    return result
+
+
+def _run_tool(server, tool_name: str, params: dict) -> dict:
     method_name = TOOL_MAP.get(tool_name)
     if not method_name:
         return {'error': f'Unknown tool: {tool_name}'}
@@ -226,6 +234,26 @@ def _dispatch_tool(server, tool_name: str, params: dict) -> dict:
     except Exception as e:
         logger.error(f"Error in tool {tool_name}: {e}", exc_info=True)
         return {'error': str(e)}
+
+
+# The local query log (src/archilles/query_log.py); None while switched off.
+# Every transport reaches a tool through _dispatch_tool, so this is the one
+# place that sees all calls.
+_query_log = None
+
+
+def _start_query_log(enabled: bool):
+    """Switch the query log on if the config asks for it. Returns it, or None."""
+    global _query_log
+    if not enabled:
+        _query_log = None
+        return None
+    from src.archilles.config import master_archilles_dir
+    from src.archilles.query_log import FILE_NAME, QueryLog
+
+    _query_log = QueryLog(master_archilles_dir() / FILE_NAME)
+    logger.info("Query log on: %s", _query_log.path)
+    return _query_log
 
 
 def request_meta(request: dict) -> dict:
@@ -698,6 +726,9 @@ def main():
     else:
         server, tools, transport_cfg, preload_enabled = _init_legacy_single_source()
 
+    # Master config only: the log sits beside it, and a single-source setup
+    # without one has no place that is not inside a library.
+    _start_query_log(master is not None and master.query_log)
     _start_preload(server, preload_enabled)
 
     # Resolve transport from CLI args → config → default (stdio)

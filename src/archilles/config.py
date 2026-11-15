@@ -105,6 +105,7 @@ _LIBRARY_CONFIG_ELSEWHERE: dict[str, str] = {
     "sources": "the master config",
     "transport": "the master config",
     "preload_models": "the master config",
+    "query_log": "the master config",
 }
 
 # Files already reported, so a warning appears once per run rather than once
@@ -483,6 +484,10 @@ class MasterConfig:
     # first search does not hit MCP client tool-call timeouts (60 s in
     # Claude-Code-based clients vs. minutes of cold model load on CPU).
     preload_models: bool = True
+    # Append every MCP tool call (arguments, duration, the places a search
+    # returned) to ``query_log.jsonl`` beside this file. Off by default: the
+    # owner's questions are recorded only where the owner asked for it.
+    query_log: bool = False
 
 
 def master_config_path() -> Path:
@@ -604,6 +609,7 @@ def load_master_config(path: Path | None = None) -> MasterConfig | None:
         citation=dict(raw.get("citation") or {}),
         version=int(raw.get("version", CURRENT_CONFIG_VERSION)),
         preload_models=bool(raw.get("preload_models", True)),
+        query_log=bool(raw.get("query_log", False)),
     )
 
 
