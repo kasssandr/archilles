@@ -620,6 +620,50 @@ def test_a_footnote_renumbered_document_wide_does_not_break_its_page(tmp_path):
     assert (share, lost) == (1.0, [])
 
 
+def _scrambled(text: str) -> str:
+    """A page as a genealogical table lays it out: its words, in another order."""
+    words = text.split()
+    return " ".join(words[1::2] + words[::2])
+
+
+def test_a_table_page_whose_words_stand_around_its_place_is_present(tmp_path):
+    """Wolf: 66 pages of tables called lost, every word of them in the master."""
+    from src.archilles.scriptor_build import page_neighbourhoods, text_coverage
+
+    pdf = _pdf(tmp_path / "book.pdf", [PAGE_A, _scrambled(PAGE_B), PAGE_C])
+    master = _paged_bundle(
+        tmp_path / "b", f"[p. 1] {PAGE_A}\n\n[p. 2] {PAGE_B}\n\n[p. 3] {PAGE_C}", [1, 2, 3])
+    text = master.read_text(encoding="utf-8")
+
+    assert text_coverage(pdf, text)[1] == [2], "the windows alone miss the table"
+    assert text_coverage(pdf, text, neighbourhood=page_neighbourhoods(master)) == (1.0, [])
+    assert check_bundle(master, pdf).coverage == 1.0
+
+
+def test_words_standing_only_far_from_the_page_do_not_rescue_it(tmp_path):
+    """In a long book nearly every word of a page stands somewhere: the second
+    test looks only from the page before to the page after."""
+    pdf = _pdf(tmp_path / "book.pdf",
+               [PAGE_B, PAGE_A, PAGE_C, PAGE_A, _scrambled(PAGE_B)])
+    master = _paged_bundle(
+        tmp_path / "b",
+        f"[p. 1] {PAGE_B}\n\n[p. 2] {PAGE_A}\n\n[p. 3] {PAGE_C}\n\n[p. 4] {PAGE_A}\n\n[p. 5]",
+        [1, 2, 3, 4, 5])
+    check = check_bundle(master, pdf)
+    assert check.lost_pages == [5]
+
+
+def test_a_page_without_its_own_marker_gets_no_second_test(tmp_path):
+    """Nothing says where an unmarked page stands, so nothing is searched for it."""
+    from src.archilles.scriptor_build import page_neighbourhoods
+
+    pdf = _pdf(tmp_path / "book.pdf", [PAGE_A, _scrambled(PAGE_B), PAGE_C])
+    master = _paged_bundle(
+        tmp_path / "b", f"[p. 1] {PAGE_A}\n\n{PAGE_B}\n\n[p. 3] {PAGE_C}", [1, 2, 3])
+    assert page_neighbourhoods(master)(2) is None
+    assert check_bundle(master, pdf).lost_pages == [2]
+
+
 def test_a_volume_with_nothing_left_to_check_is_unknown_not_empty(tmp_path):
     pdf = _pdf(tmp_path / "book.pdf", [PAGE_A, PAGE_B])
     share, _lost = text_coverage(pdf, _master(PAGE_A), skip_pages={1, 2})
