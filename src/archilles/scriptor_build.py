@@ -191,6 +191,32 @@ def page_neighbourhoods(master: Path) -> Callable[[int], str | None] | None:
     return around
 
 
+def _body_words(page) -> list[str]:
+    """The page's words without its top line and its bottom line.
+
+    What the windows grant by counting pages -- the running head and the foot
+    are removed on purpose -- the second test has to grant explicitly, since it
+    counts words: on a sparse page the head alone is more than its tolerance.
+    Den Hollander, *Josephus, the Emperors, and the City of Rome* (9606), lost
+    the nine sparsest pages of its index of sources that way, every entry in
+    the master, missing only "index of ancient sources" (3 of 17 to 59 words).
+    The lines go by geometry, not by the text layer's order: a folio may stand
+    anywhere in the stream (Wolf, 2026-11-15). A body line given up at either
+    end costs the test a few words, never its verdict on a page that is gone.
+    """
+    words = page.get_text("words")
+    if not words:
+        return []
+
+    def same_line(word, anchor) -> bool:
+        middle = (word[1] + word[3]) / 2
+        return anchor[1] <= middle <= anchor[3]
+
+    top = min(words, key=lambda w: w[1])
+    bottom = max(words, key=lambda w: w[3])
+    return [w[4] for w in words if not same_line(w, top) and not same_line(w, bottom)]
+
+
 def _words_in(words: list[str], local: str) -> bool:
     """Whether the page's words stand in ``local``, order aside."""
     norm = [w for w in (_normalise(t) for t in words) if len(w) >= _MIN_LOCAL_WORD_CHARS]
@@ -231,8 +257,8 @@ def text_coverage(
 
     ``neighbourhood`` (see :func:`page_neighbourhoods`) gives a page the
     windows call lost a second test: present if 95 % of its words stand in the
-    master around its own place, in any order. Without it, the windows decide
-    alone.
+    master around its own place, in any order, its top and bottom line aside
+    (:func:`_body_words`). Without it, the windows decide alone.
     """
     import pymupdf
 
@@ -253,7 +279,8 @@ def text_coverage(
             checked += 1
             if sum(w in haystack for w in windows) >= len(windows) / 2:
                 present += 1
-            elif neighbourhood and (local := neighbourhood(number)) and _words_in(words, local):
+            elif (neighbourhood and (local := neighbourhood(number))
+                  and _words_in(_body_words(page), local)):
                 present += 1
             else:
                 lost.append(number)

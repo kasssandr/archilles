@@ -41,14 +41,14 @@ PAGE_B = ("Der zweite Abschnitt handelt von der Schranke des Zitatrechts, von ih
           "jedem geteilten Bild mitschwingt und kaum je ausdrücklich benannt wird.")
 
 
-def _pdf(path: Path, pages: list[str]) -> Path:
+def _pdf(path: Path, pages: list[str], head: str = "DIE ANEIGNUNG VON BILDERN") -> Path:
     """A small real PDF with a running head, a page number and body text."""
     import pymupdf
 
     doc = pymupdf.open()
     for number, body in enumerate(pages, 1):
         page = doc.new_page()
-        page.insert_textbox((40, 30, 550, 50), "DIE ANEIGNUNG VON BILDERN", fontsize=9)
+        page.insert_textbox((40, 30, 550, 50), head, fontsize=9)
         page.insert_textbox((40, 60, 550, 700), body, fontsize=11)
         page.insert_textbox((40, 720, 550, 740), str(86 + number), fontsize=9)
     doc.save(path)
@@ -638,6 +638,24 @@ def test_a_table_page_whose_words_stand_around_its_place_is_present(tmp_path):
     assert text_coverage(pdf, text)[1] == [2], "the windows alone miss the table"
     assert text_coverage(pdf, text, neighbourhood=page_neighbourhoods(master)) == (1.0, [])
     assert check_bundle(master, pdf).coverage == 1.0
+
+
+def test_a_sparse_table_page_is_not_lost_for_its_running_head(tmp_path):
+    """Den Hollander: the head Scriptor removes on purpose was more than 5 % of
+    an index page's words, and nine pages of the index read as lost."""
+    head = "VERZEICHNIS DER ANTIKEN QUELLEN UND STELLEN"
+    pdf = _pdf(tmp_path / "book.pdf", [PAGE_A, _scrambled(PAGE_B), PAGE_C], head=head)
+    master = _paged_bundle(
+        tmp_path / "b", f"[p. 1] {PAGE_A}\n\n[p. 2] {PAGE_B}\n\n[p. 3] {PAGE_C}", [1, 2, 3])
+    assert check_bundle(master, pdf).lost_pages == []
+
+
+def test_a_gone_page_stays_lost_without_its_head_and_foot(tmp_path):
+    """Setting the top and bottom line aside rescues no page whose body is missing."""
+    pdf = _pdf(tmp_path / "book.pdf", [PAGE_A, _scrambled(PAGE_B), PAGE_C])
+    master = _paged_bundle(
+        tmp_path / "b", f"[p. 1] {PAGE_A}\n\n[p. 2]\n\n[p. 3] {PAGE_C}", [1, 2, 3])
+    assert check_bundle(master, pdf).lost_pages == [2]
 
 
 def test_words_standing_only_far_from_the_page_do_not_rescue_it(tmp_path):
