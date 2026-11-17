@@ -1,6 +1,6 @@
 # ARCHILLES – Architecture
 
-**Last updated:** September 2026 (Scriptor seam: `ScriptorExtractor`, bundle text source, provenance columns; the modular pipeline described as what it is since July — experimental)
+**Last updated:** November 2026 (Scriptor bundles: the two-pass coverage test, linked masters, what a bundle commits the system to; EPUB page lists in the format choice. September 2026: Scriptor seam — `ScriptorExtractor`, bundle text source, provenance columns; the modular pipeline described as what it is since July — experimental)
 
 This document describes *how* ARCHILLES is built. For *why* these choices were made, see [DECISIONS.md](DECISIONS.md).
 
@@ -106,7 +106,7 @@ Read-only interface to Calibre's `metadata.db`. This component never modifies th
 
 Per book: title, author(s), publisher, publication date, ISBN/identifiers, language, series information, file formats and paths, cover path, and reading progress. Tags and custom columns are extracted generically—the system discovers and indexes any user-defined custom fields without manual configuration.
 
-The comments field deserves special attention. In many researchers' Calibre libraries, comments contain far more than publisher blurbs: NotebookLM deep-dive analyses, personal reading notes, collected reviews, and structured research summaries. ARCHILLES treats this as a first-class data source, routing it to the separate annotations database (see Storage Architecture below).
+The comments field deserves special attention. In many researchers' Calibre libraries, comments contain far more than publisher blurbs: NotebookLM deep-dive analyses, personal reading notes, collected reviews, and structured research summaries. ARCHILLES treats this as a first-class data source and indexes it as a chunk type of its own (`calibre_comment`) in the same table as the book text (see Storage Layer below).
 
 **Custom field discovery** works by querying Calibre's `custom_columns` table at startup and mapping each field to the appropriate search metadata. This means a user who has created fields like `research_project`, `source_reliability`, or `century` gets those fields indexed automatically without touching any configuration.
 
@@ -132,6 +132,8 @@ Common infrastructure: `base.py` (base class), `models.py` (dataclasses), `excep
 
 Primary extractor for PDF files, built on PyMuPDF (fitz). PDF is the preferred format because it provides reliable page number mapping—essential for citable references. Where a book has a Scriptor bundle, the bundle is read instead (see Scriptor Extractor below); for all other PDFs this extractor remains the path, frozen as the fallback rather than developed further (ADR-032).
 
+One exception in the format choice (October 2026, ADR-014 addendum): an EPUB whose page list names every printed page is indexed before the book's PDF, because it then gives the page-exact citation a PDF is read for, and its structure besides. `epub_outranks_pdf` in `book_files.py` decides: at least 10 readable page labels and at most 1,500 words per label. A proofread EPUB without a page list does not outrank the PDF. A bundle is unaffected by this choice: it is looked up by book ID, so it is read whichever of the book's files was named.
+
 Key capabilities: CropBox filtering eliminates headers, footers, and running page numbers before the text reaches the chunker, which significantly improves embedding quality. Page label extraction maps printed page numbers (which may differ from internal PDF page indices) to chunks, enabling citations like "p. 47" that match what a reader sees in the physical or digital book. Footer detection with footnote disambiguation ensures that footnotes are preserved while page-bottom noise is removed.
 
 **TOC-aware chunking** (March 2026; outline model since Gliederung B8, September 2026): `_build_page_toc_map(toc)` reads the PDF's outline as a tree of Scriptor's `structure.Tree` (depth = outline level, place = physical page). A page belongs to the node that began on it or last before it; `chapter`, `section_title` and `section` (the designator chain, "A.II.1") come from `Tree.fields_of` on the volume's `chapter_level` — so parts lie above the chapters and a "Cover" entry does not disturb them. Whether the outline is believed at all is Scriptor's `outline.credible` (scanner artifacts, page bookmarks like "p. 300", too few entries, a single page). A node's region is its own title's (`region_of_title`) or its parent's (`node_regions`, the apparatus rule of B7); `section_type` follows from it, falling back to the position heuristic when no outline is available.
@@ -152,12 +154,25 @@ The seam to [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor
 
 - **The bundle is a text source, not a format.** It lives in `<library>/.archilles/scriptor/<key>/` (`key` = the book ID, numeric IDs zero-padded to five digits). `Indexer._text_source` swaps only where the text comes from, in `index_book` and `prepare_book`. Every caller still passes the book file, which stays the book's identity: Calibre metadata, viewer annotations (keyed by the file's path), export links and `source_file` all refer to it. `src/archilles/book_files.py` finds the master: exactly one `*.md` that is not `*.review.md` and names a `format_version`; two candidates are refused, not chosen.
 - **Reading.** The grammar is Scriptor's, imported from `scriptor.document` (`archilles-scriptor` is a hard runtime dependency, one direction only). What is Archilles' own is the mapping onto the chunk schema:
-  - The region becomes `section_type`: front matter and contents → `front_matter`; apparatus (`bibliography`, `index`, `abbreviations`, `notes`, `lists` — Scriptor's `APPARATUS`) → `back_matter`; everything else, including `preface`, `appendix` and any unknown name → `main_content`. The EPUB path and the PDF path's contents titles classify by the same vocabulary since outline step B7 (`region_of_title`: `epub:type` first, then the whole title; a filename only where neither exists), and EPUB rows carry `region` too. The PDF path's page heuristic keeps its own word list until B8. The region name itself goes to `region`.
+  - The region becomes `section_type`: front matter and contents → `front_matter`; apparatus (`bibliography`, `index`, `abbreviations`, `notes`, `lists` — Scriptor's `APPARATUS`) → `back_matter`; everything else, including `preface`, `appendix` and any unknown name → `main_content`. The EPUB path and the PDF path's contents titles classify by the same vocabulary since outline step B7 (`region_of_title`: `epub:type` first, then the whole title; a filename only where neither exists), and EPUB rows carry `region` too. The PDF path reads its outline as a tree on the same model since B8; its page heuristic, the fallback for a PDF without a credible outline, still keeps its own word list. The region name itself goes to `region`.
   - The pagination sidecar's `pages[].pos` gives `page_number`, its `source` gives `label_source`.
-  - `#` headings give `chapter`, deeper ones `section_title`.
+  - `#` headings give `chapter`, deeper ones `section_title`. The structure sidecar is not read yet: `chapter` is the `#` title, not the ancestor on the volume's declared `chapter_level`, and the notes sidecar is not read either (ADR-033 and ADR-035, both open).
   - `format_version` goes to `producer_version`. A master whose spec major differs from `SUPPORTED_SPEC_MAJOR` is refused, never indexed on a guess.
 - **Composition.** Chunks follow the master's `chunking_strategy`: `scientific` appends each footnote definition to the paragraph carrying its anchor, `basic` leaves definitions out. Markers are removed from the chunk text after they have been read. A chunk never spans two regions or sections, and overlap is by whole sentences.
-- **Producing bundles.** Bundles are built by `scripts/scriptor_prepare.py`, never by the watchdog. It runs Scriptor in-process, judges each volume by four admission conditions (`src/archilles/scriptor_build.py`: text coverage, notes against the audit, attested page labels, text under an inherited page number), moves a bundle into place only after it passes, and indexes it. A rejected run lands in `scriptor/_rejected/<key>/` and leaves the existing bundle and index untouched. `scriptor/REPORT.md` and `state.json` show each volume's values and whether its master is prepared, hand-edited, or released to the index. The library's `scriptor` config block sets the chunking strategy (default `scientific`).
+- **Producing bundles.** Bundles are built by `scripts/scriptor_prepare.py`, never by the watchdog. It runs Scriptor in-process, judges each volume by four admission conditions (`src/archilles/scriptor_build.py`), moves a bundle into place only after it passes, and indexes it. A rejected run lands in `scriptor/_rejected/<key>/` and leaves the existing bundle and index untouched. `scriptor/REPORT.md` and `state.json` show each volume's values and whether its master is prepared, hand-edited, or released to the index; the state is derived from the master's hash, so a second run over an edited volume brings the index up to the edited text without building anything. `--force` rebuilds from the PDF and replaces the master. The script holds the routine lock while it works, and `--no-index` writes the IDs to the library's index queue instead of indexing. The library's `scriptor` config block sets the chunking strategy (default `scientific`).
+- **The four admission conditions**, all measured on the run itself:
+  1. *Coverage*: the text of at least 98% of the PDF's pages is in the master. A page is judged by all of its eight-word windows, letters only. A page the windows miss is asked a second time, for its words in any order around its own place in the master (from the page before to the page after), with the page's head and foot lines set aside: a genealogical table has its words but not their order. Front matter that Scriptor sets anew is exempt.
+  2. *Notes*: at least as many footnote definitions as Scriptor's audit counted with certainty.
+  3. *Attested*: at least 20% of the page labels are attested.
+  4. *Inherited*: less than 5% of the text stands under another page's number. Scriptor computes the share; a sidecar that does not carry it is not admitted.
+- **Linked masters.** The master is found through the file system, so `book.md` and its sidecars may be file symlinks to a master kept elsewhere, for instance a reading copy in a vault. Then the reading copy, the translation source and the indexed text are one file. Two failures are silent: a dead link makes the lookup return nothing and the book falls back to its PDF, and a missing pagination sidecar leaves the text in place but every `label_source` empty. A directory junction fails once a second prepared document lies in the target folder (two masters, none is used), and a hard link breaks when an editor saves by replacing the file. If the target lies in a library that is indexed itself, it has to be excluded there, or the volume stands in the index twice.
+- **What a bundle commits the system to.**
+  - *One path for PDF text.* The built-in PDF extractor is frozen; every later improvement to PDF text in the index arrives through Scriptor.
+  - *Order.* A book embedded without a bundle is embedded again when it gets one. For a whole library the bundles therefore come first and the embedding run second (ADR-034, gate 5).
+  - *A snapshot.* A bundle carries the text of the Scriptor version that built it (`producer_version` names the format version). Improving Scriptor does not improve existing bundles; rebuilding one is new text and re-indexes that book, and it is the script's job, not the watchdog's.
+  - *No hand check at scale.* Over a whole library the four conditions are the only quality control. A rejected volume stays on the fallback path and is no worse off than before.
+  - *Cost.* Building is CPU work, typically about a minute per volume, and divisible across cores; the embedding is the expensive step.
+  - *Not decided.* Whether scans with an invisible OCR text layer get bundles: a fifth condition against misleading OCR is designed and not built. PDFs without any text layer wait for Scriptor's OCR backend (ROADMAP v1.2).
 
 #### OCR Extractor (`ocr_extractor.py`)
 
@@ -494,9 +509,10 @@ ArchillesService.search()
 | Annotations | LanceDB (same table) | chunk_type='annotation'/'calibre_comment' in chunks table |
 | Embeddings (all) | BGE-M3 (BAAI) | 1024 dimensions, multilingual, GPU |
 | Reranker | bge-reranker-v2-m3 | Optional cross-encoder, CPU default |
-| PDF extraction | PyMuPDF (fitz) | Primary; pdfplumber as fallback |
+| Prepared text (PDF) | archilles-scriptor | Required dependency: reader of the prepared format, outline model, region vocabulary; builds the bundles |
+| PDF extraction | PyMuPDF (fitz) | For PDFs without a bundle; pdfplumber as fallback |
 | EPUB extraction | ebooklib | With custom TOC parser |
-| OCR | Tesseract | Baseline; VLM upgrade path prepared |
+| OCR | Tesseract | Baseline; to be replaced by Scriptor's OCR backend (ROADMAP v1.2) |
 | Language detection | Lingua | 75+ languages, ISO 639-1 codes |
 | MCP protocol | JSON-RPC 2.0 / stdio + HTTP/SSE | stdio for Claude Desktop; SSE for ChatGPT, Codex, Cursor |
 | Web UI | Streamlit | Companion interface |
@@ -530,6 +546,7 @@ archilles/
 │   │   │   └── prompting.py       # PromptBuilder (Claude prompts, XML, markdown export)
 │   │   ├── book_files.py          # discover_formats, Scriptor bundle master lookup
 │   │   ├── scriptor_build.py      # The four admission conditions for a Scriptor bundle
+│   │   ├── citation_check.py      # verify_citation: a wording against its page (bundle first, index second)
 │   │   ├── pipeline_version.py    # Generation marker written into every row
 │   │   ├── pipeline.py            # ModularPipeline (experimental, behind --use-modular-pipeline)
 │   │   ├── profiles.py            # IndexRecipe, legacy hardware profiles
@@ -600,8 +617,11 @@ archilles/
 ├── .archilles/                    # Per-library data (inside library folder)
 │   ├── config.json                # User configuration
 │   ├── rag_db/                    # LanceDB database (all chunks: content + annotations)
-│   └── scriptor/<key>/            # Scriptor bundles: master, review copy, sidecars
-│                                  #   (source, not derivative: back it up)
+│   └── scriptor/                  # Scriptor bundles (source, not derivative: back it up)
+│       ├── <key>/                 #   one per book: master, review copy, sidecars
+│       ├── _rejected/<key>/       #   runs that failed an admission condition
+│       ├── REPORT.md              #   every volume with its values and state
+│       └── state.json             #   what was built and what was indexed, by hash
 │
 └── docs/
     ├── DECISIONS.md               # Strategic + technical decision log
@@ -645,7 +665,7 @@ Environment variables:
 
 ARCHILLES makes no network calls during normal operation. The only exceptions are the initial download of the BGE-M3 model (~2.2 GB) and optionally the cross-encoder model (~560 MB), both fetched from Hugging Face on first run.
 
-There is no telemetry, no analytics, no usage tracking. The system reads Calibre's metadata.db but never writes to it. All ARCHILLES data lives in the `.archilles` directory within the user's Calibre library folder, making it easy to back up, move, or delete.
+There is no telemetry, no analytics, no usage tracking. The system reads Calibre's metadata.db but never writes to it. All ARCHILLES data lives in the `.archilles` directory within the user's Calibre library folder, making it easy to back up, move, or delete. One part of it is not disposable: `.archilles/scriptor/` holds the Scriptor bundles, and a master corrected by hand cannot be rebuilt from the book.
 
 When connected to an external LLM via MCP, the search results (text chunks with metadata) are sent to the LLM—this is the intended use case. But the user controls which LLM they connect to, and the connection is initiated by the user's MCP client (e.g., Claude Desktop), not by ARCHILLES.
 
@@ -659,11 +679,11 @@ The architecture is designed with explicit extension zones for future developmen
 
 **Pipeline components:** Embedders implement `TextEmbedder`, annotation sources register in the `AnnotationProviderRegistry`. The parser and chunker ABCs (`DocumentParser`, `TextChunker`) belong to the experimental modular pipeline (section 3) and reach production only through it.
 
-**Embedding models:** BGE-M3 is the current default. The `BGEEmbedder` already supports multiple BGE variants; evaluation of multilingual-e5 and jina-embeddings-v3 is planned for Q2 2026.
+**Embedding models:** BGE-M3 is the current default. The `BGEEmbedder` already supports multiple BGE variants; whether the model stays is one of the two questions the benchmark harness is to answer before a large re-index (ADR-030, not begun).
 
 **Chunking strategies:** `SemanticChunker` (sentence-boundary-aware) and `FixedSizeChunker` are available. Parent-child hierarchies (index small chunks for precision, deliver large context for comprehension) are supported via `parent_id` and `chunk_type` fields.
 
-**Search backends:** The LanceDB abstraction supports plugging in alternative search strategies. Graph RAG via LightRAG is planned for evaluation in Q2 2026.
+**Search backends:** The LanceDB abstraction supports plugging in alternative search strategies. Graph RAG via LightRAG is deferred until it has been evaluated (DECISIONS.md, section IV; ROADMAP v2.0).
 
 **The `.archilles` folder** serves as the defined extension zone per library. Configuration, databases, cached models, and any future plugin data live here—cleanly separated from Calibre's own data.
 

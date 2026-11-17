@@ -2,7 +2,7 @@
 
 **Dokumenttyp:** Lebende Referenz für strategische und technische Entscheidungen
 **Erstfassung:** 13. Februar 2026
-**Letzte Überarbeitung:** 11. November 2026 (ADR-040 Themenkarte und Fernverwandtschaften, Entwurf; zuvor 18. September: ADR-033 Gliederungsmodell, ADR-034 Adresse einer Stelle)
+**Letzte Überarbeitung:** 17. November 2026 (Nachträge zum Stand: ADR-014, ADR-030, ADR-032 bis ADR-036; zuvor 11. November: ADR-040 Themenkarte und Fernverwandtschaften, Entwurf; 18. September: ADR-033 Gliederungsmodell, ADR-034 Adresse einer Stelle)
 **Zweck:** Jede neue Claude-Session, jeder künftige Contributor und Tom selbst in drei Monaten sollen verstehen, *warum* ARCHILLES so gebaut ist, wie es gebaut ist.
 
 ---
@@ -400,6 +400,8 @@ Das `[ANNOTATION]`-Präfix sorgt dafür, dass BGE-M3 den semantischen Kontext "N
 - **Skip-Existing vor Quality-Vergleich** (commit 192593b): Wenn für ein Buch bereits ein JSONL existiert, wird die teure Qualitätsanalyse übersprungen. Performance-Gewinn bei Batch-Läufen über teilweise vorbereitete Bestände erheblich.
 - **Back-Matter-Heuristik entfernt** (commit eabed12): Die positionsbasierte Heuristik, die Bibliographien und Indizes anhand ihrer Zeichenposition im Dokument erkannte, wurde vollständig entfernt. Sie war strukturell unzuverlässig und produzierte False Positives. Der Quality-Score berücksichtigt Misplaced-Back-Matter jetzt als Scoring-Kriterium statt als Filter – ein Befund fließt in die Formatwahl ein, blockiert aber keine Chunks mehr.
 
+**Nachtrag (Oktober 2026): Ein EPUB mit vollständiger Seitenliste geht dem PDF vor.** Die Regel „PDF zuerst" hatte ihren Grund in der seitengenauen Zitation. Ein EPUB, dessen Seitenliste (`page-list` bzw. `pageTarget`) die gedruckten Seiten nennt, leistet dasselbe und bringt seine Gliederung mit. `epub_outranks_pdf` (`src/archilles/book_files.py`) lässt es deshalb vor dem PDF indexieren, wenn die Liste mindestens 10 lesbare Labels trägt und höchstens 1.500 Wörter auf ein Label kommen. Die Schwelle ist gemessen (22. Oktober 2026): Vollständige Seitenlisten liegen unter 600 Wörtern je Label, unvollständige über 3.000 (Sammelbände, die nur ihre Vorseiten auflisten), und dazwischen liegt nichts. **Ein korrekturgelesener Text allein genügt nicht** (Entscheidung des Nutzers vom 23. Oktober 2026): Ein Gutenberg-EPUB ohne Seitenliste tauschte die Zitation gegen den besseren Text ein, das PDF bleibt dort primär. Die Regel greift an zwei Stellen, im `CalibreAdapter` und in `discover_formats` (`ba99eac`, `57e4558`, `cb0a871`). Ein Scriptor-Bündel (ADR-032) bleibt davon unberührt: Es wird über die Buch-ID gefunden, nicht über das gewählte Format.
+
 ### ADR-015: Two-Phase Indexing Pipeline – Prepare/Embed (März 2026)
 
 **Kontext:** Die bisherige Pipeline koppelte Textextraktion (CPU-intensiv, kein GPU erforderlich) und Embedding-Erzeugung (GPU-intensiv) in einem einzigen Durchlauf. Das erzeugte zwei praktische Probleme: Erstens musste bei jedem Neustart der gesamte Prozess für ein Buch wiederholt werden, selbst wenn die Textextraktion bereits erfolgreich war. Zweitens war die Pipeline nicht auf verteilte Setups vorbereitet, bei denen Extraktion und Embedding auf verschiedenen Maschinen laufen.
@@ -717,6 +719,12 @@ Der stdio-Pfad benutzt — anders als SSE und Streamable HTTP (ADR-024) — kein
 
 **Nachtrag (20. September 2026): Das Goldset-Schema hat eine dritte Kategorie, bevor es eingefroren wird.** Neben `negative` (misst das Retrieval) tritt `weak-evidence` (misst die Antwort: Treffer über der Schwelle, erwartete Antwort trotzdem „nicht belegt") mit der Metrik `abstention_rate`. Begründung, Abgrenzung und die zugehörige Schärfung von Regel 2 des System-Prompts stehen in **ADR-036**; die Ausführungsnotizen zu Schritt 1 und 2 sind entsprechend nachgezogen (`docs/internal/BRIEFING_BENCHMARK_HARNESS_2026-07-05.md`). Der Satz „das Goldset-Schema ist die eine teure Entscheidung" gilt unverändert — er ist der Grund, warum diese Kategorie jetzt entschieden wurde und nicht, wenn der Antwortpfad steht.
 
+**Stand (17. November 2026): weiterhin nicht begonnen**, es gibt kein `benchmarks/` und keinen Runner. Drei Dinge haben sich seit August bewegt.
+
+- **Zwei Fragensets, ein Schema** (Entscheidung des Nutzers vom 16. November 2026). Das öffentliche Set fragt nur über frei zugängliche Bände (gemeinfrei oder offen lizenziert), damit jeder die Messung nachvollziehen kann; seine Fragen sind aus den Bänden geschrieben. Das private Set trägt die Forschungsthemen des Nutzers auf seiner Bibliothek und bleibt lokal. Der Schema-Nachtrag zu Schritt 1 liegt vor (`docs/internal/GOLDSET_SCHEMA_2026-11-16.md`): Eine Stelle wird als Adresse nach ADR-034 notiert, die Urteile stehen in einer eigenen Datei. Gebaut ist davon nichts.
+- **Ein Fehler im Entwurf vom Juli.** `negative`-Fälle gelten als bestanden, wenn kein Treffer über `min_similarity` zurückkommt. Die Schwelle wirkt aber nur im Modus `semantic` (`engine/search.py`, `_apply_min_similarity`); im Hybridmodus wird sie übergangen. Für die Messung laufen solche Fälle in `semantic`. Ob die Schwelle auch im Hybridmodus wirken soll, ist offen.
+- **Offen: Wartet der Massen-Embed auf dieses Instrument?** Dieser ADR blockiert den gebündelten Reindex bis zur Messung (Parent-Child-Gate, Embedder-Gate). Die Entscheidungen vom September führen den Weg zum Massen-Embed über die Themenmessung, die Gliederung im Bündel und die Bündel für den Bestand (ADR-033, ADR-034, [ROADMAP](ROADMAP.md)) und nennen die beiden Gates nicht mehr als Bedingung. Welche Fassung gilt, ist nicht entschieden.
+
 ---
 
 ### ADR-032: Die Naht Scriptor → Archilles — Zulieferer mit reichem Kontrakt, Abhängigkeit in einer Richtung (September 2026)
@@ -787,6 +795,25 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
 - **Seitenbereich je Chunk:** Ein Chunk zitiert die Seite seines ersten Zeichens; ob der Ausgang einen Bereich zeigen soll, entscheidet der Nutzer.
 - ~~**Spec-Sätze:** die Regel „Überschrift vor Marker" und `pages[].pos` als Kanal der physischen Seite gehen mit der nächsten Spec-Version.~~ Erledigt in Spec 0.4.0 (§4.2, §6.3), 18. September 2026.
 
+**Nachtrag (17. November 2026): Stand und Tragweite.**
+
+*Stand.* Der Weg ist an einer ersten Charge von Monographien erprobt: gebaut, geprüft, einzelne Bände abgelehnt, ein Teil im Produktionsindex, der Rest für die Themenmessung gebaut (ADR-033). Die Bündel für den Bestand stehen aus. K6 ist gemessen: im Median rund eine Minute je Band, einzelne lange Bände eine Viertelstunde, auf einem Prozessorkern und ohne Grafikkarte.
+
+*Bedingung 1 nachgeschärft (15./16. November 2026, `0f0081c`, `2882014`).* Eine Seite, die die Acht-Wort-Fenster verfehlen, wird ein zweites Mal gefragt: nach ihren Wörtern in beliebiger Reihenfolge, und nur um ihren eigenen Platz im Master herum, von der Vorseite bis zur Folgeseite. Kopf- und Fußzeile der Seite bleiben dabei außen vor. Anlass war ein Band mit Stammtafeln, der Dutzende Seiten an die Fenster verlor, obwohl jedes Wort im Master stand: Die Fenster prüfen die Reihenfolge, und eine Tafel hat keine. Die Suche bleibt örtlich, weil in einem Band von tausend Seiten fast jedes Wort irgendwo steht und eine fehlende Seite eine Suche über den ganzen Master bestünde.
+
+*Der Master per Verweis (seit 1. November 2026).* `bundle_master` findet den Master über das Dateisystem. `book.md` und seine Sidecars können deshalb Datei-Symlinks auf einen Master an anderem Ort sein, etwa auf die Lesefassung in einem Vault; dann sind Lesefassung, Übersetzungsvorlage und Suchtext dieselbe Datei. Eine Junction auf den Ordner scheitert, sobald dort ein zweites aufbereitetes Dokument liegt (zwei Master, keiner wird genommen), und ein Hardlink reißt beim ersetzenden Speichern. Zwei Fehlerfälle sind still: Ein toter Verweis lässt den Band auf das PDF zurückfallen, eine fehlende Seitendatei lässt den Text stehen und `label_source` leer. Liegt das Ziel in einer Quelle, die selbst indexiert wird, muss es dort ausgeschlossen werden, sonst steht der Band doppelt im Index.
+
+*Tragweite.* Vier Folgen, die über die Konsequenzen oben hinausgehen:
+
+- **Die Reihenfolge ist nicht mehr frei.** Ein Band, der ohne Bündel eingebettet wird und später eines bekommt, wird noch einmal gerechnet. Für den Bestand heißt das: erst die Bündel, dann der eine Massen-Embed (Tor 5, ADR-034). Die Bände ohne Volltext warten auf diese Reihenfolge, nicht auf die Grafikkarte.
+- **Bei der Masse prüft niemand von Hand.** Für die PDFs mit echtem Textlayer, in einem gewachsenen Bestand die große Mehrheit, sind die vier Bedingungen die einzige Qualitätskontrolle. Ein abgelehnter Band bleibt auf dem Rückfallpfad und ist nicht schlechter gestellt als zuvor. Das ist die vorgesehene Antwort; die Einzelreparatur ist es nicht.
+- **Ein Bündel ist eine Momentaufnahme.** Es trägt den Text der Scriptor-Fassung, die es gebaut hat. Verbesserungen an Scriptor erreichen gebaute Bündel nur über einen Neubau, und der kostet die Neueinbettung des Bandes. Auf einen „fertigen" Scriptor zu warten lohnt deshalb nicht. Ein von Hand bearbeiteter Master wird nie neu erzeugt; `--force` nimmt darauf keine Rücksicht und gehört nicht auf bearbeitete Bände.
+- **Die Scans sind nicht entschieden.** Neben den PDFs mit echtem Textlayer stehen in einem gewachsenen Bestand Scans mit unsichtbarer Texterkennung und einige wenige ganz ohne Text. Ob die Scans mit Texterkennung Bündel bekommen, ist offen; eine fünfte Bedingung gegen irreführende Texterkennung ist entworfen, nicht gebaut. EPUBs bekommen kein Bündel.
+
+*Offene Punkte, nachgeführt.* S7 ist im Gliederungsmodell aufgegangen und gebaut (ADR-033, B7/B8). Der Noten-Sidecar (S12) ist seit Spec 0.6.0 zur Hälfte da: Scriptor schreibt die gedruckte Nummer jeder Note, noch nicht die Sicherheit ihres Ankers (ADR-035). OCR (S8, S9) und die Tabellen-Region (S13) liegen hinter dem Massen-Embed. Zwei Aufräumentscheidungen warten auf den Nutzer: den stillgelegten Modularpfad entfernen (S11) und den Altbestand `prepared_chunks` löschen.
+
+**Nach außen dokumentiert** ist das Bündel seit dem 17. November 2026: `README.md`, `FEATURES.md` §2.2, `USAGE.md`, `FAQ.md`, und in Scriptors `README.md` sowie in §3 der Spec.
+
 ---
 
 ### ADR-033: Das Gliederungsmodell — Tiefe ist Verschachtelung, die Kapitelebene deklariert der Band (September 2026)
@@ -807,9 +834,15 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
 **Offen:**
 - `section` als Bezeichnerkette („A.II.1"), Entscheidung des Nutzers vor B6. Bei seitenlosen Texten ist sie die Stellenangabe.
 - Die Chunk-Grenze (jede Überschrift oder nur die Kapitelebene) wird nach der Messung G5 entschieden, zusammen mit dem Kontextkopf „Kapitel › Abschnitt" im eingebetteten Text (Perspektiven-Messung P-M1), und zwar vor dem Massen-Embed.
-- B6: `ScriptorExtractor` liest den Baum. B7/B8: EPUB-Pfad und PDF-Rückfall auf dem Modell; darin geht Naht-Schritt S7 auf.
+- B6: `ScriptorExtractor` liest den Baum. ~~B7/B8: EPUB-Pfad und PDF-Rückfall auf dem Modell; darin geht Naht-Schritt S7 auf.~~ Gebaut am 23. und 24. September 2026, siehe Nachtrag.
 
 **Verworfen:** Eine `structure`-Spalte im Index (`chapter`, `section_title` und `section` genügen). Pandoc-Attribute an Überschriften (`{#…}` bleibt reserviert). Verzeichnis-Links auf Überschriften statt auf Seitenanker. Eine feste Tabelle Schema → Tiefe.
+
+**Nachtrag (17. November 2026): B7 und B8 sind gebaut, Tor 3 hat ein Auswertedesign.**
+
+- **B7 (23. September 2026, `742c1ac`):** Der EPUB-Pfad und die Verzeichnistitel des PDF-Pfads klassifizieren mit Scriptors Regionsvokabular. **B8 (24. September 2026, `3fd1547`):** Der PDF-Rückfall liest die Outline als Baum auf dem Modell; `chapter`, `section_title` und die Bezeichnerkette `section` kommen aus `Tree.fields_of` auf der `chapter_level` des Bandes. Nur die Seitenheuristik für PDFs ohne glaubwürdige Outline behält ihre eigene Wortliste.
+- **Die Messung für Tor 3 läuft als Themenmessung.** An die Stelle von dreißig Einzelfragen ist ein Themenkatalog an einem Probekorpus getreten (Wunsch des Nutzers vom 14. November 2026). Die Bündel dafür stehen seit dem 16. November. Das Auswertedesign ist am selben Tag bestätigt: Die Beweislast liegt bei der aufwendigeren Variante. Der Kontextkopf kommt nur, wenn er im Mittel mindestens einen einschlägigen Treffer mehr unter zehn bringt und nirgends etwas kostet; bei Gleichstand bleibt die sparsamere Fassung. Die Treffer beurteilt ein Sprachmodell (Opus), blind für die Variante, und der Nutzer liest eine Stichprobe von 60 Stellen gegen.
+- **Die erste Hälfte von B6 rückt vor die Probeindizes.** Der `ScriptorExtractor` schneidet heute an jeder Überschrift und nimmt `chapter` aus der `#`-Zeile statt vom Vorfahren auf `chapter_level`. Die Variante „Schnitt am Kapitel" lässt sich so nicht bauen. Zuerst kommen deshalb die Ableitung über `scriptor.structure` und der Schnitt als Schalter, mit dem heutigen Verhalten als Voreinstellung. Gebaut ist davon nichts.
 
 ### ADR-034: Die Adresse einer Stelle — Seite und Wortlaut, die Chunk-ID ist Cache (September 2026)
 
@@ -824,9 +857,11 @@ Die Dokumentation (`AGENTS.md`, `ARCHITECTURE.md`) beschrieb zudem den stillgele
 - **Keine Absatznummer**, weder sichtbar noch als leerer Span. Diese Option ist geschlossen.
 - **Tor 5:** Die Bündel-Population muss vor dem Massen-Embed stehen. Ein Band, der ohne Bündel eingebettet wird, kostet mit seinem späteren Bündel einen zweiten Embed-Lauf (Embed ≈ 27 GPU-Tage auf der T1000).
 
-**Umsetzung:** Kontrakt und Beleganker-Syntax stehen in §II.5 der `WATCHDOG_AND_WIKI.md`, die Spec-Sätze in 0.4.0. Gebaut ist noch nichts. Die Reihenfolge laut Briefing: Messung P-M2 (Adress-Stabilität, legt die Mindestlänge des Wortlauts fest), dann `Bundle.locate` in Scriptor (P-B1; `find_snippet` zieht dafür nach `scriptor.document`), dann `verify_citation` in Archilles (P-B2).
+**Umsetzung:** Kontrakt und Beleganker-Syntax stehen in §II.5 der `WATCHDOG_AND_WIKI.md`, die Spec-Sätze in 0.4.0. ~~Gebaut ist noch nichts.~~ (Stand September; siehe Nachtrag.) Die Reihenfolge laut Briefing: Messung P-M2 (Adress-Stabilität, legt die Mindestlänge des Wortlauts fest), dann `Bundle.locate` in Scriptor (P-B1; `find_snippet` zieht dafür nach `scriptor.document`), dann `verify_citation` in Archilles (P-B2).
 
 **Verworfen:** Die Chunk-ID als Anker. Zeichen-Offsets, weil sie niemand liest: `expand_chunk_context` nimmt `parent_id` oder `window_text`, `expansion_chars` ist unbenutzt. `text_match.py` für den Wortlautabgleich, weil es ein Schlüsselwortvergleich ist; der gemeinte Textabgleich ist Scriptors `find_snippet`.
+
+**Nachtrag (17. November 2026): Die Adresse ist gebaut, Tor 5 nicht erreicht.** P-M2 hat 1.437 Adressen durch drei Erzeugungen und drei Arten von Bearbeitung aufgelöst, ohne einen stillen Fehler; die Mindestlänge des Wortlauts ist acht Wörter (`MIN_WORDING_WORDS`). `Bundle.locate` steht in `scriptor.document` (P-B1). `verify_citation` ist seit dem 19. September 2026 MCP-Werkzeug (P-B2, `d43b9fc`, `src/archilles/citation_check.py`): Ein Band mit Bündel wird gegen den Master geprüft, ein Band ohne Bündel gegen die Chunks des Index, und dieser schwächere Zeuge wird in der Antwort als solcher genannt. Der Notenzweig antwortet weiter `note_checked: false`; der Noten-Sidecar, auf den er wartet, ist seit Spec 0.6.0 definiert. Tor 5 ist nicht erreicht: Die Bündel für den Bestand stehen aus. Der Weg dahin steht in der [ROADMAP](ROADMAP.md), Abschnitt „Der Weg zum Volltext-Index".
 
 ---
 
@@ -851,6 +886,8 @@ Dass der Zweifel nicht im Liefertext steht, ist richtig und bleibt: Spec §4.6 v
 
 **Verworfen:** Den Vertrauenswert in den Prompt zu geben, wie der Anlass-Artikel es tut — ein Leser kann ihn nicht nachprüfen. Konfidenzflags im Master (verletzt §4.6 und damit die Übersetzbarkeit). Eine stille Reparatur geratener Anker; wo der Anker unsicher ist, steht das dran, wie bei *relocated* in ADR-034.
 
+**Umsetzungsstand (November 2026): nicht gebaut.** Im Code gibt es kein `anchor_confidence` (geprüft am 16. November 2026). Der Kanal ist zur Hälfte da: Spec 0.6.0 (27. Oktober 2026) definiert den Noten-Sidecar, und Scriptor schreibt darin die gedruckte Nummer, die Seite und die Sammlung jeder Note, aber noch nicht die Klasse ihres Ankers. Archilles liest den Sidecar noch nicht. In der Reihenfolge des Lagebilds vom 16. November liegt das Paket hinter dem Massen-Embed.
+
 ---
 
 ### ADR-036: Abstinenz als Markenkern — die Goldset-Kategorie `weak-evidence` und die Abstinenzrate (September 2026)
@@ -871,6 +908,8 @@ Die Lücke liegt eine Schicht weiter. Der reale Halluzinationsfall in einer geis
 **Konsequenzen:** Die Abstinenzrate ist die einzige Zahl aus dem Anlass-Material, die sich in der Kommunikation gegen jedes Second-Brain-System stellen lässt, und sie gehört damit neben die Citation-Accuracy in das veröffentlichte Benchmark (ADR-030: Launch-Asset). Kosten insgesamt: ein Enum-Wert, ein Dutzend Goldset-Fälle, ein Prompt-Absatz, ein Test.
 
 **Verworfen:** Die Kategorie nachträglich einzuziehen, wenn der Antwortpfad steht (Schemabruch). Ein LLM-Judge für die Abstinenzprüfung (Kosten, Reproduzierbarkeit — und unnötig, sobald Regel 2 eine Form hat). `weak-evidence` als Spielart von `negative` zu führen: Die beiden messen verschiedene Schichten, und sie in einen Nenner zu werfen verdeckt genau den Unterschied, auf den es ankommt.
+
+**Umsetzungsstand (November 2026): nicht begonnen.** Weder die Kategorie noch die Schärfung von Regel 2 ist gebaut. Die Frist läuft nicht, solange Schritt 1 des Harness nicht gebaut wird (ADR-030).
 
 ---
 
