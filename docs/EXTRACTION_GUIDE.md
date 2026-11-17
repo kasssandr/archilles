@@ -1,105 +1,105 @@
-# Universal Text Extraction Guide
+# Text Extraction Guide
+
+**Last updated:** November 2026
+
+This guide describes the extractor layer (`src/extractors/`): where a book's text comes from, what an extraction returns, and how to call it yourself. Indexing uses this layer for every book; you only need the API below if you want to inspect an extraction or build on it. For the design behind it, see [ARCHITECTURE.md](ARCHITECTURE.md), section 2.
+
+---
 
 ## Overview
 
-The ARCHILLES Universal Text Extractor can extract text from **20+ e-book formats** using a robust multi-tier fallback strategy:
+`UniversalExtractor` takes a file and returns its text, cut into chunks that each carry their address: page, printed page label, chapter, section type. It picks the extraction method itself:
 
 ```
-1. Native Extractors → Fast & Precise
-   ├─ PDF (pdfplumber/PyMuPDF)
+0. Scriptor master → the prepared text of a PDF, read instead of the PDF
+   └─ Markdown whose metadata block names a format_version
+
+1. Native extractors → fast and precise
+   ├─ PDF  (PyMuPDF, pdfplumber as fallback, optional OCR)
    ├─ EPUB (ebooklib)
-   ├─ TXT (native Python)
-   └─ HTML (BeautifulSoup)
+   ├─ TXT, Markdown, reStructuredText
+   └─ HTML
 
-2. Calibre Conversion → Reliable & Comprehensive
-   └─ MOBI, AZW3, DJVU, DOC, DOCX, RTF, ODT, CHM, FB2, LIT, etc.
-      → Convert to EPUB/PDF → Extract
-
-3. Pandoc Fallback → For Legacy Formats
-   └─ WordPerfect, LaTeX, etc.
+2. Calibre conversion → everything else
+   └─ MOBI, AZW3, DJVU, DOC, DOCX, RTF, ODT, CHM, FB2, LIT, ...
+      → converted to EPUB or PDF with ebook-convert, then extracted
 ```
+
+If a native extractor fails on a file, the Calibre conversion is tried before the extraction gives up.
+
+---
+
+## Where the text of a PDF comes from
+
+A PDF has two possible text sources.
+
+**The Scriptor bundle.** Where a book has a bundle in `<library>/.archilles/scriptor/<book id>/`, indexing reads the bundle's master (`book.md`) instead of the PDF. [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor) made that text from the PDF: paragraphs rejoined, running heads removed, footnotes bound to their sentences, the printed page label at every page break, and bibliography, index and notes sections named as regions. `ScriptorExtractor` reads the master and its pagination sidecar and cuts the chunks. It parses no marker itself; the grammar is Scriptor's (`scriptor.document`).
+
+**The PDF itself.** For every PDF without a bundle, `PDFExtractor` reads the file with PyMuPDF. This path is frozen as the fallback: it works as before and is not developed further. Improvements to PDF text arrive through Scriptor.
+
+The swap happens in indexing (`Indexer._text_source`), not in this layer. `UniversalExtractor` extracts the file you hand it. Hand it a PDF and you get the built-in path; hand it a bundle's master and you get the prepared text.
+
+What a bundle is, how it is built and what admits it: [FEATURES.md §2.2](FEATURES.md) and [USAGE.md](USAGE.md#scriptor-bundles-pdf).
 
 ---
 
 ## Supported Formats
 
-### Tier 1: Native Extraction (Highest Quality)
+### Scriptor master
+
+| Format | Recognised by | Notes |
+|--------|---------------|-------|
+| Prepared document (`.md`) | A metadata block that names a `format_version` | Printed page labels with their provenance, named regions, footnotes bound per chunking strategy. A master written under a newer major version of the format is refused |
+
+Any other Markdown file is read as plain text.
+
+### Native extraction
 
 | Format | Extension | Library | Notes |
 |--------|-----------|---------|-------|
-| PDF | `.pdf` | pdfplumber, PyMuPDF | Layout-aware, preserves page numbers, coordinates for citations |
-| EPUB | `.epub` | ebooklib | Extracts chapters, TOC, metadata |
-| TXT | `.txt`, `.md`, `.rst` | Native Python | Automatic encoding detection |
-| HTML | `.html`, `.htm`, `.xhtml` | BeautifulSoup | Preserves structure, extracts headings |
+| PDF | `.pdf` | PyMuPDF, pdfplumber | Page numbers and printed page labels, outline as chapter and section, running head and footer removal |
+| EPUB | `.epub` | ebooklib | Chapters from the table of contents, section classification, page labels where the EPUB carries a page list |
+| Text | `.txt`, `.md`, `.rst` | Native Python | Encoding detection, YAML frontmatter stripped |
+| HTML | `.html`, `.htm`, `.xhtml` | BeautifulSoup | Headings and structure |
 
-**Features:**
-- ✅ Fastest extraction
-- ✅ Best quality (preserves structure)
-- ✅ Page/chapter information
-- ✅ Table of contents
-- ✅ Metadata (author, title, year)
-
-### Tier 2: Calibre Conversion (Most Comprehensive)
+### Calibre conversion
 
 **Requires:** Calibre installed ([Download](https://calibre-ebook.com/download))
 
-| Format | Extension | Common Use Case |
-|--------|-----------|-----------------|
+| Format | Extension | Common use |
+|--------|-----------|------------|
 | Kindle | `.mobi`, `.azw`, `.azw3`, `.azw4` | Amazon Kindle books |
-| Scanned Books | `.djvu`, `.djv` | Old academic scans, critical editions |
-| Word Documents | `.doc`, `.docx` | Manuscripts, dissertations |
+| Scanned books | `.djvu`, `.djv` | Older academic scans, critical editions |
+| Word documents | `.doc`, `.docx` | Manuscripts, dissertations |
 | Rich Text | `.rtf` | Legacy documents |
 | OpenDocument | `.odt` | LibreOffice documents |
 | FictionBook | `.fb2` | Russian e-books |
 | Microsoft Reader | `.lit` | Old Microsoft format |
-| Palm | `.pdb`, `.pml`, `.prc` | Palm Pilot era |
-| Help Files | `.chm` | Microsoft Help files |
-| Comic Books | `.cbr`, `.cbz` | Comics (image-based) |
+| Palm | `.pdb`, `.pml`, `.prc` | Palm era |
+| Help files | `.chm` | Microsoft Help |
 
-**How it works:**
-1. Detects unsupported format
-2. Converts to EPUB or PDF using Calibre's `ebook-convert`
-3. Extracts text using native extractors
-
-**Performance:**
-- ⏱ Slower (conversion overhead)
-- ✅ Very reliable
-- ✅ Handles complex/exotic formats
-
-### Tier 3: Legacy Formats (Planned)
-
-| Format | Extension | Notes |
-|--------|-----------|-------|
-| WordPerfect | `.wpd`, `.wps` | Via Pandoc or wvWare |
-| LaTeX | `.tex` | Via Pandoc |
+The file is converted to EPUB or PDF with Calibre's `ebook-convert` and then read by the native extractor. Slower, because of the conversion, and reliable.
 
 ---
 
 ## Installation
-
-### 1. Install Python Dependencies
 
 ```bash
 cd archilles
 pip install -r requirements.txt
 ```
 
-### 2. Install Calibre (Optional but Recommended)
+This installs `archilles-scriptor` from GitHub (git required). The extractors import it for the prepared format, the outline model and the region vocabulary, so it is needed for PDFs and EPUBs as well, not only for bundles.
 
-**For maximum format support, install Calibre:**
+**Calibre** (optional, for the conversion formats):
 
 - **macOS:** `brew install calibre`
 - **Ubuntu/Debian:** `sudo apt install calibre`
 - **Windows:** [Download installer](https://calibre-ebook.com/download)
 
-**Verify installation:**
-```bash
-ebook-convert --version
-```
+Verify with `ebook-convert --version`.
 
-### 3. Install Tesseract OCR (Optional)
-
-**For scanned PDFs/DJVUs that need OCR:**
+**Tesseract** (optional, for scanned PDFs without a text layer):
 
 - **macOS:** `brew install tesseract`
 - **Ubuntu/Debian:** `sudo apt install tesseract-ocr`
@@ -109,102 +109,86 @@ ebook-convert --version
 
 ## Quick Start
 
-### Extract Single File
+### Extract a single file
 
 ```python
 from src.extractors import UniversalExtractor
 
-# Initialize extractor
 extractor = UniversalExtractor()
-
-# Extract text
 result = extractor.extract("path/to/book.pdf")
 
-# Access results
-print(f"Total words: {result.metadata.total_words:,}")
-print(f"Total chunks: {result.metadata.total_chunks}")
-print(f"First chunk: {result.chunks[0]['text']}")
+print(f"Method: {result.metadata.extraction_method}")
+print(f"Words:  {result.metadata.total_words:,}")
+print(f"Chunks: {result.metadata.total_chunks}")
+print(result.chunks[0]['text'])
 ```
 
-### Extract with Custom Settings
+### Extract a bundle's master
+
+```python
+result = extractor.extract("/path/to/library/.archilles/scriptor/01234/book.md")
+
+for chunk in result.chunks[:5]:
+    meta = chunk['metadata']
+    print(meta['page_label'], meta['label_source'], meta['region'], meta['chapter'])
+```
+
+The sidecars are found beside the master. Without the pagination sidecar the text is still read, but `label_source` stays empty.
+
+### Settings
 
 ```python
 extractor = UniversalExtractor(
-    chunk_size=512,      # Target chunk size in tokens
-    overlap=128,         # Overlap between chunks
-    enable_ocr=True,     # Enable OCR for scanned PDFs
+    chunk_size=512,          # target chunk size in tokens
+    overlap=128,             # overlap between chunks
+    enable_ocr=True,         # OCR for scanned PDFs, detected per page
+    ocr_language="deu+eng",  # Tesseract language codes
 )
-
-result = extractor.extract("scanned_book.djvu")
 ```
 
-### Batch Extraction
-
-```python
-from pathlib import Path
-
-# Find all PDFs and EPUBs
-files = list(Path("~/Calibre Library").glob("**/*.{pdf,epub}"))
-
-# Extract from all files
-results = extractor.extract_batch(files, skip_errors=True)
-
-# Process results
-for file_path, extracted_text, error in results:
-    if extracted_text:
-        print(f"✓ {file_path.name}: {extracted_text.metadata.total_chunks} chunks")
-    else:
-        print(f"✗ {file_path.name}: {error}")
-```
+`force_ocr`, `ocr_backend` and `calibre_path` are the remaining options. For a Scriptor master, a chunk never spans two regions or sections, and overlap is by whole sentences.
 
 ---
 
-## Advanced Usage
+## What an extraction returns
 
-### Access Metadata
+`extract()` returns an `ExtractedText`:
+
+| Field | Contents |
+|-------|----------|
+| `full_text` | The whole text |
+| `chunks` | A list of dicts, each with `text` and `metadata` |
+| `metadata` | `ExtractionMetadata`: detected format, extraction method, timing, counts (`total_pages`, `total_words`, `total_chunks`), warnings and errors, whether OCR was applied |
+| `toc` | The table of contents as the extractor read it |
+| `footnotes` | Footnotes where the extractor separates them |
+
+The metadata of a chunk (`ChunkMetadata`):
+
+| Field | Contents |
+|-------|----------|
+| `page`, `page_label` | Physical page and the label as printed (`xiv`, `62`) |
+| `chapter`, `section`, `section_title` | Place in the volume's division |
+| `section_type` | `front_matter`, `main_content` or `back_matter`; search excludes all but main content by default |
+| `region` | The region name where one is known (`bibliography`, `index`, `preface`, ...). Scriptor masters carry it from their region markers, EPUB chunks from their titles |
+| `label_source` | Scriptor masters only: the witness behind the page label (`printed`, `link`, `toc`, `catalogue`, `computed`) |
+| `producer_version` | Scriptor masters only: the format version of the master |
+| `char_start`, `char_end` | Offsets into `full_text` |
+| `language` | Detected per chunk |
+| `source_file`, `format` | Technical metadata |
 
 ```python
 result = extractor.extract("book.epub")
 
-# File metadata
 print(f"Format: {result.metadata.detected_format}")
-print(f"Method: {result.metadata.extraction_method}")
-print(f"Pages: {result.metadata.total_pages}")
+for warning in result.metadata.warnings:
+    print(warning)
 
-# Content metadata
 for chunk in result.chunks:
     meta = chunk['metadata']
-    print(f"Page {meta['page']}, Chapter: {meta['chapter']}")
-    print(f"Author: {meta['author']}, Title: {meta['title']}")
+    print(f"p. {meta['page_label']}  {meta['chapter']}  [{meta['section_type']}]")
 ```
 
-### Work with Table of Contents
-
-```python
-result = extractor.extract("textbook.pdf")
-
-# Print TOC
-for entry in result.toc:
-    indent = "  " * entry['level']
-    print(f"{indent}{entry['title']} (p. {entry.get('page', '?')})")
-```
-
-### Export to JSON
-
-```python
-import json
-
-result = extractor.extract("book.epub")
-
-# Convert to dict
-data = result.to_dict()
-
-# Save to JSON
-with open("extracted.json", 'w', encoding='utf-8') as f:
-    json.dump(data, f, indent=2, ensure_ascii=False)
-```
-
-### Handle Errors Gracefully
+### Errors
 
 ```python
 from src.extractors.exceptions import (
@@ -223,191 +207,55 @@ except ExtractionError as e:
     print(f"Extraction failed: {e}")
 ```
 
+`UnsupportedFormatError` and `CalibreNotFoundError` are subclasses of `ExtractionError`, so catch them first.
+
 ---
 
-## Format-Specific Features
+## Format notes
+
+### Scriptor master
+
+- The printed page label comes from the page markers in the text (`[p. 88]`), the physical page and the witness from the pagination sidecar.
+- A region marker governs the text after it. Apparatus regions (`bibliography`, `index`, `abbreviations`, `notes`, `lists`) become `back_matter`; `front-matter` and `contents` become `front_matter`; everything else, including `preface`, `appendix` and any unknown name, is `main_content`.
+- Under the `scientific` chunking strategy each footnote definition is appended to the paragraph that carries its anchor. `basic` leaves the definitions out.
+- Markers are removed from the chunk text after they have been read.
 
 ### PDF
 
-**Features:**
-- Page number tracking (including roman numerals)
-- PDF coordinates for clickable citations
-- Footnote detection (heuristic-based)
-- TOC extraction
-- Multi-column layout support (planned)
-- OCR fallback for scanned pages
+- Printed page labels from the PDF's own page labels, roman numerals included.
+- The outline as a tree: chapter, section title and the designator chain of a section. An outline that is a scanner artefact is recognised and ignored.
+- Running heads and footers are removed; footnotes are kept.
+- OCR for pages without a text layer, if enabled.
 
-**Example:**
-```python
-extractor = PDFExtractor(enable_ocr=True)
-result = extractor.extract("scanned_book.pdf")
-
-# Each chunk has page information
-for chunk in result.chunks:
-    page = chunk['metadata']['page']
-    coords = chunk['metadata'].get('pdf_coords')  # {x, y, width, height}
-    print(f"Page {page}, Coords: {coords}")
-```
+A PDF read on this path cites what the file's labels say. Whether a label was printed on the page or merely counted is only known for a bundle.
 
 ### EPUB
 
-**Features:**
-- Chapter detection
-- TOC extraction
-- Metadata (author, title, language)
-- Handles EPUB 2 and EPUB 3
-- Fallback to manual ZIP extraction
-
-**Example:**
-```python
-result = extractor.extract("novel.epub")
-
-# Access chapters
-for chunk in result.chunks:
-    chapter = chunk['metadata'].get('chapter')
-    print(f"Chapter: {chapter}")
-```
+- Chapters from the table of contents, sections classified by their titles.
+- Printed page labels where the EPUB has a page list. An EPUB whose page list names every printed page is indexed before the book's PDF.
+- EPUB 2 and EPUB 3.
 
 ### DJVU (via Calibre)
 
-**Use case:** Old academic scans, critical editions
-
-**Process:**
-1. DJVU → PDF (via Calibre)
-2. PDF → Text (via pdfplumber)
-3. Optional: OCR for low-quality scans
-
-**Example:**
-```python
-# DJVU will be automatically converted
-result = extractor.extract("critical_edition.djvu")
-
-# Check conversion warnings
-for warning in result.metadata.warnings:
-    print(warning)
-# Output: "Converted from .djvu to pdf using Calibre"
-```
-
----
-
-## Performance Optimization
-
-### Chunking Strategies
-
-**For RAG systems:**
-```python
-# Default: Balanced
-extractor = UniversalExtractor(chunk_size=512, overlap=128)
-
-# Long context (for philosophical texts)
-extractor = UniversalExtractor(chunk_size=1024, overlap=256)
-
-# Short chunks (for quick retrieval)
-extractor = UniversalExtractor(chunk_size=256, overlap=64)
-```
-
-**Overlap importance:**
-- Preserves context across chunk boundaries
-- Critical for humanities (argumentative structure)
-- Recommended: 20-25% of chunk_size
-
-### Batch Processing
-
-**For large libraries:**
-```python
-import multiprocessing
-
-# Process files in parallel (advanced)
-from concurrent.futures import ProcessPoolExecutor
-
-def extract_file(file_path):
-    extractor = UniversalExtractor()
-    return extractor.extract(file_path)
-
-with ProcessPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(extract_file, file_paths))
-```
+DJVU is converted to PDF by Calibre and then read like a PDF. The conversion is noted in `result.metadata.warnings`.
 
 ---
 
 ## Troubleshooting
 
-### "Calibre not available" Error
+### "Calibre not available"
 
-**Solution:**
-```bash
-# Install Calibre
-brew install calibre  # macOS
-sudo apt install calibre  # Ubuntu
+Install Calibre and check that `ebook-convert --version` runs. If it is installed outside the PATH, pass `calibre_path` to `UniversalExtractor`.
 
-# Verify
-ebook-convert --version
-```
+### Garbled PDF text, running heads in the chunks, wrong page numbers
 
-### PDF Extraction Quality Issues
+1. For a PDF with a text layer, build a Scriptor bundle (`python scripts/scriptor_prepare.py --ids <id>`). It is the remedy for running heads, footnotes in mid-sentence and page numbers that are positions in the file.
+2. For a scan without a text layer, enable OCR: `UniversalExtractor(enable_ocr=True)`.
+3. If the book also exists as an EPUB, index that instead (`--prefer-format epub`).
 
-**Problem:** Garbled text, missing characters
+### A bundle exists but the PDF was read
 
-**Solutions:**
-1. Try different library:
-   ```python
-   # Force PyMuPDF instead of pdfplumber
-   from src.extractors.pdf_extractor import PDFExtractor
-   extractor = PDFExtractor()
-   ```
-
-2. Enable OCR for scanned PDFs:
-   ```python
-   extractor = UniversalExtractor(enable_ocr=True)
-   ```
-
-3. Convert to EPUB first (Calibre):
-   ```bash
-   ebook-convert problematic.pdf better.epub
-   ```
-
-### EPUB "Calibre hash path" Issues
-
-**Context:** Calibre stores EPUB files with hashed directory names
-
-**Solution:** Already handled! The extractor reads directly from EPUB ZIP structure, no path resolution needed.
-
-### Memory Issues with Large Files
-
-**For files >500 MB:**
-```python
-# Process in chunks (coming in Phase 2)
-# Current workaround: Convert to smaller files
-ebook-convert huge.pdf split1.epub --max-chapters 50
-```
-
----
-
-## Integration with Calibre Library
-
-### Extract from Calibre Books
-
-```python
-import sqlite3
-from pathlib import Path
-
-# Connect to Calibre DB
-calibre_db = Path("~/Calibre Library/metadata.db").expanduser()
-conn = sqlite3.connect(calibre_db)
-
-# Get all books
-cursor = conn.execute("SELECT id, title, path FROM books")
-
-for book_id, title, book_path in cursor:
-    # Find PDF or EPUB
-    book_dir = Path("~/Calibre Library") / book_path
-
-    for file in book_dir.glob("*"):
-        if file.suffix in ['.pdf', '.epub', '.mobi']:
-            result = extractor.extract(file)
-            print(f"{title}: {result.metadata.total_chunks} chunks")
-            break
-```
+`UniversalExtractor` reads the file you give it. The bundle is chosen in indexing, by book ID. If indexing reads the PDF although a bundle folder exists, the folder holds no usable master: none at all, a dead link, or two prepared documents, of which none is taken.
 
 ---
 
@@ -422,22 +270,15 @@ class UniversalExtractor:
         chunk_size: int = 512,
         overlap: int = 128,
         enable_ocr: bool = False,
+        force_ocr: bool = False,
+        ocr_backend: OCRBackend = OCRBackend.AUTO,
+        ocr_language: str = "deu+eng",
         calibre_path: Optional[str] = None,
     ):
-        """Initialize universal extractor."""
+        """Initialize the extractor."""
 
     def extract(self, file_path: Path | str) -> ExtractedText:
-        """Extract text from file."""
-
-    def extract_batch(
-        self,
-        file_paths: List[Path | str],
-        skip_errors: bool = True
-    ) -> List[tuple]:
-        """Extract from multiple files."""
-
-    def get_supported_formats(self) -> dict:
-        """Get supported formats info."""
+        """Extract text from a file of any supported format."""
 ```
 
 ### ExtractedText
@@ -447,23 +288,16 @@ class UniversalExtractor:
 class ExtractedText:
     full_text: str
     chunks: List[Dict[str, Any]]
-    metadata: ExtractionMetadata
+    metadata: Optional[ExtractionMetadata]
     toc: List[Dict[str, Any]]
     footnotes: List[Dict[str, Any]]
-
-    def get_chunk_by_page(self, page: int) -> List[Dict]:
-        """Get chunks from specific page."""
-
-    def get_context_window(self, chunk_index: int, window_size: int = 2) -> str:
-        """Get chunk with surrounding context."""
 ```
 
 ---
 
-## Next Steps
+## Further reading
 
-1. **Phase 1:** Use extraction for Calibre library indexing
-2. **Phase 2:** Integrate with BGE-M3 embeddings
-3. **Phase 3:** Add to RAG pipeline with Ollama
-
-See `SPEC.md` for full roadmap.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the extractor layer in the system, the Scriptor seam
+- [FEATURES.md](FEATURES.md) — what each path extracts
+- [USAGE.md](USAGE.md) — indexing commands, building bundles
+- [PREPARED_FORMAT_SPEC](https://github.com/kasssandr/archilles-scriptor/blob/main/docs/PREPARED_FORMAT_SPEC.md) — the format of a Scriptor master
