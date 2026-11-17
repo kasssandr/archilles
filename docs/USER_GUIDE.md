@@ -1,10 +1,10 @@
 # User Guide
 
-> **Status**: Documentation in progress
+**Last updated:** November 2026
 
 ## Introduction
 
-Archilles brings semantic search to your Calibre library. This guide covers search strategies, filtering, and best practices.
+Archilles brings semantic search to your library. This guide covers searching from the command line: modes, filters, how to read a result, and how far to trust a page number. Most people search through an AI assistant instead; the same options exist there as tool parameters (see [MCP Integration](MCP_GUIDE.md)). Indexing, including Scriptor bundles, is covered in the [Usage Guide](USAGE.md).
 
 ## Basic Search
 
@@ -54,6 +54,52 @@ python scripts/rag_demo.py query "political theory" --tag-filter Philosophy Hist
 python scripts/rag_demo.py query "Marcion" --book-id "von_Harnack"
 ```
 
+### By Section
+
+By default a search returns passages from the main text only. Front matter, bibliography, index and notes sections are left out, because a search that answers from the index instead of the book is a bad search.
+
+```bash
+# Search the apparatus on purpose
+python scripts/rag_demo.py query "Mommsen" --section back_matter
+
+# Search everything
+python scripts/rag_demo.py query "Mommsen" --all-sections
+```
+
+For a book indexed from a Scriptor bundle these sections are named in the text by Scriptor, not guessed from position. Prefaces and appendices count as main text.
+
+### By Kind of Text
+
+```bash
+# Book text only (default)
+python scripts/rag_demo.py query "sovereignty"
+
+# Your Calibre comments
+python scripts/rag_demo.py query "sovereignty" --chunk-type calibre_comment
+
+# Both
+python scripts/rag_demo.py query "sovereignty" --chunk-type all
+```
+
+### How Many Results
+
+```bash
+# More results, and more than two per book
+python scripts/rag_demo.py query "Reformation" --top-k 20 --max-per-book 5
+```
+
+## Reading a Result
+
+Each result names author, title and year, and where the passage stands: a page for a PDF, a chapter or section for an EPUB.
+
+**The page number.** Archilles cites the page label as printed, so a preface stays `p. xiv`. How reliable the label is depends on where the text came from:
+
+- **A book with a Scriptor bundle** knows for every page whether its number was read off the page or calculated from the pages around it. A calculated number is shown as *inferred*. Check it against the book before you cite it.
+- **A PDF without a bundle** cites what the file's own page labels say. For most born-digital books that is right; for older scans it can be the position in the file.
+- **An EPUB** has no pages unless it carries a page list. Cite it by chapter, and quote a short passage verbatim so the place can be found.
+
+**Checking a citation.** Through an AI assistant, `verify_citation` asks one book whether a quotation still stands on the page a citation names. Use it before quoting something you did not just retrieve. `open_original` opens the book itself, a PDF at the cited page.
+
 ## Advanced Features
 
 ### Exact Phrase Matching
@@ -92,10 +138,12 @@ python scripts/rag_demo.py query "your query" --export results.md
 1. **Tag your library well** – Tags become powerful filters
 2. **Use Calibre comments** – These get boosted in search results
 3. **Index incrementally** – Start with key books, expand gradually
-4. **Experiment with modes** – Different queries benefit from different approaches
+4. **Build bundles for the books you cite from** – A Scriptor bundle gives a PDF checked page numbers and keeps index and bibliography out of your results (see [Usage Guide](USAGE.md#scriptor-bundles-pdf))
+5. **Experiment with modes** – Different queries benefit from different approaches
 
 ## Next Steps
 
-- Understand [Architecture](ARCHITECTURE.md) for deeper insights
-- Set up [MCP Integration](MCP_GUIDE.md) for Claude Desktop
-- Check [FAQ](FAQ.md) for common questions
+- [Usage Guide](USAGE.md) for indexing, bundles and all MCP tools
+- [MCP Integration](MCP_GUIDE.md) for Claude Desktop and other assistants
+- [Architecture](ARCHITECTURE.md) for deeper insights
+- [FAQ](FAQ.md) for common questions

@@ -52,6 +52,9 @@ Seamless integration with Claude Desktop and other MCP-compatible tools. Your AI
 ### 📚 **Calibre-Integrated**
 Reads directly from your Calibre library structure. Extracts metadata, tags, comments, annotations, and custom fields automatically.
 
+### 📑 **Citable PDF Text** *(Scriptor bundles)*
+For a PDF that has a *Scriptor bundle*, Archilles indexes the text that [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor) prepared from it instead of reading the PDF itself: paragraphs rejoined, running heads removed, every footnote attached to its sentence. A hit cites the page number as printed and says whether that number stood on the page or was inferred. Index and bibliography stay out of content results. The bundle is a Markdown file you can correct by hand, and the corrected text is what gets indexed. [More ↓](#scriptor-bundles)
+
 ### 💬 **Comments & Annotations**
 Searches beyond book text. Your Calibre comments, highlights, and notes are all indexed and searchable.
 
@@ -176,7 +179,7 @@ Add to your Claude Desktop config (`%APPDATA%\Claude\claude_desktop_config.json`
 }
 ```
 
-Then in Claude Desktop, you can use natural language — all 13 MCP tools are available:
+Then in Claude Desktop, you can use natural language — all 15 MCP tools are available:
 - *"Search my books for discussions of political legitimacy"*
 - *"Find annotations about consciousness"*
 - *"What did I highlight about medieval trade?"*
@@ -208,7 +211,7 @@ Archilles builds a semantic index of your Calibre library that enables intellige
        │
        ▼
 ┌─────────────┐
-│  Extractors │ ← PyMuPDF (primary), pdfplumber, EPUB, MOBI, DJVU...
+│  Extractors │ ← Scriptor bundle (PDF, where one exists), PyMuPDF, EPUB, MOBI, DJVU...
 └──────┬──────┘
        │
        ▼
@@ -232,7 +235,7 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 
 ### What Gets Indexed
 
-- **Book text**: Full-text extraction from 30+ formats (PDF via PyMuPDF, EPUB, MOBI, DJVU, etc.)
+- **Book text**: Full-text extraction from 30+ formats (PDF via PyMuPDF, EPUB, MOBI, DJVU, etc.). A PDF with a [Scriptor bundle](#scriptor-bundles) is indexed from the bundle's text
 - **Calibre metadata**: Title, author, publisher, ISBN, language
 - **Tags**: Your Calibre tags become searchable
 - **Comments**: Calibre's comments field (HTML cleaned automatically)
@@ -250,6 +253,34 @@ Archilles builds a semantic index of your Calibre library that enables intellige
 - **Context expansion**: Small-to-Big retrieval shows surrounding text for better understanding
 - **Smart boosting**: Calibre comments (1.2×) and tag matches (1.15×) get priority in results
 - **Research interest boosting**: Additive keyword boost at query time—no re-indexing required
+
+### Scriptor Bundles
+
+A bundle is one folder per book, `<library>/.archilles/scriptor/<book id>/`. It holds the text that [Scriptor](https://github.com/kasssandr/archilles-scriptor) made of the book's PDF (`book.md`) and a few companion files: where each page number came from, how the book is divided, how each footnote is numbered in print, and what Scriptor was unsure about.
+
+Where indexing finds such a folder, it reads that text **instead of the PDF**. The book itself stays what it was: title, author, tags, your annotations and the link that opens it still belong to the PDF in Calibre or Zotero. Only the text source changes.
+
+What that changes:
+
+- **Citations you can check.** A hit says "p. 88", the page as printed, and whether the 88 stood on the page or was inferred. An inferred page reaches the assistant marked as such, and the assistant has to pass that on. The `verify_citation` tool checks a quotation against the text of the page it names.
+- **No apparatus in content results.** Scriptor names bibliography, index, notes sections and lists, so they stay out of content searches. Prefaces and appendices remain searchable.
+- **The text is yours.** A bundle is not regenerated on every run. It is a durable file you may correct by hand, and the corrected version is the one in the index. Include `.archilles/scriptor/` in your backups: unlike the rest of `.archilles/`, hand-corrected text cannot be rebuilt from the book.
+- **A gate.** A volume gets a bundle only if four conditions hold: the text of at least 98% of its pages is in the result; there are at least as many footnotes as Scriptor counted with certainty; at least 20% of the page numbers are attested; less than 5% of the text stands under another page's number. A volume that fails stays on the built-in PDF path and is no worse off than before.
+
+Things to know before you start:
+
+- **Bundles first, embedding second.** A book embedded without a bundle is embedded again once it gets one. Building a bundle takes about a minute per volume on one CPU core; embedding is the expensive step.
+- **A bundle is a snapshot** of the Scriptor version that built it. A later Scriptor improves it only if you rebuild it, and a rebuilt bundle is new text that is indexed again.
+- **The built-in PDF extractor is the fallback** for books without a bundle and is no longer developed. Improvements to PDF text arrive through Scriptor.
+- **Text-layer PDFs only, for now.** Scriptor reads a PDF's text layer and has no OCR of its own yet. EPUBs get no bundle; their own path already carries structure.
+
+```bash
+# Preview, then build, judge and index
+python scripts/scriptor_prepare.py --tag "Key-Literature" --dry-run
+python scripts/scriptor_prepare.py --tag "Key-Literature"
+```
+
+**📘 [Usage Guide → Scriptor bundles](docs/USAGE.md#scriptor-bundles-pdf)**
 
 ### Configuration
 
@@ -329,6 +360,7 @@ Search through your collection of primary sources and secondary literature simul
 - **Source adapters**: Calibre, Zotero, Obsidian vaults, plain folders — not just Calibre anymore
 - **Structure-aware PDF chunking**: chapter/section metadata from TOC, running footer removal
 - **DialogueChunker**: specialized chunking for chat/Q&A exports (ChatGPT, Gemini, Grok, NotebookLM)
+- **Scriptor bundles** *(September 2026)*: a PDF's text comes from its prepared document where one exists — printed page labels with their provenance, apparatus kept out of content results, `verify_citation`
 
 ### Coming next
 
@@ -404,7 +436,10 @@ We're actively seeking beta testers from diverse research disciplines. If you ha
 
 Scriptor prepares, Archilles retrieves, Archillator translates — three tools,
 one path: from the printed apparatus to a citable answer, in any language, on
-your own machine. Each tool stands alone; none requires the others. All three
+your own machine. Scriptor and Archillator stand alone. Archilles installs
+Scriptor as a library, because it reads prepared documents through Scriptor's
+own reader instead of keeping a copy of the format; you run Scriptor yourself
+only for the books you want bundles for. All three
 are developed under one fixed charter: **local-first, source-true, the scholar
 as the acting subject**. Contributions are welcome within that charter; beyond
 it, the license invites forks.
@@ -412,7 +447,7 @@ it, the license invites forks.
 - **[archilles-scriptor](https://github.com/kasssandr/archilles-scriptor)** — turns scholarly PDFs into Markdown whose footnotes stay anchored to their sentences and whose printed page labels survive as citation addresses.
 - **[archillator](https://github.com/kasssandr/archillator)** — browser-based translation of books and academic texts that keeps the scholarly apparatus intact.
 
-The interchange contract of the family — the *prepared document* — is specified in [PREPARED_FORMAT_SPEC](https://github.com/kasssandr/archilles-scriptor/blob/main/docs/PREPARED_FORMAT_SPEC.md).
+The interchange contract of the family — the *prepared document* — is specified in [PREPARED_FORMAT_SPEC](https://github.com/kasssandr/archilles-scriptor/blob/main/docs/PREPARED_FORMAT_SPEC.md). A prepared document kept beside a book in the library is its [Scriptor bundle](#scriptor-bundles): the same text is what Archilles indexes, what Archillator translates and what you read.
 
 ---
 

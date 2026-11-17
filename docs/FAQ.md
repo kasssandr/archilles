@@ -89,6 +89,18 @@ Set `ARCHILLES_LIBRARY_PATH` to point at any of these. The adapter is auto-detec
 
 PDF (primary), EPUB, MOBI, DJVU, HTML, TXT, and more — 30+ formats via PyMuPDF and format-specific extractors. Scanned PDFs are supported via Tesseract OCR (Linux requires `tesseract-ocr` installed separately).
 
+### What is a Scriptor bundle?
+
+The prepared text of one book, kept in `.archilles/scriptor/<book id>/` inside your library. [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor) makes it from the book's PDF: paragraphs rejoined, running heads removed, footnotes attached to their sentences, printed page numbers kept, bibliography and index named as such. Where a book has a bundle, Archilles indexes that text instead of reading the PDF. The book keeps its metadata, tags and annotations.
+
+You get citations to the printed page that say whether the number was read off the page or inferred, content searches without index and bibliography hits, and a text you can correct by hand. A volume only gets a bundle if it passes four checks against its PDF; one that fails is indexed from the PDF as before.
+
+Bundles are optional and built by `scripts/scriptor_prepare.py`. See [USAGE.md](USAGE.md#scriptor-bundles-pdf).
+
+### Do I need a bundle for every book?
+
+No. Books without one are indexed on the built-in path. Bundles pay off for PDFs you cite from. If you plan to bundle a large part of your library, do it before the big embedding run: a book that gets its bundle afterwards is embedded a second time.
+
 ---
 
 ## Search
@@ -143,13 +155,15 @@ By default in `.archilles/rag_db/` inside your Calibre library folder. The path 
 
 ### Does Archilles write anything into my Calibre library folder?
 
-Yes — one subfolder. Archilles creates `.archilles/` inside your Calibre library directory and stores the vector database there (`rag_db/`). Your Calibre library files and `metadata.db` are never modified.
+Yes — one subfolder. Archilles creates `.archilles/` inside your Calibre library directory and stores the vector database there (`rag_db/`), and the Scriptor bundles if you build any (`scriptor/`). Your Calibre library files and `metadata.db` are never modified.
 
 **Backup and sync implications:** The `.archilles/rag_db/` folder can grow to several gigabytes for large libraries. If you back up or sync your Calibre library (Dropbox, OneDrive, NAS mirror, Time Machine), this folder will be included. You may want to:
 - **Exclude it from sync** if you don't need the index on other devices — it can always be rebuilt by re-indexing
 - **Include it in backups** if re-indexing thousands of books would be costly in time
 
 The index is fully reproducible from your books at any time. If it is lost or deleted, simply run `batch_index.py` again with `--skip-existing` to rebuild.
+
+**The exception is `.archilles/scriptor/`.** A bundle you have corrected by hand is a source, not a derivative: it cannot be rebuilt from the book. Always include this folder in your backups. It is small, about twice the size of the books' plain text.
 
 ### Does it support cross-encoder reranking?
 
