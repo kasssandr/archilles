@@ -60,7 +60,7 @@ git clone https://github.com/kasssandr/archilles.git
 cd archilles
 ```
 
-> No git? Download [Git for Windows](https://git-scm.com/download/win) first, or download the repository as a ZIP from GitHub.
+> No git? Download [Git for Windows](https://git-scm.com/download/win) first. A ZIP download of the repository is not enough: Step 4 fetches one dependency, [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor), with git.
 
 ### Step 3: Create a Virtual Environment (Recommended)
 
@@ -80,6 +80,8 @@ pip install -r requirements.txt
 ```
 
 This installs all required packages. Expect it to take a few minutes on first run.
+
+Among them is `archilles-scriptor`, fetched from GitHub with git. Archilles needs it as a library, whether or not you ever build a [Scriptor bundle](USAGE.md#scriptor-bundles-pdf).
 
 > **GPU users:** If you want CUDA-accelerated indexing, install the correct PyTorch version for your CUDA version *before* running the above. See [pytorch.org/get-started](https://pytorch.org/get-started/locally/) for the right command.
 

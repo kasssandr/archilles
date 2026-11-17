@@ -262,6 +262,8 @@ Common causes:
 
 Page numbers are extracted from the PDF's internal page labels. Some PDFs have incorrect or missing labels — this is a limitation of the source file, not a bug.
 
+For a PDF with a text layer, a Scriptor bundle is the remedy: Scriptor reads the page number printed on each page and takes the PDF's labels as one witness among several, and the index records for every page whether its number was printed or inferred. See [USAGE.md → Scriptor bundles](USAGE.md#scriptor-bundles-pdf).
+
 EPUB results always show chapter names instead of page numbers. This is by design — EPUBs have no physical pages. See the note in [USAGE.md](USAGE.md) about using verbatim quotes to locate passages in EPUB files.
 
 ---

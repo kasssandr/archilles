@@ -121,7 +121,7 @@ python scripts/batch_index.py --tag "Key-Literature"
 python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub
 ```
 
-**PDF** provides exact page numbers for citations (`p. 47`) and matches the printed edition. Downside: scanned PDFs produce OCR noise; multi-column layouts and headers/footers often mix into chunks, reducing search quality.
+**PDF** provides exact page numbers for citations (`p. 47`) and matches the printed edition. Downside: scanned PDFs produce OCR noise; multi-column layouts and headers/footers often mix into chunks, reducing search quality. A [Scriptor bundle](#scriptor-bundles-pdf) removes most of that downside for PDFs with a text layer.
 
 **EPUB** produces cleaner chunks because the text is structured HTML — paragraphs stay paragraphs, chapter boundaries are recognized, and extraction is significantly faster. Downside: no page numbers; citations reference chapters rather than pages.
 
@@ -131,6 +131,60 @@ If the preferred format is not available, the next available format is used auto
 ```bash
 python scripts/batch_index.py --tag "Key-Literature" --prefer-format epub --reindex-before 2099-01-01
 ```
+
+#### Scriptor bundles (PDF)
+
+A bundle is the text [archilles-scriptor](https://github.com/kasssandr/archilles-scriptor) prepares from a book's PDF: paragraphs rejoined, running heads removed, footnotes bound to their sentences, the printed page number at every page break, and bibliography, index and notes sections named as such. Where a book has a bundle, Archilles indexes that text instead of reading the PDF. The book keeps its metadata, tags and annotations. What a bundle contains and what it changes in the index: [FEATURES.md §2.2](FEATURES.md).
+
+Bundles are made by their own script. It selects books the way `batch_index.py` does:
+
+```bash
+# Preview: which volumes would be prepared (runs nothing)
+python scripts/scriptor_prepare.py --tag "Key-Literature" --dry-run
+
+# Build, judge, put in place and index
+python scripts/scriptor_prepare.py --tag "Key-Literature"
+
+# One volume by ID
+python scripts/scriptor_prepare.py --ids 1234
+
+# Build bundles now, index later (the IDs go to the library's index queue)
+python scripts/scriptor_prepare.py --all --no-index
+
+# Rewrite the report from the recorded state
+python scripts/scriptor_prepare.py --report-only
+```
+
+Other selections: `--author`, `--rating`, `--filter-author`, `--exclude-tag`, `--limit`; for Zotero `--collection` and `--type`.
+
+**What a run does, per volume.** It runs Scriptor over the PDF (about a minute on one CPU core, no GPU), then measures four conditions against the PDF:
+
+1. the text of at least 98% of the pages is found in the result,
+2. there are at least as many footnotes as Scriptor counted with certainty,
+3. at least 20% of the page numbers are attested,
+4. less than 5% of the text stands under another page's number.
+
+A volume that passes is moved to `.archilles/scriptor/<id>/` and indexed. A volume that fails gets no bundle and stays on the built-in PDF path; nothing in the index changes, and the rejected run is kept in `.archilles/scriptor/_rejected/<id>/` so you can see why.
+
+**Where to look afterwards.** `.archilles/scriptor/REPORT.md` lists every volume with its four values, its open decisions and its state. The state is derived from the master's hash and currently shown in German: `vorbereitet` (prepared, not yet indexed), `bearbeitet` (edited by hand since), `freigegeben zur Indexierung` (in the index as it stands).
+
+**Correcting a bundle by hand.** `book.md` in the bundle folder is an ordinary Markdown file. Edit it, keep the `[p. NN]` and `[^N]` markers where they are, then run the script over that volume again:
+
+```bash
+python scripts/scriptor_prepare.py --ids 1234
+```
+
+The script sees that the master has changed and re-indexes the book from your text; it does not run Scriptor again. The watchdog does not notice an edited master, so this step is yours.
+
+> ⚠️ **`--force` rebuilds the bundle from the PDF and replaces the master, hand corrections included.** Use it for a volume you have not edited and want to rebuild with a newer Scriptor. The rebuilt text is embedded again.
+
+> ⚠️ **Back up `.archilles/scriptor/`.** The index can be rebuilt from your books; a master you corrected by hand cannot.
+
+**Order matters for large libraries.** Build the bundles first, then embed. A book that is embedded without a bundle and gets one later is embedded a second time, and embedding is the expensive step.
+
+**Which books.** PDFs with a text layer. A PDF without one gets no bundle, because Scriptor has no OCR of its own yet. A book with only an EPUB is skipped; EPUBs are indexed on their own path.
+
+**Chunking.** By default each footnote is indexed with the paragraph that cites it (`scientific`). `--chunking basic`, or `"scriptor": {"chunking": "basic"}` in `.archilles/config.json`, leaves footnote text out.
 
 #### Indexing mode (hardware-adaptive)
 
@@ -309,7 +363,7 @@ python scripts/rag_demo.py query "Late Antique senators" --export research.md
 
 ## MCP Tools in Claude Desktop
 
-After correct configuration, the following **12 tools** are available in Claude Desktop.
+After correct configuration, **15 tools** are available in Claude Desktop. The ones you will meet most often are described here; the full list is in the [MCP Guide](MCP_GUIDE.md#available-tools).
 
 ### Search tools
 
@@ -351,6 +405,18 @@ Parameters:
 - `action`: `'get'` (view current) or `'set'` (update)
 - `keywords`: List of keywords to boost
 - `boost_factor`: Additive score boost per matching keyword (default: 0.15)
+
+---
+
+### Citation tools
+
+**`verify_citation`** — Asks one volume whether a passage still stands on the page a citation names. A book with a Scriptor bundle is checked against the bundle's text; the answer also says whether the page number was printed or inferred. If the page no longer carries the wording, the citation is reported as stale. The same words elsewhere in the book are never silently taken instead.
+
+Example prompts:
+- *"Check this quotation against p. 88 of Arendt's Vita activa before I use it"*
+- *"Verify the citations from yesterday's summary"*
+
+**`open_original`** — Opens the cited work on your computer, a PDF at the cited page.
 
 ---
 
@@ -477,6 +543,7 @@ In Claude Desktop:
 ### Indexing
 
 - **Choose your format:** PDF for precise page citations, EPUB for faster indexing and cleaner chunks (see `--prefer-format`)
+- **Bundles before embedding:** For PDFs you cite from, build Scriptor bundles first (`scriptor_prepare.py`); a book that gets its bundle later is embedded twice
 - **Run overnight:** ~10 min per book (CPU), ~2 min per book (GPU); 50 books ≈ 1–8 hours
 - **Use `--skip-existing`:** Resume after interruptions without re-indexing
 - **Use tags strategically:** Index thematic collections rather than everything at once
@@ -510,7 +577,7 @@ In Claude Desktop:
 
 - **Restart after indexing:** The MCP server loads the database at startup
 - **Give clear instructions:** "Search my *books*" vs. "Search my *annotations*"
-- **Validate results:** Check page numbers, especially in older PDFs
+- **Validate results:** Check page numbers, especially in older PDFs. A page shown as `(inferred)` was calculated, not read off the page; `verify_citation` checks a quotation against the page it names
 
 ### Data organization
 
@@ -518,6 +585,10 @@ In Claude Desktop:
 D:\Calibre Library\
 ├── .archilles\
 │   ├── rag_db\          # LanceDB index (all content + annotations)
+│   ├── scriptor\        # Scriptor bundles, one folder per book (back this up)
+│   │   ├── 01234\       #   book.md, book.review.md, sidecars
+│   │   ├── REPORT.md    #   every volume with its values and state
+│   │   └── state.json
 │   └── config.json      # Optional configuration
 ├── Author 1\
 │   └── Book (ID)\
@@ -547,6 +618,12 @@ D:\Calibre Library\
 
 ### Missing page numbers in results
 → Run `python scripts/batch_index.py --tag "YOUR-TAG" --reindex-missing-labels` to reprocess affected books.
+
+### A page number is marked "(inferred)"
+→ The book was indexed from a Scriptor bundle, and this page carries no printed number that Scriptor could read; the number was calculated from the pages around it. Check it against the book before citing.
+
+### A book did not get a Scriptor bundle
+→ Look it up in `.archilles/scriptor/REPORT.md`; it names the condition the volume failed. The book is still indexed from its PDF.
 
 ### Wrong format being indexed
 → Use `--prefer-format epub` or `--prefer-format pdf` explicitly.
